@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/spatial_tier.hpp"
 #include "dsp/gain_ramp.hpp"
 #include "dsp/high_shelf.hpp"
 #include "dsp/resampler.hpp"
@@ -85,8 +86,9 @@ struct RenderVoice {
     bool is_virtual = false;
     /// Estimated output level from the last block (gain x bus x master x distance).
     float level = 0.0f;
-    /// Rendered with its own HRTF (headphones mode, within the binaural budget); else panned.
-    bool binaural = false;
+    /// Panned (speakers), its own HRTF (headphones, within the binaural budget) or the world
+    /// ambisonic bus (headphones, beyond it).
+    SpatialTier tier = SpatialTier::Panned;
 
     dsp::HighShelf shelf;
 };

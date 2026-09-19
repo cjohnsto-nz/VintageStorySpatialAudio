@@ -55,7 +55,7 @@ Built and tested offline; **not yet run in the game**. Phase 1 is merged into `m
 ### Native (ABI v3)
 
 - Positional voices (`vsa_voice_desc.spatial` world/listener, `vsa_voice_set_position`) render mono through Steam Audio's direct effect (1/r beyond a per-voice minimum distance, 3-band air absorption), then binaural (headphones) or panning (speakers). `vsa_listener_set`, `vsa_engine_set_render_mode`.
-- Effect pool (`max_real_voices`, 256) created off the audio thread; when full, the quietest positional voice loses its set. Binaural budget (`max_binaural_voices`, 64): the loudest voices get HRTF, the rest are panned. 256 binaural voices cost ~48 % of the block (p50), with the budget ~32 %, panned ~25 %.
+- Effect pool (`max_real_voices`, 256) created off the audio thread; when full, the quietest positional voice loses its set. Binaural budget (`max_binaural_voices`, 64): the loudest voices get HRTF, the rest go to the world Ambisonic bus (Phase 3, below). 256 binaural voices cost ~48 % of the block (p50), with the budget ~37 %, panned ~25 %.
 - Virtualisation: voices estimated below -70 dB advance without rendering (real again above -64 dB). Streams are never virtual.
 - `vsa_voice_set_lowpass`: the game's EFX low-pass (underwater) as OpenAL Soft implements it, a 5 kHz high shelf.
 - **Steam Audio's HRTF only exists at 24, 44.1 and 48 kHz**, so the engine renders at 44.1 or 48 kHz; devices at other rates get a converted stream (miniaudio), and the offline output accepts only those two rates.
@@ -76,6 +76,24 @@ Chris played a session on the AV receiver (48 kHz, 6 channels, speakers mode): t
 ### Surround (first Phase 3 item, done early)
 
 Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1) with Steam Audio's panning effect. Buses, master and the limiter are N-channel (limiter linked). Channels are routed by speaker using miniaudio's channel map for the device, so a 5.1 device with side instead of rear surrounds still gets the rear channels; the log's "output:" line shows the device order. Unpositioned sounds and binaural voices stay on the front pair; the LFE is unused. Tests: `test_channel_layout.cpp`, and the 5.1/7.1/quad direction cases in `test_spatial.cpp`.
+
+## Phase 3 (output formats): in progress on `phase2-takeover`
+
+### World Ambisonic bus (headphones, beyond the binaural budget)
+
+- Voices past the binaural budget are encoded into one **world-space order-3 Ambisonic bus** (16 channels) and decoded binaurally once per block with the listener's orientation (`SpatialRenderer::encode/decode`, tier `SpatialTier::Ambisonic`). Head rotation doesn't touch the encoding; each voice's coefficients ramp across the block when it moves.
+- Encoding is ours (`dsp/spherical_harmonics.hpp`), not Steam Audio's encode effect: that effect cost ~5 µs per voice per block, and **its first block after a reset scales channel c by c/frameSize** (a transition bug; the steady state is fine). Our coefficients match its steady state exactly (`core/test_spherical_harmonics.cpp`): orthonormal real SH, ACN, ambisonic axes x = -z, y = -x, z = y.
+- Order 3, not 2: order 2 lost 3-5 dB at 1 kHz for frontal sources and had deep comb notches. Even at order 3 the binaural decode is **4.7 dB below per-voice HRTF, averaged over the sphere** (0 dB to the sides, 5-7 dB elsewhere, worst at 3 kHz); `kAmbisonicMakeup` restores the diffuse-field level so a voice doesn't jump when it changes tier (a test holds it within 1 dB).
+- A source straight behind leans 4.5 dB left at 6-8 kHz through the bus. It's the same whichever way the listener faces, so it's in Steam Audio's order-3 HRTF, not our coordinates.
+- At the head (`spatial_blend` < 1) the directional channels fade out, leaving the omnidirectional W, so the source sounds centred.
+- Bus gains are rendered per frame at the block start, because ambisonic voices from every category share the one bus; its decode is added to the master front pair before master gain.
+- Tests (`test_spatial.cpp`, "headphone tiers"): left/right and turning, above/below with the head tilted, looking straight up, front vs back brightness, bus gain, centring and the diffuse level match, for both the binaural and ambisonic tiers.
+
+### Still to do for Phase 3
+
+- SOFA HRTF loading (config option).
+- Windows Spatial Audio backend: `ISpatialAudioClient`, 7.1.4 static bed (mask 0x1ffe) first, then dynamic objects; own the `PROPVARIANT` blob correctly (OpenAL Soft's heap-corruption bug); recover from `WAIT_TIMEOUT` / `Reset` 0x88890100 by recreating the stream; fall back to miniaudio.
+- 7.1.4 custom-layout panning; per-mode direction tests; Chris checks the receiver shows Atmos with correct heights.
 
 ### Still to do for Phase 2
 

@@ -4,7 +4,9 @@
 #include "engine_fixture.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <iterator>
 #include <numbers>
 
 using namespace vsa_test;
@@ -350,3 +352,209 @@ TEST_CASE("invalid spatial arguments are rejected") {
     desc.min_distance = -1.0f;
     CHECK(vsa_voice_create(e.engine, &desc, &out) == VSA_ERROR_INVALID_ARGUMENT);
 }
+
+namespace {
+
+// Tones for the headphone-tier tests: a spread of frequencies averages out the notches a single
+// tone meets in the HRTF (above the head, a lone 3 kHz tone is several dB louder in one ear).
+constexpr double kProbeTones[] = {1000.0, 1500.0, 2000.0, 3000.0, 4000.0, 6000.0, 8000.0};
+constexpr std::size_t kProbeCount = std::size(kProbeTones);
+constexpr std::size_t kLowProbes = 3;  // 1-2 kHz; the rest are "high"
+
+std::vector<float> probe_signal() {
+    std::vector<float> x(4800, 0.0f);
+    for (const double f : kProbeTones) {
+        const auto t = tone(f, 0.07f);
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            x[i] += t[i];
+        }
+    }
+    return x;
+}
+
+struct Probe {
+    double left[kProbeCount];
+    double right[kProbeCount];
+
+    /// Mean interaural level difference over the tones (> 0: louder on the right).
+    [[nodiscard]] double balance() const {
+        double sum = 0.0;
+        for (std::size_t k = 0; k < kProbeCount; ++k) {
+            sum += right[k] - left[k];
+        }
+        return sum / static_cast<double>(kProbeCount);
+    }
+    /// Both ears, mean dB over tones [first, last).
+    [[nodiscard]] double level(std::size_t first = 0, std::size_t last = kProbeCount) const {
+        double sum = 0.0;
+        for (std::size_t k = first; k < last; ++k) {
+            sum += left[k] + right[k];
+        }
+        return sum / static_cast<double>(2 * (last - first));
+    }
+    /// High tones relative to low ones: how bright the source sounds.
+    [[nodiscard]] double brightness() const { return level(kLowProbes, kProbeCount) - level(0, kLowProbes); }
+};
+
+Probe probe(OfflineEngine& e, std::size_t frames = 24000, std::size_t settle = 4800) {
+    e.render(settle);
+    const auto out = e.render(frames);
+    Probe p{};
+    for (std::size_t k = 0; k < kProbeCount; ++k) {
+        p.left[k] = tone_level_db(out, 0, kProbeTones[k]);
+        p.right[k] = tone_level_db(out, 1, kProbeTones[k]);
+    }
+    return p;
+}
+
+/// A headphones scene with a binaural budget of `budget` and a loud 480 Hz decoy in front that
+/// takes the one binaural place when budget is 1, so the probe voice goes to the world ambisonic bus.
+struct TierScene {
+    OfflineEngine e;
+    AssetPtr decoy_asset;
+    AssetPtr asset;
+    vsa_voice voice = 0;
+
+    static vsa_engine_config config(uint32_t budget) {
+        vsa_engine_config c = make_config(VSA_RAY_TRACER_STEAM);
+        c.max_binaural_voices = budget;
+        return c;
+    }
+
+    TierScene(uint32_t budget, float x, float y, float z) : e(config(budget)) {
+        decoy_asset = e.pcm(tone(480.0, 0.05f), 1, 48000);
+        asset = e.pcm(probe_signal(), 1, 48000);
+        REQUIRE(vsa_voice_start(e.engine, e.positioned(decoy_asset, VSA_SPATIAL_WORLD, 0, 0, -1, 1, 8)) == VSA_OK);
+        voice = e.positioned(asset, VSA_SPATIAL_WORLD, x, y, z);
+        REQUIRE(vsa_voice_start(e.engine, voice) == VSA_OK);
+    }
+
+    void move(float x, float y, float z) {
+        REQUIRE(vsa_voice_set_position(e.engine, voice, VSA_SPATIAL_WORLD, x, y, z) == VSA_OK);
+    }
+};
+
+constexpr uint32_t kAmbisonic = 1;  // budget: the decoy is binaural, the probe voice ambisonic
+constexpr uint32_t kBinaural = 64;
+
+}  // namespace
+
+TEST_CASE("beyond the binaural budget, voices go through the world ambisonic bus") {
+    // The same scene rendered through both tiers differs (offline rendering is deterministic): the
+    // probe voice really changed tier. Order-2 ambisonics comes close to the binaural rendering.
+    const auto left_ear = [](uint32_t budget) {
+        TierScene s(budget, 3, 0, 0);
+        s.e.render(4800);
+        return channel(s.e.render(9600), 2, 0);
+    };
+    const auto ambisonic = left_ear(kAmbisonic);
+    const auto binaural = left_ear(kBinaural);
+    std::vector<float> difference(ambisonic.size());
+    for (std::size_t i = 0; i < difference.size(); ++i) {
+        difference[i] = ambisonic[i] - binaural[i];
+    }
+    const double difference_db = to_db(rms(difference)) - to_db(rms(binaural));
+    MESSAGE("ambisonic vs binaural: " << difference_db << " dB");
+    CHECK(difference_db > -40.0);
+}
+
+TEST_CASE("headphone tiers: left and right follow the listener turning") {
+    for (const uint32_t budget : {kAmbisonic, kBinaural}) {
+        CAPTURE(budget);
+        TierScene s(budget, 3, 0, 0);
+        const double right = probe(s.e).balance();
+        MESSAGE("right source: balance " << right << " dB");
+        CHECK(right > 6.0);
+        s.move(-3, 0, 0);
+        CHECK(probe(s.e).balance() < -6.0);
+        s.e.listener(0, 0, 0, 0, 0, 1);  // facing +z: -x is now on the right
+        CHECK(probe(s.e).balance() > 6.0);
+    }
+}
+
+TEST_CASE("headphone tiers: above and below follow the head as it tilts and looks up") {
+    for (const uint32_t budget : {kAmbisonic, kBinaural}) {
+        CAPTURE(budget);
+        TierScene s(budget, 0, 3, 0);  // above
+        const double level_above = probe(s.e).balance();
+        // Head tilted onto the right shoulder (up = +x): above is now on the left, below on the right.
+        s.e.listener(0, 0, 0, 0, 0, -1, 1, 0, 0);
+        const double tilted_above = probe(s.e).balance();
+        s.move(0, -3, 0);
+        const double tilted_below = probe(s.e).balance();
+        // Looking straight up (forward = +y, up = +z): above is ahead; a source at +x stays right.
+        s.e.listener(0, 0, 0, 0, 1, 0, 0, 0, 1);
+        s.move(0, 3, 0);
+        const double looking_up_ahead = probe(s.e).balance();
+        s.move(3, 0, 0);
+        const double looking_up_right = probe(s.e).balance();
+        MESSAGE("above " << level_above << ", tilted: above " << tilted_above << " below " << tilted_below
+                         << ", looking up: ahead " << looking_up_ahead << " right " << looking_up_right);
+        CHECK(std::abs(level_above) < 3.0);
+        CHECK(tilted_above < -6.0);
+        CHECK(tilted_below > 6.0);
+        CHECK(std::abs(looking_up_ahead) < 3.0);
+        CHECK(looking_up_right > 6.0);
+    }
+}
+
+TEST_CASE("headphone tiers: sources behind sound duller than in front") {
+    for (const uint32_t budget : {kAmbisonic, kBinaural}) {
+        CAPTURE(budget);
+        const auto render = [budget](float z) {
+            TierScene s(budget, 0, 0, z);
+            return probe(s.e);
+        };
+        const Probe f = render(-3);
+        const Probe b = render(3);
+        MESSAGE("front: level " << f.level() << " brightness " << f.brightness() << "; back: level " << b.level()
+                                << " brightness " << b.brightness());
+        // Steam Audio's order-3 HRTF leans 4.5 dB left for a source straight behind (6-8 kHz; the
+        // same whichever way the listener faces, so it is in the data, not our coordinates).
+        const double rear_tolerance = budget == kAmbisonic ? 5.0 : 3.0;
+        CHECK(std::abs(f.balance()) < 3.0);
+        CHECK(std::abs(b.balance()) < rear_tolerance);
+        CHECK(f.brightness() - b.brightness() > 2.0);
+    }
+}
+
+TEST_CASE("ambisonic voices take their bus gain, and a source at the head is centred") {
+    TierScene s(kAmbisonic, 3, 0, 0);
+    const double full = probe(s.e).level();
+    REQUIRE(vsa_bus_set_gain(s.e.engine, VSA_BUS_SOUND, 0.5f) == VSA_OK);
+    CHECK(full - probe(s.e).level() == doctest::Approx(6.02).epsilon(0.02));
+
+    REQUIRE(vsa_bus_set_gain(s.e.engine, VSA_BUS_SOUND, 1.0f) == VSA_OK);
+    s.move(0.01f, 0, 0);  // quieter than the decoy thanks to its gain: stays ambisonic
+    const double centred = probe(s.e).balance();
+    MESSAGE("at the head: balance " << centred);
+    CHECK(std::abs(centred) < 2.0);  // the HRTF itself is not perfectly symmetric
+}
+
+TEST_CASE("the ambisonic tier matches the binaural tier's level, averaged over directions") {
+    // Order-3 binaural decoding loses high-frequency energy off the interaural axis; the decoder's
+    // makeup gain restores the diffuse-field level so voices do not jump when they change tier.
+    double power[2] = {0.0, 0.0};
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int z = -1; z <= 1; ++z) {
+                if (x == 0 && y == 0 && z == 0) {
+                    continue;
+                }
+                const auto n = static_cast<float>(3.0 / std::sqrt(x * x + y * y + z * z));
+                for (const uint32_t budget : {kAmbisonic, kBinaural}) {
+                    TierScene s(budget, static_cast<float>(x) * n, static_cast<float>(y) * n, static_cast<float>(z) * n);
+                    const Probe p = probe(s.e, 9600);
+                    for (std::size_t k = 0; k < kProbeCount; ++k) {
+                        power[budget == kAmbisonic ? 0 : 1] +=
+                            std::pow(10.0, p.left[k] / 10.0) + std::pow(10.0, p.right[k] / 10.0);
+                    }
+                }
+            }
+        }
+    }
+    const double offset = 10.0 * std::log10(power[0] / power[1]);
+    MESSAGE("diffuse-field level, ambisonic - binaural: " << offset << " dB");
+    CHECK(std::abs(offset) < 1.0);
+}
+

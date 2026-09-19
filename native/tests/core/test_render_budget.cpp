@@ -107,7 +107,10 @@ LoadResult measure(vsa::Engine& engine) {
 }  // namespace
 
 TEST_CASE("the render path never allocates") {
-    vsa::Engine engine(make_config());
+    // One binaural place: of the two positional voices, one takes the world ambisonic bus.
+    vsa_engine_config config = make_config();
+    config.max_binaural_voices = 1;
+    vsa::Engine engine(config);
     AssetRef mono(pcm_asset(engine, vsa_test::sine(440.0, 44100.0, 22050), 1, 44100));
     AssetRef stereo(pcm_asset(engine, vsa_test::sine(660.0, 48000.0, 9600, 0.4f, 2), 2, 48000));
     const auto ogg = vsa_test::ogg_file(vsa_test::sine(330.0, 44100.0, 88200, 0.4f, 2), 2, 44100);

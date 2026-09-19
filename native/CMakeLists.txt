@@ -44,6 +44,7 @@ add_library(vsaudio_core STATIC
     src/audio/mixer.hpp
     src/audio/spatial.cpp
     src/audio/spatial.hpp
+    src/audio/spatial_tier.hpp
     src/audio/stream.cpp
     src/audio/stream.hpp
     src/audio/voice.hpp
@@ -65,6 +66,7 @@ add_library(vsaudio_core STATIC
     src/dsp/limiter.hpp
     src/dsp/resampler.cpp
     src/dsp/resampler.hpp
+    src/dsp/spherical_harmonics.hpp
     src/steam/ipl_handle.hpp
     src/steam/self_test.cpp
     src/steam/self_test.hpp

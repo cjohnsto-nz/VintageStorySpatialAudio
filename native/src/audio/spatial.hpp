@@ -1,8 +1,11 @@
 #pragma once
 
+#include "audio/spatial_tier.hpp"
+#include "dsp/spherical_harmonics.hpp"
 #include "steam/ipl_handle.hpp"
 #include "vsaudio.h"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -23,6 +26,16 @@ struct SpatialParams {
     float distance_gain = 1.0f;
     /// Steam Audio 3-band air absorption, 0..1 each.
     float air_absorption[3] = {1.0f, 1.0f, 1.0f};
+    /// Unit listener-to-source direction in world space (for the world ambisonic bus).
+    float world_direction[3] = {0.0f, 0.0f, -1.0f};
+};
+
+/// The listener's orientation (and position) for decoding the world ambisonic bus.
+struct Orientation {
+    float right[3];
+    float up[3];
+    float ahead[3];
+    float origin[3];
 };
 
 /// Steam Audio rendering for positional voices: a fixed pool of effect sets (direct effect for
@@ -50,8 +63,8 @@ public:
     void release(int set) noexcept;
     /// Clears a set's filter state (use when a set changes voices).
     void reset(int set) noexcept;
-    /// Clears only the binaural (true) or panning (false) state: for switching a voice between them.
-    void reset_spatialiser(int set, bool binaural) noexcept;
+    /// Clears the state of one tier's effect: for switching a voice between tiers.
+    void reset_tier(int set, SpatialTier tier) noexcept;
     void reset_all() noexcept;
 
     [[nodiscard]] uint32_t pool_size() const noexcept { return pool_size_; }
@@ -62,12 +75,35 @@ public:
     /// in the engine's channel order: channels 0/1 are front left/right).
     void render(int set, vsa_render_mode mode, const SpatialParams& params, float* mono, float* const* out) noexcept;
 
+    // ---- World ambisonic bus (order kAmbisonicOrder) ----
+
+    static constexpr int kAmbisonicOrder = 3;
+    static constexpr uint32_t kAmbisonicChannels = (kAmbisonicOrder + 1) * (kAmbisonicOrder + 1);
+    static_assert(kAmbisonicChannels == dsp::kSh3Channels);
+
+    /// Start of a block: clears the bus.
+    void begin_block() noexcept;
+    /// Applies the set's direct effect to `mono` (in place), then encodes it towards
+    /// params.world_direction (coefficients interpolated across the block from the set's
+    /// previous direction) and adds it to the bus. `mono` should already carry every gain.
+    /// Below full spatial_blend the directional components fade out, leaving the omnidirectional
+    /// one: a source at the head is heard centred.
+    void encode(int set, const SpatialParams& params, float* mono) noexcept;
+    /// Decodes the bus binaurally for this listener orientation into `left`/`right` (overwritten).
+    /// Returns false (and writes nothing) when the bus and the decoder's tail are silent.
+    bool decode(const Orientation& orientation, float* left, float* right) noexcept;
+
 private:
     struct EffectSet {
         steam::DirectEffect direct;
         steam::BinauralEffect binaural;
         steam::PanningEffect panning;
+        // Ambisonic encoding: last block's coefficients, the start of this block's ramp.
+        std::array<float, dsp::kSh3Channels> sh{};
+        bool sh_ready = false;
     };
+
+    void apply_direct(EffectSet& set, const SpatialParams& params, float* mono) noexcept;
 
     const steam::SteamContext& steam_;
     uint32_t pool_size_;
@@ -77,6 +113,14 @@ private:
     std::vector<EffectSet> sets_;
     std::vector<int> free_;
     uint32_t free_count_ = 0;
+
+    steam::AmbisonicsDecodeEffect decoder_;
+    std::vector<float> bus_storage_;
+    std::array<float*, kAmbisonicChannels> bus_{};
+    std::vector<float> ramp_;  // (j + 1) / frames: the per-frame weight of a coefficient change
+    bool bus_used_ = false;
+    // Blocks the decoder keeps running after the bus falls silent, to let its convolution tail out.
+    uint32_t tail_blocks_ = 0;
 };
 
 }  // namespace vsa

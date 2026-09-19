@@ -136,7 +136,7 @@ private:
     ListenerPose pose_;
     vsa_render_mode render_mode_ = VSA_RENDER_HEADPHONES;
     // Binaural budget: voices ranked above binaural_threshold_ (computed at each block start from
-    // the previous block's levels) get HRTF rendering, the rest panning.
+    // the previous block's levels) get their own HRTF, the rest share the world ambisonic bus.
     uint32_t binaural_budget_;
     float binaural_threshold_ = 0.0f;
     std::vector<float> ranking_;
@@ -158,6 +158,9 @@ private:
     uint32_t window_capacity_ = 0;
     std::vector<float> voice_storage_;
     float* voice_out_[2] = {};
+    // Each bus's gain for this block, per frame (ambisonic voices apply it before sharing the bus).
+    std::vector<float> bus_gain_storage_;
+    std::array<float*, VSA_BUS_COUNT> bus_gains_{};
     std::vector<float> spatial_storage_;
     std::array<float*, kMaxOutputChannels> spatial_out_{};
     std::vector<float> gain_buf_;

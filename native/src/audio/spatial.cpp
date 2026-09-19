@@ -4,6 +4,7 @@
 #include "core/log.hpp"
 #include "steam/steam_context.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 
@@ -17,6 +18,13 @@ void check(IPLerror error, const char* what) {
 }
 
 constexpr float kCentre = 0.70710678f;
+
+// Order-3 binaural decoding of a point source loses energy away from the interaural axis (the
+// virtual sources' HRTFs interfere at high frequencies): averaged over 26 directions around the
+// head and 1-8 kHz it is 4.7 dB below the per-voice HRTF rendering (about 0 dB to the sides,
+// 5-7 dB elsewhere). This restores the diffuse-field level, so a voice keeps its loudness when
+// it moves between the binaural and ambisonic tiers. Measured by test_spatial.cpp.
+constexpr float kAmbisonicMakeup = 1.72f;  // +4.7 dB
 
 }  // namespace
 
@@ -59,6 +67,24 @@ void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames, uint3
         check(iplBinauralEffectCreate(steam_.context(), &audio, &binaural, set.binaural.out()), "iplBinauralEffectCreate");
         check(iplPanningEffectCreate(steam_.context(), &audio, &panning, set.panning.out()), "iplPanningEffectCreate");
     }
+
+    // One binaural decoder for the whole world bus.
+    IPLAmbisonicsDecodeEffectSettings decoder{};
+    decoder.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_STEREO;
+    decoder.hrtf = hrtf_.get();
+    decoder.maxOrder = kAmbisonicOrder;
+    check(iplAmbisonicsDecodeEffectCreate(steam_.context(), &audio, &decoder, decoder_.out()),
+          "iplAmbisonicsDecodeEffectCreate");
+    bus_storage_.assign(static_cast<std::size_t>(block_frames) * kAmbisonicChannels, 0.0f);
+    for (uint32_t c = 0; c < kAmbisonicChannels; ++c) {
+        bus_[c] = bus_storage_.data() + static_cast<std::size_t>(c) * block_frames;
+    }
+    ramp_.resize(block_frames);
+    for (uint32_t j = 0; j < block_frames; ++j) {
+        ramp_[j] = static_cast<float>(j + 1) / static_cast<float>(block_frames);
+    }
+    bus_used_ = false;
+    tail_blocks_ = 0;
     free_.resize(pool_size_);
     for (uint32_t i = 0; i < pool_size_; ++i) {
         free_[i] = static_cast<int>(pool_size_ - 1 - i);
@@ -89,14 +115,15 @@ void SpatialRenderer::reset(int set) noexcept {
     iplDirectEffectReset(s.direct.get());
     iplBinauralEffectReset(s.binaural.get());
     iplPanningEffectReset(s.panning.get());
+    s.sh_ready = false;
 }
 
-void SpatialRenderer::reset_spatialiser(int set, bool binaural) noexcept {
+void SpatialRenderer::reset_tier(int set, SpatialTier tier) noexcept {
     EffectSet& s = sets_[static_cast<std::size_t>(set)];
-    if (binaural) {
-        iplBinauralEffectReset(s.binaural.get());
-    } else {
-        iplPanningEffectReset(s.panning.get());
+    switch (tier) {
+        case SpatialTier::Binaural: iplBinauralEffectReset(s.binaural.get()); break;
+        case SpatialTier::Ambisonic: s.sh_ready = false; break;
+        case SpatialTier::Panned: iplPanningEffectReset(s.panning.get()); break;
     }
 }
 
@@ -120,14 +147,7 @@ void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams&
     }
     IPLAudioBuffer out_buffer{static_cast<IPLint32>(count), frames, out_channels};
 
-    IPLDirectEffectParams direct{};
-    direct.flags = static_cast<IPLDirectEffectFlags>(IPL_DIRECTEFFECTFLAGS_APPLYDISTANCEATTENUATION |
-                                                     IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION);
-    direct.distanceAttenuation = params.distance_gain;
-    direct.airAbsorption[0] = params.air_absorption[0];
-    direct.airAbsorption[1] = params.air_absorption[1];
-    direct.airAbsorption[2] = params.air_absorption[2];
-    iplDirectEffectApply(s.direct.get(), &direct, &mono_buffer, &mono_buffer);
+    apply_direct(s, params, mono);
 
     const IPLVector3 direction{params.direction[0], params.direction[1], params.direction[2]};
     if (mode == VSA_RENDER_SPEAKERS) {
@@ -154,6 +174,91 @@ void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams&
     binaural.spatialBlend = params.spatial_blend;
     binaural.hrtf = hrtf_.get();
     iplBinauralEffectApply(s.binaural.get(), &binaural, &mono_buffer, &out_buffer);
+}
+
+void SpatialRenderer::apply_direct(EffectSet& set, const SpatialParams& params, float* mono) noexcept {
+    float* channels[1] = {mono};
+    IPLAudioBuffer buffer{1, static_cast<IPLint32>(frames_), channels};
+    IPLDirectEffectParams direct{};
+    direct.flags = static_cast<IPLDirectEffectFlags>(IPL_DIRECTEFFECTFLAGS_APPLYDISTANCEATTENUATION |
+                                                     IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION);
+    direct.distanceAttenuation = params.distance_gain;
+    direct.airAbsorption[0] = params.air_absorption[0];
+    direct.airAbsorption[1] = params.air_absorption[1];
+    direct.airAbsorption[2] = params.air_absorption[2];
+    iplDirectEffectApply(set.direct.get(), &direct, &buffer, &buffer);
+}
+
+void SpatialRenderer::begin_block() noexcept {
+    if (bus_used_) {
+        std::fill(bus_storage_.begin(), bus_storage_.end(), 0.0f);
+        bus_used_ = false;
+    }
+}
+
+void SpatialRenderer::encode(int set, const SpatialParams& params, float* mono) noexcept {
+    EffectSet& s = sets_[static_cast<std::size_t>(set)];
+    apply_direct(s, params, mono);
+
+    // Encoded here rather than with Steam Audio's encode effect: the coefficients are ramped
+    // across the block (a moving source does not step) and summed straight into the bus.
+    std::array<float, kAmbisonicChannels> target;
+    dsp::sh_order3(params.world_direction, target.data());
+    const float blend = params.spatial_blend;
+    for (uint32_t c = 1; c < kAmbisonicChannels; ++c) {
+        target[c] *= blend;  // towards the head only the omnidirectional W remains: centred
+    }
+    if (!s.sh_ready) {
+        s.sh = target;
+        s.sh_ready = true;
+    }
+    const float* ramp = ramp_.data();
+    for (uint32_t c = 0; c < kAmbisonicChannels; ++c) {
+        const float from = s.sh[c];
+        const float change = target[c] - from;
+        float* sum = bus_[c];
+        if (change == 0.0f) {
+            for (uint32_t j = 0; j < frames_; ++j) {
+                sum[j] += from * mono[j];
+            }
+        } else {
+            for (uint32_t j = 0; j < frames_; ++j) {
+                sum[j] += (from + change * ramp[j]) * mono[j];
+            }
+        }
+    }
+    s.sh = target;
+    bus_used_ = true;
+}
+
+bool SpatialRenderer::decode(const Orientation& o, float* left, float* right) noexcept {
+    constexpr uint32_t kTailBlocks = 16;  // generous: the HRTF convolution tail is a few hundred samples
+    if (bus_used_) {
+        tail_blocks_ = kTailBlocks;
+    } else if (tail_blocks_ == 0) {
+        return false;
+    } else {
+        --tail_blocks_;
+    }
+
+    const auto frames = static_cast<IPLint32>(frames_);
+    IPLAudioBuffer in{static_cast<IPLint32>(kAmbisonicChannels), frames, bus_.data()};
+    float* out_channels[2] = {left, right};
+    IPLAudioBuffer out{2, frames, out_channels};
+    IPLAmbisonicsDecodeEffectParams decode{};
+    decode.order = kAmbisonicOrder;
+    decode.hrtf = hrtf_.get();
+    decode.orientation.right = IPLVector3{o.right[0], o.right[1], o.right[2]};
+    decode.orientation.up = IPLVector3{o.up[0], o.up[1], o.up[2]};
+    decode.orientation.ahead = IPLVector3{o.ahead[0], o.ahead[1], o.ahead[2]};
+    decode.orientation.origin = IPLVector3{o.origin[0], o.origin[1], o.origin[2]};
+    decode.binaural = IPL_TRUE;
+    iplAmbisonicsDecodeEffectApply(decoder_.get(), &decode, &in, &out);
+    for (uint32_t j = 0; j < frames_; ++j) {
+        left[j] *= kAmbisonicMakeup;
+        right[j] *= kAmbisonicMakeup;
+    }
+    return true;
 }
 
 }  // namespace vsa

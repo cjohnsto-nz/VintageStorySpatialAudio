@@ -67,6 +67,10 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
     voice_out_[0] = voice_storage_.data();
     voice_out_[1] = voice_storage_.data() + block_frames;
     gain_buf_.resize(block_frames);
+    bus_gain_storage_.resize(static_cast<std::size_t>(block_frames) * VSA_BUS_COUNT);
+    for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
+        bus_gains_[b] = bus_gain_storage_.data() + b * block_frames;
+    }
     spatial_storage_.resize(static_cast<std::size_t>(block_frames) * kMaxOutputChannels);
     for (std::size_t c = 0; c < kMaxOutputChannels; ++c) {
         spatial_out_[c] = spatial_storage_.data() + c * block_frames;
@@ -133,6 +137,10 @@ void Mixer::render_block() noexcept {
     pose_ = listener_.read();
     update_binaural_threshold();
 
+    for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
+        bus_gain_[b].render(bus_gains_[b], frames);
+    }
+    spatial_.begin_block();
     bus_used_.fill(false);
     for (uint32_t i = 0; i < active_count_;) {
         if (!render_voice(active_[i])) {
@@ -147,13 +155,11 @@ void Mixer::render_block() noexcept {
     // Buses -> master (all output channels, engine order) -> master gain -> linked limiter.
     const uint32_t channels = channels_;
     std::fill(master_storage_.begin(), master_storage_.begin() + static_cast<std::ptrdiff_t>(frames) * channels, 0.0f);
-    float* gain = gain_buf_.data();
     for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
         if (!bus_used_[b]) {
-            bus_gain_[b].render(nullptr, frames);
             continue;
         }
-        bus_gain_[b].render(gain, frames);
+        const float* gain = bus_gains_[b];
         for (uint32_t c = 0; c < channels; ++c) {
             const float* in = bus_[b * kMaxOutputChannels + c];
             float* sum = master_[c];
@@ -162,6 +168,24 @@ void Mixer::render_block() noexcept {
             }
         }
     }
+    // The world ambisonic bus (bus gains already applied), decoded for the listener's head.
+    const Orientation orientation{
+        {pose_.right[0], pose_.right[1], pose_.right[2]},
+        {pose_.up[0], pose_.up[1], pose_.up[2]},
+        {pose_.forward[0], pose_.forward[1], pose_.forward[2]},
+        {pose_.position[0], pose_.position[1], pose_.position[2]},
+    };
+    if (spatial_.decode(orientation, spatial_out_[0], spatial_out_[1])) {
+        for (uint32_t c = 0; c < 2; ++c) {
+            const float* in = spatial_out_[c];
+            float* sum = master_[c];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += in[j];
+            }
+        }
+    }
+
+    float* gain = gain_buf_.data();
     master_gain_.render(gain, frames);
     for (uint32_t c = 0; c < channels; ++c) {
         float* x = master_[c];
@@ -514,11 +538,14 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
     v.is_virtual = silent;
     const bool positioned = spatial && v.effect_set >= 0;
     if (positioned) {
-        const bool binaural = render_mode_ == VSA_RENDER_HEADPHONES &&
-                              level * (v.binaural ? 2.0f : 1.0f) >= binaural_threshold_;
-        if (binaural != v.binaural) {
-            spatial_.reset_spatialiser(v.effect_set, binaural);  // its state is from an earlier voice
-            v.binaural = binaural;
+        SpatialTier tier = SpatialTier::Panned;
+        if (render_mode_ == VSA_RENDER_HEADPHONES) {
+            const float ranked = level * (v.tier == SpatialTier::Binaural ? 2.0f : 1.0f);
+            tier = ranked >= binaural_threshold_ ? SpatialTier::Binaural : SpatialTier::Ambisonic;
+        }
+        if (tier != v.tier) {
+            spatial_.reset_tier(v.effect_set, tier);  // its state is from an earlier use
+            v.tier = tier;
         }
     }
 
@@ -606,10 +633,20 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         if (v.shelf.active()) {
             v.shelf.process(left, frames, 0);
         }
+        if (v.tier == SpatialTier::Ambisonic) {
+            // The shared bus is decoded after every bus gain, so this voice's is applied now.
+            const float* bus_gain = bus_gains_[b];
+            for (uint32_t j = 0; j < frames; ++j) {
+                left[j] *= bus_gain[j];
+            }
+            spatial_.encode(v.effect_set, params, left);
+            return;
+        }
         // Binaural goes to the front pair; panning covers the whole output layout.
-        const vsa_render_mode mode = v.binaural ? VSA_RENDER_HEADPHONES : VSA_RENDER_SPEAKERS;
-        spatial_.render(v.effect_set, mode, params, left, spatial_out_.data());
-        const uint32_t count = v.binaural ? 2u : spatial_.speaker_channels();
+        const bool binaural = v.tier == SpatialTier::Binaural;
+        spatial_.render(v.effect_set, binaural ? VSA_RENDER_HEADPHONES : VSA_RENDER_SPEAKERS, params, left,
+                        spatial_out_.data());
+        const uint32_t count = binaural ? 2u : spatial_.speaker_channels();
         for (uint32_t c = 0; c < count; ++c) {
             const float* in = spatial_out_[c];
             float* sum = bus[c];
@@ -668,6 +705,12 @@ SpatialParams Mixer::spatial_params(const RenderVoice& v) const noexcept {
     }
     // A source at the head has no direction: blend to centred within kCentreRadius.
     p.spatial_blend = std::min(1.0f, distance / kCentreRadius);
+    // The same direction in world space, for the world ambisonic bus (listener space is +x right,
+    // +y up, -z forward).
+    for (std::size_t i = 0; i < 3; ++i) {
+        p.world_direction[i] =
+            pose_.right[i] * p.direction[0] + pose_.up[i] * p.direction[1] - pose_.forward[i] * p.direction[2];
+    }
     return p;
 }
 
@@ -699,12 +742,12 @@ int Mixer::acquire_effects(uint32_t slot, float level) noexcept {
 
 void Mixer::update_binaural_threshold() noexcept {
     // Rank last block's levels of voices holding effects; current binaural voices get +6 dB so
-    // voices near the cut-off do not flip between binaural and panned every block.
+    // voices near the cut-off do not flip between binaural and ambisonic every block.
     uint32_t count = 0;
     for (uint32_t i = 0; i < active_count_ && count < ranking_.size(); ++i) {
         const RenderVoice& v = slots_[active_[i]].render;
         if (v.effect_set >= 0) {
-            ranking_[count++] = v.level * (v.binaural ? 2.0f : 1.0f);
+            ranking_[count++] = v.level * (v.tier == SpatialTier::Binaural ? 2.0f : 1.0f);
         }
     }
     if (count <= binaural_budget_) {

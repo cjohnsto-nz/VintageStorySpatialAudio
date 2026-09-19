@@ -147,7 +147,8 @@ typedef struct vsa_engine_config {
     uint32_t max_real_voices;
     /**
      * Of those, how many get per-voice HRTF rendering in headphones mode (the loudest ones; the
-     * rest are panned). 0 = 64; at most max_real_voices.
+     * rest share a world-space order-3 Ambisonic bus decoded binaurally once per block).
+     * 0 = 64; at most max_real_voices.
      */
     uint32_t max_binaural_voices;
 } vsa_engine_config;

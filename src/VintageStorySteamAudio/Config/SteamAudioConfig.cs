@@ -36,7 +36,7 @@ public sealed class SteamAudioConfig
     /// <summary>Positional sounds rendered at once with their own Steam Audio effects (0 = 256); quieter ones go virtual.</summary>
     public int MaxRealVoices { get; set; }
 
-    /// <summary>Of those, how many get their own HRTF with headphones (0 = 64); the rest are panned.</summary>
+    /// <summary>Of those, how many get their own HRTF with headphones (0 = 64); the rest share one binaural Ambisonic mix.</summary>
     public int MaxBinauralVoices { get; set; }
 
     /// <summary>
