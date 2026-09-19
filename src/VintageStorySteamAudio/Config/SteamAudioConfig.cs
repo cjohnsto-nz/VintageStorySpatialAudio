@@ -150,8 +150,12 @@ public sealed class SteamAudioConfig
     /// <summary>Seconds of early reflections rendered exactly (directional); 0 = the preset's.</summary>
     public float ReflectionTransitionSeconds { get; set; }
 
-    /// <summary>Scales all reverb (1 = as simulated, 0..4; also .steamaudio reverb gain).</summary>
-    public float ReflectionGain { get; set; } = 1f;
+    /// <summary>
+    /// Scales all reverb (0..4; also .steamaudio reverb gain). 1 is the level Steam Audio
+    /// simulates; the default is tuned by ear on a 7.1.4 system, where the simulated level is
+    /// far too much on top of the game's own sound mix.
+    /// </summary>
+    public float ReflectionGain { get; set; } = 0.1f;
 
     /// <summary>Scales the early reflections, the first 0.1 s or so (0 = off, 0..4; also .steamaudio reverb early).</summary>
     public float ReflectionEarlyGain { get; set; } = 1f;

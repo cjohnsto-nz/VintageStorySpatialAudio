@@ -210,6 +210,10 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
 - **Why the hole test hears nothing:** reflections carry only what rays through the hole find; the sound "coming through an opening from the opening's direction" is diffraction, which is Steam Audio's *pathing* (PLAN 5.5, Phase 7), not its reflections. Meanwhile the direct sound transmitted through the wall arrives from the anvil's true direction in both cases.
 - **Knobs:** `ReflectionTransitionSeconds` (0.1) lengthens the directional, convolved part at CPU cost; `ReflectionTailGain` lowers the diffuse part.
 
+### Level
+
+- `ReflectionGain` defaults to 0.1 (-20 dB): what Chris finds comfortable on the 7.1.4 system with the current calibration (1 = the level Steam Audio simulates). Worth revisiting if the calibration or the materials change.
+
 ### To check in game (Chris)
 
 - **Reverb that follows the space:** walk from outdoors into a small stone room, a big hall, a cave. The HUD's RT60 and space name should follow; outdoors should be nearly dry.
