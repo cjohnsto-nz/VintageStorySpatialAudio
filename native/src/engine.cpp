@@ -148,7 +148,7 @@ Engine::Engine(const vsa_engine_config& config)
 Engine::~Engine() {
     {
         std::lock_guard lock(output_mutex_);
-        device_.close();
+        close_device_locked();
         output_kind_ = VSA_OUTPUT_NONE;
     }
     running_.store(false, std::memory_order_release);
@@ -530,11 +530,27 @@ void Engine::prepare_callback(void* user, uint32_t sample_rate, uint32_t channel
 void Engine::offline_block_hook(void* user) noexcept { static_cast<Engine*>(user)->service_streams(); }
 
 void Engine::open_device_locked(const vsa_device_id* id, uint32_t channels) {
+    close_device_locked();
+    if (wants_spatial_) {
+        try {
+            spatial_output_.open(id, &render_callback, &prepare_callback, this);
+            output_kind_ = VSA_OUTPUT_SPATIAL;
+            return;
+        } catch (const Error& e) {
+            Log::writef(VSA_LOG_INFO, "spatial audio unavailable (%s); opening the device directly", e.what());
+        }
+    }
     device_.open(id, channels, &render_callback, &prepare_callback, this);
+    output_kind_ = VSA_OUTPUT_DEVICE;
+}
+
+void Engine::close_device_locked() noexcept {
+    device_.close();
+    spatial_output_.close();
 }
 
 void Engine::open_output(const vsa_output_desc& desc) {
-    if (desc.kind != VSA_OUTPUT_NONE && desc.kind != VSA_OUTPUT_DEVICE) {
+    if (desc.kind != VSA_OUTPUT_NONE && desc.kind != VSA_OUTPUT_DEVICE && desc.kind != VSA_OUTPUT_SPATIAL) {
         throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown output kind " + std::to_string(desc.kind));
     }
     if (desc.channels != 0 && !is_supported_layout(desc.channels)) {
@@ -546,8 +562,9 @@ void Engine::open_output(const vsa_output_desc& desc) {
     }
 
     std::lock_guard lock(output_mutex_);
-    device_.close();
+    close_device_locked();
     reopen_pending_ = false;
+    wants_spatial_ = desc.kind == VSA_OUTPUT_SPATIAL;
     if (desc.kind == VSA_OUTPUT_NONE) {
         mixer_.prepare(rate, desc.channels == 0 ? 2 : desc.channels);
         output_kind_ = VSA_OUTPUT_NONE;
@@ -559,11 +576,11 @@ void Engine::open_output(const vsa_output_desc& desc) {
     device_channels_ = desc.channels;
     try {
         open_device_locked(device_id_ ? &*device_id_ : nullptr, device_channels_);
-        output_kind_ = VSA_OUTPUT_DEVICE;
     } catch (...) {
         // Stay consistent: back to offline output at the configured rate.
         mixer_.prepare(settings_.sample_rate, 2);
         output_kind_ = VSA_OUTPUT_NONE;
+        wants_spatial_ = false;
         device_id_.reset();
         throw;
     }
@@ -649,16 +666,23 @@ void Engine::drain_events_locked() {
 
 void Engine::check_device() {
     std::lock_guard lock(output_mutex_);
-    if (output_kind_ != VSA_OUTPUT_DEVICE) {
+    if (output_kind_ != VSA_OUTPUT_DEVICE && output_kind_ != VSA_OUTPUT_SPATIAL) {
         return;
     }
-    if (device_.take_rerouted()) {
+    const bool spatial = output_kind_ == VSA_OUTPUT_SPATIAL;
+    const auto now = std::chrono::steady_clock::now();
+    if (spatial ? spatial_output_.take_rerouted() : device_.take_rerouted()) {
+        // miniaudio follows the new default by itself; a spatial stream is tied to its endpoint
+        // and is reopened on the new one.
         Log::write(VSA_LOG_INFO, "output followed the new default device");
+        if (spatial && !reopen_pending_) {
+            reopen_pending_ = true;
+            next_reopen_ = now;
+        }
         std::lock_guard events(events_mutex_);
         push_event_locked(make_event(VSA_EVENT_DEVICE_REROUTED));
     }
-    const auto now = std::chrono::steady_clock::now();
-    if (device_.take_lost() && !reopen_pending_) {
+    if ((spatial ? spatial_output_.take_lost() : device_.take_lost()) && !reopen_pending_) {
         Log::write(VSA_LOG_WARNING, "output device lost; reopening");
         reopen_pending_ = true;
         next_reopen_ = now;
@@ -704,8 +728,9 @@ vsa_engine_stats Engine::stats() {
         stats.output_kind = output_kind_;
         stats.sample_rate = mixer_.sample_rate();
         stats.channels = mixer_.channels();
-        if (output_kind_ == VSA_OUTPUT_DEVICE && device_.is_open()) {
-            const auto& format = device_.format();
+        const bool spatial = output_kind_ == VSA_OUTPUT_SPATIAL && spatial_output_.is_open();
+        if (spatial || (output_kind_ == VSA_OUTPUT_DEVICE && device_.is_open())) {
+            const auto& format = spatial ? spatial_output_.format() : device_.format();
             stats.device_period_frames = format.period_frames;
             const std::size_t length = std::min(format.name.size(), sizeof stats.device_name - 1);
             std::copy_n(format.name.data(), length, stats.device_name);

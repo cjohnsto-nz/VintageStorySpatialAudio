@@ -58,6 +58,13 @@ public sealed class SteamAudioConfig
     /// </summary>
     public float ListenerBackwardOffset { get; set; } = 0.5f;
 
+    /// <summary>
+    /// With speakers (the game's HRTF option off), play through Windows Spatial Audio when the
+    /// output device has a spatial sound format enabled (Dolby Atmos for home theater, DTS:X):
+    /// a 7.1.4 mix, so sounds above reach the height speakers. Otherwise the device is used directly.
+    /// </summary>
+    public bool SpatialAudio { get; set; } = true;
+
     /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 

@@ -112,6 +112,11 @@ public enum OutputKind : uint
     /// <summary>No device: audio only through <see cref="AudioEngine.RenderOffline"/>.</summary>
     None = 0,
     Device = 1,
+    /// <summary>
+    /// Windows Spatial Audio: the 7.1.4 mix goes to the spatial stream's bed (Dolby Atmos, DTS:X,
+    /// Windows Sonic). Falls back to <see cref="Device"/> where unavailable.
+    /// </summary>
+    Spatial = 2,
 }
 
 /// <summary>How a voice is positioned.</summary>
@@ -310,7 +315,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 3;
+    public const uint AbiVersion = 4;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint FadeStopWhenDone = 1u << 0;

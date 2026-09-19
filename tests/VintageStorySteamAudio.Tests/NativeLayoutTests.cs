@@ -112,6 +112,7 @@ public sealed class NativeLayoutTests
         Assert.Equal(2u, (uint)AssetStorage.Streamed);
         Assert.Equal(2u, (uint)VoiceState.Paused);
         Assert.Equal(1u, (uint)OutputKind.Device);
+        Assert.Equal(2u, (uint)OutputKind.Spatial);
         Assert.Equal(6u, (uint)EngineEventType.DeviceRestored);
         Assert.Equal(2u, (uint)SpatialMode.Listener);
         Assert.Equal(1u, (uint)RenderMode.Speakers);

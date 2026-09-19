@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <string>
 #include <thread>
 
 using namespace vsa_test;
@@ -98,7 +99,8 @@ TEST_CASE("a real device renders on its own thread; offline rendering is refused
     vsa_engine_stats stats = e.stats();
     CHECK(stats.output_kind == VSA_OUTPUT_DEVICE);
     CHECK(stats.sample_rate >= 8000);
-    CHECK((stats.channels == 2 || stats.channels == 4 || stats.channels == 6 || stats.channels == 8));
+    CHECK((stats.channels == 2 || stats.channels == 4 || stats.channels == 6 || stats.channels == 8 ||
+           stats.channels == 12));
     MESSAGE("device '" << stats.device_name << "': " << stats.sample_rate << " Hz, " << stats.channels
                        << " channels, period " << stats.device_period_frames);
 
@@ -113,4 +115,50 @@ TEST_CASE("a real device renders on its own thread; offline rendering is refused
     desc.kind = VSA_OUTPUT_NONE;
     REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
     CHECK(vsa_engine_render_offline(e.engine, out, 256) == VSA_OK);
+}
+
+TEST_CASE("the spatial output runs a 7.1.4 bed where Windows Spatial Audio is enabled, else the device") {
+    CapturedLog log;
+    OfflineEngine e(make_config(VSA_RAY_TRACER_STEAM, &log));
+    vsa_output_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.kind = VSA_OUTPUT_SPATIAL;
+    if (vsa_output_open(e.engine, &desc) != VSA_OK) {
+        MESSAGE("no playback device available: " << vsa_get_last_error());
+        CHECK(e.stats().output_kind == VSA_OUTPUT_NONE);
+        return;
+    }
+    vsa_engine_stats stats = e.stats();
+    const std::string path = stats.output_kind == VSA_OUTPUT_SPATIAL ? "spatial" : "fallback device";
+    MESSAGE(path << " '" << stats.device_name << "': " << stats.sample_rate << " Hz, " << stats.channels
+                 << " channels, period " << stats.device_period_frames);
+    CHECK((stats.output_kind == VSA_OUTPUT_SPATIAL || stats.output_kind == VSA_OUTPUT_DEVICE));
+    if (stats.output_kind == VSA_OUTPUT_SPATIAL) {
+        CHECK(stats.channels == 12);
+        CHECK((stats.sample_rate == 44100 || stats.sample_rate == 48000));
+        CHECK(log.contains("spatial output:"));
+    } else {
+        CHECK(log.contains("spatial audio unavailable"));
+    }
+    const uint64_t before = stats.blocks_rendered;
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    stats = e.stats();
+    CHECK(stats.blocks_rendered > before);
+    CHECK(stats.output_kind != VSA_OUTPUT_NONE);
+
+    desc.kind = VSA_OUTPUT_NONE;
+    REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+    float out[512] = {};
+    CHECK(vsa_engine_render_offline(e.engine, out, 256) == VSA_OK);
+}
+
+TEST_CASE("unknown output kinds are rejected") {
+    OfflineEngine e;
+    vsa_output_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.kind = 3;
+    CHECK(vsa_output_open(e.engine, &desc) == VSA_ERROR_INVALID_ARGUMENT);
+    desc.kind = VSA_OUTPUT_NONE;
+    desc.channels = 10;
+    CHECK(vsa_output_open(e.engine, &desc) == VSA_ERROR_INVALID_ARGUMENT);
 }

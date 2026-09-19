@@ -52,6 +52,8 @@ add_library(vsaudio_core STATIC
     src/audio/voice.hpp
     src/backend/device.cpp
     src/backend/device.hpp
+    src/backend/spatial_output.cpp
+    src/backend/spatial_output.hpp
     src/core/error.cpp
     src/core/error.hpp
     src/core/log.cpp
@@ -77,6 +79,10 @@ add_library(vsaudio_core STATIC
 target_include_directories(vsaudio_core
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(vsaudio_core PUBLIC SteamAudio::phonon vsa_miniaudio vsa_vorbis Threads::Threads)
+if(WIN32)
+    # Windows Spatial Audio output: COM and MMCSS.
+    target_link_libraries(vsaudio_core PUBLIC ole32 avrt)
+endif()
 vsa_enable_warnings(vsaudio_core)
 
 # ---------------------------------------------------------------------------

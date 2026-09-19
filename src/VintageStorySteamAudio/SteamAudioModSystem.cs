@@ -22,6 +22,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
     private AudioEngine? engine;
     private AudioTakeover? takeover;
     private TestPlayback? playback;
+    private SpeakerTest? speakerTest;
     private long tickListener = -1;
     private ICoreClientAPI? capi;
     private StatusReport status = new();
@@ -98,6 +99,11 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             .BeginSubCommand("stop")
                 .WithDescription("Stop every sound started with .steamaudio play")
                 .HandleWith(_ => WithEngine(() => $"Stopped {playback!.StopAll()} sound(s)."))
+            .EndSubCommand()
+            .BeginSubCommand("speakertest")
+                .WithDescription("Noise from each 7.1.4 speaker position in turn, then overhead; '.steamaudio speakertest stop' ends it")
+                .WithArgs(parsers.OptionalWord("stop"))
+                .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
             .EndSubCommand();
     }
 
@@ -109,6 +115,8 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             tickListener = -1;
         }
 
+        speakerTest?.Dispose();
+        speakerTest = null;
         playback?.Dispose();
         playback = null;
         // World exit: hand audio back to vanilla before the engine goes (only one may exist per process).
@@ -147,6 +155,24 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         }
     }
 
+    private string SpeakerTestCommand(ICoreClientAPI api, string? argument)
+    {
+        if (string.Equals(argument, "stop", StringComparison.OrdinalIgnoreCase))
+        {
+            bool running = speakerTest?.Running == true;
+            speakerTest?.Stop();
+            return running ? "Speaker test stopped." : "No speaker test is running.";
+        }
+
+        if (playback!.EnsureDevice() is string error)
+        {
+            return error;
+        }
+
+        speakerTest ??= new SpeakerTest(engine!);
+        return speakerTest.Start(api);
+    }
+
     private TextCommandResult WithEngine(Func<string> action)
     {
         if (engine is null || playback is null)
@@ -181,12 +207,20 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         }
     }
 
+    /// <summary>"'name'", "'name' via Windows Spatial Audio (7.1.4)" or "none (offline)".</summary>
+    internal static string DescribeOutput(EngineStats s) => s.Output switch
+    {
+        OutputKind.Device => $"'{s.DeviceName}'",
+        OutputKind.Spatial => $"'{s.DeviceName}' via Windows Spatial Audio (7.1.4)",
+        _ => "none (offline)",
+    };
+
     private string RenderStats()
     {
         EngineStats s = engine!.GetStats();
         string text = string.Create(
             CultureInfo.InvariantCulture,
-            $"Output: {(s.Output == OutputKind.Device ? $"'{s.DeviceName}'" : "none (offline)")}, {s.SampleRate} Hz, {s.Channels} ch, " +
+            $"Output: {DescribeOutput(s)}, {s.SampleRate} Hz, {s.Channels} ch, " +
             $"block {s.BlockFrames} frames ({s.BlockPeriodUs / 1000:0.00} ms), device period {s.DevicePeriodFrames}\n" +
             $"Voices: {s.ActiveVoices} active ({s.RealVoices} positional with effects, {s.VirtualVoices} virtual), " +
             $"{s.AllocatedVoices}/{s.MaxVoices} allocated\n" +

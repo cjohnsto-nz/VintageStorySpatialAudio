@@ -95,11 +95,21 @@ Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1)
 - Positional voices are panned with our own 3D VBAP (`audio/vbap.*`), not Steam Audio's panning effect. It uses ITU/Dolby placements (FL/FR ±30°, SL/SR ±90°, BL/BR ±150°, heights at ±45°/±135° azimuth and 45° elevation). Virtual speakers keep it symmetric: the zenith spreads over the four heights, the nadir over the ear-level ring, and the centre of the back quad (BL BR TBL TBR are coplanar, since there's no back-centre speaker) over those four. Without that virtual speaker, the quad's two triangulations swapped and gains jumped by 0.65 behind the listener. Gains ramp across each block.
 - Tests: `core/test_vbap.cpp` (speaker directions, zenith and nadir spread, back symmetry, power, continuity around circles at seven elevations) and the 7.1.4 cases in `test_spatial.cpp`: front, overhead (100 % in the heights), above-front, below, behind, left and above-behind-right, turning, looking up and down, and a source gliding overhead without zipper noise.
 
+### Windows Spatial Audio output (ABI v4)
+
+- `VSA_OUTPUT_SPATIAL` (`backend/spatial_output.*`): `ISpatialAudioClient` on the device (miniaudio's id holds the WASAPI endpoint id), a static 7.1.4 bed (all 12 objects, mask 0x1ffe, `AudioCategory_GameEffects`), the offered object format (float32 mono, 44.1/48 kHz only), and `GetMaxFrameCount` frames per update. It runs on its own thread (MTA, MMCSS "Pro Audio"): wait on the event, Begin, render, copy each engine channel into its object's buffer, End.
+- The activation `PROPVARIANT` borrows our parameters and is never cleared (OpenAL Soft's heap-corruption bug). A 500 ms wait timeout or any failed update marks the output lost; the worker recreates the stream rather than calling `Reset` (0x88890100 on the receiver). A default-device change while following the default reopens the stream on the new device.
+- If spatial audio is unavailable (not Windows, no spatial sound format enabled, unsupported format), the engine opens the plain device instead, now and on every reopen; `stats.output_kind` says which is running. There is no periodic retry, so enabling Atmos mid-session takes effect at the next reopen.
+- **Verified on Chris's machine by `test_output.cpp`**: 'AV Receiver (NVIDIA High Definition Audio)', 48000 Hz, 12 channels, 480-frame updates (the plain device path gives 8 channels).
+- Managed: `SpatialAudio` config option (default on). The takeover opens the spatial output in speakers mode and the plain device with the game's HRTF option on, since our binaural render must not be spatialised again by Sonic or Atmos for headphones. It reopens when that option changes. `.steamaudio stats` shows "via Windows Spatial Audio (7.1.4)".
+- `.steamaudio speakertest` plays a noise burst from each 7.1.4 position in turn, named in chat, then straight overhead. Use it with the receiver's display to confirm the heights.
+- SceneLab writes `WAVE_FORMAT_EXTENSIBLE` with the speaker mask for more than 2 channels; `scenarios/surround-714.json` is a 7.1.4 listening scene.
+
 ### Still to do for Phase 3
 
 - SOFA HRTF loading (config option).
-- Windows Spatial Audio backend: `ISpatialAudioClient`, 7.1.4 static bed (mask 0x1ffe) first, then dynamic objects; own the `PROPVARIANT` blob correctly (OpenAL Soft's heap-corruption bug); recover from `WAIT_TIMEOUT` / `Reset` 0x88890100 by recreating the stream; fall back to miniaudio.
-- Chris checks the receiver shows Atmos with correct heights (needs the Spatial Audio backend).
+- **Chris**: in game with the HRTF option off, run `.steamaudio stats` (expect "via Windows Spatial Audio (7.1.4)") and `.steamaudio speakertest`; the receiver should show Atmos, with the height bursts coming from the height speakers.
+- Dynamic spatial objects (the loudest sources as Atmos objects rather than panned into the bed): only if the bed turns out not to be enough.
 
 ### Still to do for Phase 2
 

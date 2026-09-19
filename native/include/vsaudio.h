@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 3u
+#define VSA_ABI_VERSION 4u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -425,7 +425,16 @@ typedef enum vsa_output_kind {
     /** No device; audio is produced only by vsa_engine_render_offline. The initial state. */
     VSA_OUTPUT_NONE = 0,
     /** A playback device through the platform backend (WASAPI, CoreAudio, PipeWire/PulseAudio/ALSA). */
-    VSA_OUTPUT_DEVICE = 1
+    VSA_OUTPUT_DEVICE = 1,
+    /**
+     * A playback device through Windows Spatial Audio: the 7.1.4 mix (12 channels; `channels` is
+     * ignored) goes to the spatial stream's static bed, so the device's spatial sound format
+     * (Dolby Atmos, DTS:X, Windows Sonic) renders the heights. Where that is unavailable (another
+     * platform, or no spatial format enabled for the device) the engine opens the device as
+     * VSA_OUTPUT_DEVICE instead, and does so again whenever the spatial stream fails; the stats'
+     * output_kind says which is running. Meant for VSA_RENDER_SPEAKERS.
+     */
+    VSA_OUTPUT_SPATIAL = 2
 } vsa_output_kind;
 
 typedef struct vsa_output_desc {

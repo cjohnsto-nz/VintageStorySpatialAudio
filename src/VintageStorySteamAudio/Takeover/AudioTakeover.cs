@@ -35,16 +35,20 @@ internal sealed class AudioTakeover : IDisposable
     private readonly Harmony harmony = new(HarmonyId);
     private readonly Members members;
     private readonly HashSet<string> undecodable = new(StringComparer.Ordinal);
+    private readonly bool spatialAudio;
     private IList<string> deviceNames = [];
+    private AudioDevice? selectedDevice;
+    private bool? outputForHeadphones;
     private long nextSettingsPoll;
     private bool disposed;
 
-    private AudioTakeover(ICoreClientAPI api, ILogger logger, AudioSession session, Members members)
+    private AudioTakeover(ICoreClientAPI api, ILogger logger, AudioSession session, Members members, bool spatialAudio)
     {
         this.api = api;
         this.logger = logger;
         this.session = session;
         this.members = members;
+        this.spatialAudio = spatialAudio;
     }
 
     public AudioSession Session => session;
@@ -79,7 +83,7 @@ internal sealed class AudioTakeover : IDisposable
         {
             ListenerBackwardOffset = float.IsFinite(config.ListenerBackwardOffset) ? Math.Clamp(config.ListenerBackwardOffset, 0f, 3f) : 0f,
         };
-        var takeover = new AudioTakeover(api, logger, session, members);
+        var takeover = new AudioTakeover(api, logger, session, members, config.SpatialAudio);
         try
         {
             string? conflict = takeover.ForeignPatches();
@@ -231,12 +235,24 @@ internal sealed class AudioTakeover : IDisposable
             }
         }
 
-        session.Engine.OpenDevice(device);
+        selectedDevice = device;
+        OpenOutput(api.Settings.Bool[SoundCategories.HrtfSetting]);
+    }
+
+    /// <summary>
+    /// Opens the selected device for this render mode: through Windows Spatial Audio for speakers
+    /// (when enabled in the config and available), directly for headphones, which get our own
+    /// binaural rendering and must not be spatialised again by Windows Sonic or Atmos for headphones.
+    /// </summary>
+    private void OpenOutput(bool headphones)
+    {
+        outputForHeadphones = headphones;
+        session.Engine.OpenDevice(selectedDevice, spatial: spatialAudio && !headphones);
         EngineStats stats = session.Engine.GetStats();
         CurrentDevice = stats.DeviceName;
         logger.Notification(
-            "output: '{0}', {1} Hz, {2} channels, period {3} frames",
-            stats.DeviceName, stats.SampleRate, stats.Channels, stats.DevicePeriodFrames);
+            "output: {0}, {1} Hz, {2} channels, period {3} frames",
+            SteamAudioModSystem.DescribeOutput(stats), stats.SampleRate, stats.Channels, stats.DevicePeriodFrames);
     }
 
     /// <summary>
@@ -484,7 +500,20 @@ internal sealed class AudioTakeover : IDisposable
 
         nextSettingsPoll = now + SettingsPollMs;
         var levels = SoundCategories.LevelSettings.ToDictionary(p => p.Key, p => api.Settings.Int[p.Value]);
-        session.ApplyLevels(new AudioLevels((int)Math.Round(masterLevel * 100f), levels, api.Settings.Bool[SoundCategories.HrtfSetting]));
+        bool headphones = api.Settings.Bool[SoundCategories.HrtfSetting];
+        if (spatialAudio && outputForHeadphones is bool opened && opened != headphones)
+        {
+            try
+            {
+                OpenOutput(headphones);  // spatial output for speakers only
+            }
+            catch (NativeException ex)
+            {
+                logger.Error("could not reopen the output for {0}: {1}", headphones ? "headphones" : "speakers", ex.Message);
+            }
+        }
+
+        session.ApplyLevels(new AudioLevels((int)Math.Round(masterLevel * 100f), levels, headphones));
     }
 
     /// <summary>The game members the takeover touches, resolved from the verified catalogue.</summary>

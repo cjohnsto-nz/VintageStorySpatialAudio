@@ -1,0 +1,32 @@
+// Phase 3 listening scene (speakers, 7.1.4): a noise source circles at 3 m on the horizon, one
+// circles 2.5 m overhead (about 40 degrees up), a clicker hops between above and below the
+// listener, and a tone sits straight overhead. The WAV is 12 channels in the engine's order
+// (FL FR FC LFE BL BR SL SR TFL TFR TBL TBR, tagged with a speaker mask): the heights should
+// carry the overhead sources, and nothing below the horizon.
+{
+  "name": "surround-714",
+  "sampleRate": 48000,
+  "channels": 12,
+  "durationSeconds": 12,
+  "renderMode": "Speakers",
+  "assets": {
+    "noise": { "noise": { "seconds": 1, "amplitude": 0.4 } },
+    "noise2": { "noise": { "seconds": 1, "amplitude": 0.4, "seed": 7 } },
+    "tone": { "tone": { "frequency": 660, "seconds": 1, "amplitude": 0.3 } },
+    "click": { "tone": { "frequency": 8, "seconds": 1, "shape": "Square", "amplitude": 0.4 } }
+  },
+  "voices": [
+    { "asset": "noise", "gain": 0.7, "loop": true, "orbit": { "radius": 3, "periodSeconds": 6 } },
+    { "asset": "noise2", "gain": 0.7, "loop": true, "orbit": { "centre": [0, 2.5, 0], "radius": 3, "periodSeconds": -8 } },
+    { "asset": "tone", "gain": 0.5, "loop": true, "start": 4, "spatial": "World", "position": [0, 4, 0] },
+    {
+      "asset": "click", "gain": 0.5, "loop": true, "spatial": "World", "position": [0, 3, -1],
+      "actions": [
+        { "at": 3, "position": [0, -3, -1] },
+        { "at": 6, "position": [0, 3, -1] },
+        { "at": 9, "position": [0, -3, -1] }
+      ]
+    }
+  ],
+  "expect": { "maxUnderruns": 0, "maxPeakDbfs": -0.9, "maxP99Load": 1.0 }
+}

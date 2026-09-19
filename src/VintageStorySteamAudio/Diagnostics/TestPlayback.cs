@@ -110,7 +110,8 @@ internal sealed class TestPlayback(AudioEngine engine, ILogger logger, string? d
 
     public void Dispose() => StopAll();
 
-    private string? EnsureDevice()
+    /// <summary>Opens the test output unless one is open (the takeover's, or an earlier test's). Returns an error message or null.</summary>
+    internal string? EnsureDevice()
     {
         if (deviceOpen)
         {
@@ -118,7 +119,7 @@ internal sealed class TestPlayback(AudioEngine engine, ILogger logger, string? d
         }
 
         // With the takeover the game's output device is already open: play there.
-        if (string.IsNullOrWhiteSpace(deviceName) && engine.GetStats().Output == OutputKind.Device)
+        if (string.IsNullOrWhiteSpace(deviceName) && engine.GetStats().Output != OutputKind.None)
         {
             deviceOpen = true;
             return null;

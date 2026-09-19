@@ -323,8 +323,12 @@ public sealed class AudioEngine : IDisposable
         }
     }
 
-    /// <summary>Opens a device (null = the system default, followed when it changes).</summary>
-    public unsafe void OpenDevice(AudioDevice? device = null, int channels = 0)
+    /// <summary>
+    /// Opens a device (null = the system default, followed when it changes). With
+    /// <paramref name="spatial"/>, through Windows Spatial Audio (a 7.1.4 bed) when the device has
+    /// a spatial sound format enabled, otherwise directly; <see cref="EngineStats.Output"/> says which.
+    /// </summary>
+    public unsafe void OpenDevice(AudioDevice? device = null, int channels = 0, bool spatial = false)
     {
         using Lease lease = new(handle);
         VsaDeviceId id = default;
@@ -341,7 +345,7 @@ public sealed class AudioEngine : IDisposable
         var desc = new VsaOutputDesc
         {
             StructSize = (uint)sizeof(VsaOutputDesc),
-            Kind = (uint)OutputKind.Device,
+            Kind = (uint)(spatial ? OutputKind.Spatial : OutputKind.Device),
             DeviceId = device is null ? null : &id,
             Channels = checked((uint)channels),
         };

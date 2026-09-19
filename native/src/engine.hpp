@@ -5,6 +5,7 @@
 #include "core/latest_value.hpp"
 #include "audio/voice.hpp"
 #include "backend/device.hpp"
+#include "backend/spatial_output.hpp"
 #include "core/rt_log.hpp"
 #include "core/spsc_ring.hpp"
 #include "dsp/resampler.hpp"
@@ -105,7 +106,10 @@ private:
     void drain_retired();
     void drain_events_locked();  // requires events_mutex_
     void check_device();
-    void open_device_locked(const vsa_device_id* id, uint32_t channels);  // requires output_mutex_
+    /// Opens the requested device: through Windows Spatial Audio when wants_spatial_ and it is
+    /// available, else directly. Sets output_kind_. Requires output_mutex_.
+    void open_device_locked(const vsa_device_id* id, uint32_t channels);
+    void close_device_locked() noexcept;  // requires output_mutex_
     void push_event_locked(const vsa_event& event);                        // requires events_mutex_
 
     static void render_callback(void* user, float* out, uint32_t frames) noexcept;
@@ -146,7 +150,9 @@ private:
     // Output. output_mutex_ also serialises offline rendering against output changes.
     std::mutex output_mutex_;
     backend::DeviceOutput device_;
-    uint32_t output_kind_ = VSA_OUTPUT_NONE;
+    backend::SpatialOutput spatial_output_;
+    uint32_t output_kind_ = VSA_OUTPUT_NONE;  // what runs: NONE, DEVICE or SPATIAL
+    bool wants_spatial_ = false;              // SPATIAL was requested (DEVICE may be its fallback)
     std::optional<vsa_device_id> device_id_;  // the requested device; nullopt = follow the default
     uint32_t device_channels_ = 0;
     bool reopen_pending_ = false;
