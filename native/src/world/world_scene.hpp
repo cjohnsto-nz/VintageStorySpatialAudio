@@ -153,6 +153,10 @@ public:
     void attach(IPLSimulator simulator);
     void detach(IPLSimulator simulator);
     [[nodiscard]] SceneLock& scene_lock() noexcept { return scene_mutex_; }
+    /// The current top-level scene, for Steam Audio calls that take a scene (probe generation,
+    /// baking). Hold scene_lock() shared for as long as the handle is used: a compaction replaces
+    /// the scene.
+    [[nodiscard]] IPLScene scene_locked() const noexcept { return top_ ? top_->scene.get() : nullptr; }
     /// Top-level scenes built so far.
     [[nodiscard]] uint64_t commit_count() const noexcept { return commits_.load(std::memory_order_acquire); }
 

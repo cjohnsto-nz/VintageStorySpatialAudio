@@ -71,7 +71,15 @@ Sounds played at a creature or player follow it while they play; vanilla leaves 
 - **Verification:** VsaDoctor 38/38 against 1.22.7. `EntitySoundTrackerTests` cover announcement, expiry, cancel, context nesting, inference (tall creatures, lag, ambiguity) and following/letting go against the engine. All 111 managed tests passed on a worktree of `f62e42a` plus these changes (the working tree's native code was mid-ABI-9 change).
 - **To check in game:** walk past running wolves or chickens, and chase a bear. Calls should come from the animal, not from where it was. Watch the stats line for "matched by position" counts.
 
-## Phase 6 (reflections and reverb): in progress on `phase6-reflections`
+## Phase 7 (pathing): in progress on `phase7-pathing`
+
+Phase 6 is merged into `main` (not pushed).
+
+- **The gate (ADR 0013):** a 64³ region of terrain, two buildings and a cave bakes in 0.52 s on one thread with one visibility sample per probe (2.1 s with four): 794 probes, 2.6 MB. Baked pathing ships. `core/test_pathing_bake.cpp` keeps the budget.
+- **Two Steam Audio 4.8.1 gotchas found:** `iplPathBakerBake` crashes without a progress callback (pass a no-op), and the probe generation box is centred on the transform's translation (its unit cube is −0.5..0.5).
+- **Next:** the region manager (probe batches per 64 × 64 × 64 region, background bakes, re-bake on edits with hysteresis, memory cap), the pathing simulation flag on the direct simulator (or its own), `IPLPathEffect` into the Ambisonic bus, the path-segment overlay, and the goat/doorway acceptance test.
+
+## Phase 6 (reflections and reverb): done, merged
 
 Phase 5 is merged into `main` (not pushed). The design, and why it differs from PLAN §5.4, is ADR 0009.
 
