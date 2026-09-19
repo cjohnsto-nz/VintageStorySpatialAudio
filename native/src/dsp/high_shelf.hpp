@@ -14,6 +14,8 @@ class HighShelf {
 public:
     static constexpr double kReferenceHz = 5000.0;
     static constexpr float kMinGain = 0.001f;  // -60 dB, like OpenAL Soft
+    /// Channels with their own state (a 7.1 bed's).
+    static constexpr uint32_t kMaxChannels = 8;
 
     /// Recomputes coefficients (cheap, but not per sample). gain_hf >= 1 bypasses the filter.
     void set(float gain_hf, uint32_t sample_rate) noexcept {
@@ -54,7 +56,7 @@ public:
         }
     }
 
-    /// In place, transposed direct form II. `channel` selects the state (0 or 1).
+    /// In place, transposed direct form II. `channel` selects the state (< kMaxChannels).
     void process(float* x, uint32_t frames, uint32_t channel) noexcept {
         float z1 = state_[channel][0];
         float z2 = state_[channel][1];
@@ -79,7 +81,7 @@ private:
     float b2_ = 0.0f;
     float a1_ = 0.0f;
     float a2_ = 0.0f;
-    float state_[2][2] = {};
+    float state_[kMaxChannels][2] = {};
 };
 
 }  // namespace vsa::dsp

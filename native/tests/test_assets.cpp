@@ -122,9 +122,9 @@ TEST_CASE("bad asset data is rejected with a specific error") {
     CHECK(try_create(e, nullptr, 16) == VSA_ERROR_INVALID_ARGUMENT);
     CHECK(try_create(e, garbage.data(), garbage.size(), 17) == VSA_ERROR_INVALID_ARGUMENT);
 
-    const auto surround = wav_file(sine(440.0, 48000.0, 480, 0.5f, 6), 6, 48000, 16);
-    CHECK(try_create(e, surround.data(), surround.size()) == VSA_ERROR_UNSUPPORTED);
-    CHECK(std::string(vsa_get_last_error()).find("6 channels") != std::string::npos);
+    const auto too_many = wav_file(sine(440.0, 48000.0, 480, 0.5f, 9), 9, 48000, 16);
+    CHECK(try_create(e, too_many.data(), too_many.size()) == VSA_ERROR_UNSUPPORTED);
+    CHECK(std::string(vsa_get_last_error()).find("9 channels") != std::string::npos);
 
     const auto wav = wav_file(sine(440.0, 48000.0, 480), 1, 48000, 16);
     CHECK(try_create(e, wav.data(), wav.size(), VSA_ASSET_FORMAT_AUTO, VSA_ASSET_STORAGE_STREAMED) ==
@@ -143,7 +143,7 @@ TEST_CASE("bad asset data is rejected with a specific error") {
     desc.data = pcm;
     desc.size = sizeof pcm;
     vsa_asset* asset = nullptr;
-    desc.pcm_channels = 3;
+    desc.pcm_channels = 9;
     desc.pcm_sample_rate = 48000;
     CHECK(vsa_asset_create(e.engine, &desc, &asset) == VSA_ERROR_UNSUPPORTED);
     desc.pcm_channels = 1;

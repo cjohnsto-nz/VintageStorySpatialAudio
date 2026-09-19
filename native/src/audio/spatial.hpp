@@ -111,6 +111,16 @@ public:
     /// Returns false (and writes nothing) when the bus and the decoder's tail are silent.
     bool decode(const Orientation& orientation, float* left, float* right) noexcept;
 
+    // ---- Head bus (order kAmbisonicOrder, listener space): beds on headphones ----
+
+    /// Adds `mono` (already carrying every gain) from a fixed listener-space direction (+x right,
+    /// +y up, -z ahead) to this block's head bus: a bed channel, which turns with the head as a
+    /// speaker would. Directions do not move, so nothing is ramped.
+    void encode_head(const float direction[3], const float* mono) noexcept;
+    /// Decodes the head bus binaurally, facing ahead, into `left`/`right` (overwritten). Returns
+    /// false (and writes nothing) when the bus and the decoder's tail are silent.
+    bool decode_head(float* left, float* right) noexcept;
+
 private:
     struct EffectSet {
         steam::DirectEffect direct;
@@ -150,6 +160,13 @@ private:
     int last_order_ = 0;
     // Blocks the decoder keeps running after the bus falls silent, to let its convolution tail out.
     uint32_t tail_blocks_ = 0;
+
+    // The head bus: its own decoder (its convolution state is not the world bus's).
+    steam::AmbisonicsDecodeEffect head_decoder_;
+    std::vector<float> head_storage_;
+    std::array<float*, kAmbisonicChannels> head_bus_{};
+    bool head_used_ = false;
+    uint32_t head_tail_blocks_ = 0;
 };
 
 }  // namespace vsa

@@ -296,7 +296,10 @@ typedef struct vsa_asset_desc {
     const char* name;
     /** A vsa_asset_storage value. */
     uint32_t storage;
-    /** VSA_ASSET_FORMAT_PCM_S16 only: 1 or 2. */
+    /**
+     * VSA_ASSET_FORMAT_PCM_S16 only: 1 to 8, interleaved in WAV's default order for the count
+     * (FL FR FC LFE BL BR SL SR; see VSA_SPATIAL_NONE for beds).
+     */
     uint32_t pcm_channels;
     /** VSA_ASSET_FORMAT_PCM_S16 only. */
     uint32_t pcm_sample_rate;
@@ -304,7 +307,7 @@ typedef struct vsa_asset_desc {
 
 typedef struct vsa_asset_info {
     uint32_t struct_size;
-    /** 1 or 2. */
+    /** 1 to 8. */
     uint32_t channels;
     uint32_t sample_rate;
     /** The storage actually used (DECODED or STREAMED). */
@@ -355,7 +358,14 @@ typedef uint64_t vsa_voice;
 
 /** How a voice is positioned. */
 typedef enum vsa_spatial_mode {
-    /** Not positioned: straight to its bus (music, UI). Mono is centred at -3 dB per side. */
+    /**
+     * Not positioned: straight to its bus (music, UI). Mono is centred at -3 dB per side, stereo
+     * plays on the front pair. More channels are a bed (a weather mod's 5.1 rain): each channel
+     * plays from its speaker, head-locked (Ogg Vorbis channel order; WAV's speaker mask or default
+     * order; a lone surround pair at 110 degrees), panned between speakers where the output lacks
+     * one, and binaurally on headphones. The LFE goes to the LFE, or to the front pair.
+     * Positioned voices hear every asset as mono: stereo and beds are downmixed.
+     */
     VSA_SPATIAL_NONE = 0,
     /** Position in world coordinates, rendered relative to the listener. */
     VSA_SPATIAL_WORLD = 1,

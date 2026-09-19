@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/bed_panner.hpp"
 #include "audio/channel_layout.hpp"
 #include "audio/listener_pose.hpp"
 #include "audio/reflections.hpp"
@@ -8,6 +9,7 @@
 #include "core/latest_value.hpp"
 #include "core/rt_log.hpp"
 #include "core/spsc_ring.hpp"
+#include "decode/decoders.hpp"
 #include "dsp/gain_ramp.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/resampler.hpp"
@@ -111,6 +113,11 @@ private:
     /// Advances a virtual voice's position exactly as rendering would, without producing audio.
     Generated advance_silent(VoiceSlot& s) noexcept;
     void mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bool positioned) noexcept;
+    /// voice_out_ -> mono in voice_out_[0]: stereo halved, a bed averaged over its speaker channels.
+    void downmix(const Asset& asset) noexcept;
+    /// A bed's channels (gains applied) into bus `b`: from their speakers, or on headphones
+    /// binaurally through the head bus.
+    void mix_bed(const Asset& asset, std::size_t b) noexcept;
     [[nodiscard]] SpatialParams spatial_params(const RenderVoice& v) const noexcept;
     [[nodiscard]] double playback_ratio(const VoiceSlot& s) const noexcept;
     /// An effect set for `slot`, stealing one from a quieter voice if the pool is empty; -1 if none.
@@ -186,6 +193,8 @@ private:
     std::array<float*, 4> path_bus_{};
     bool path_bus_used_ = false;
     std::unique_ptr<SpeakerDecoder> path_decoder_;
+    // Beds (unpositioned sounds of more than two channels) on this output's speakers.
+    std::unique_ptr<BedPanner> bed_panner_;
     // Where sounds are simulated from (ADR 0012), one per reflection slot: sounds within
     // kPlaceRadius of a place share its simulation, which is kept (and keeps refining) while
     // sounds keep happening there.
@@ -221,10 +230,10 @@ private:
     // Scratch, sized once in the constructor.
     std::vector<float> coef_;
     std::vector<float> window_storage_;
-    float* window_[2] = {};
+    float* window_[decode::kMaxChannels] = {};
     uint32_t window_capacity_ = 0;
     std::vector<float> voice_storage_;
-    float* voice_out_[2] = {};
+    float* voice_out_[decode::kMaxChannels] = {};
     // Each bus's gain for this block, per frame (ambisonic voices apply it before sharing the bus).
     std::vector<float> bus_gain_storage_;
     std::array<float*, VSA_BUS_COUNT> bus_gains_{};

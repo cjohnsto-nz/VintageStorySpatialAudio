@@ -124,6 +124,10 @@ TEST_CASE("the render path never allocates") {
     AssetRef stereo(pcm_asset(engine, vsa_test::sine(660.0, 48000.0, 9600, 0.4f, 2), 2, 48000));
     const auto ogg = vsa_test::ogg_file(vsa_test::sine(330.0, 44100.0, 88200, 0.4f, 2), 2, 44100);
     AssetRef streamed(ogg_asset(engine, ogg, VSA_ASSET_STORAGE_STREAMED));
+    // Beds (5.1): through the head bus on headphones, from the speakers once they are on.
+    AssetRef bed(pcm_asset(engine, vsa_test::sine(220.0, 48000.0, 9600, 0.3f, 6), 6, 48000));
+    const auto bed_ogg = vsa_test::ogg_file(vsa_test::sine(250.0, 44100.0, 88200, 0.3f, 6), 6, 44100);
+    AssetRef streamed_bed(ogg_asset(engine, bed_ogg, VSA_ASSET_STORAGE_STREAMED));
 
     std::vector<vsa_voice> voices;
     voices.push_back(voice(engine, mono.asset, VSA_BUS_SOUND, 0.5f, 1.0f, true));
@@ -132,6 +136,8 @@ TEST_CASE("the render path never allocates") {
     voices.push_back(voice(engine, streamed.asset, VSA_BUS_MUSIC, 0.8f, 1.0f, true));
     voices.push_back(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.7f, 1.1f, true, VSA_SPATIAL_WORLD, 3.0f, -2.0f));
     voices.push_back(voice(engine, stereo.asset, VSA_BUS_WEATHER, 0.7f, 0.9f, true, VSA_SPATIAL_LISTENER, -1.0f, 0.0f));
+    voices.push_back(voice(engine, bed.asset, VSA_BUS_WEATHER, 0.6f, 1.0f, true));
+    voices.push_back(voice(engine, streamed_bed.asset, VSA_BUS_AMBIENT, 0.5f, 1.0f, true));
     for (const vsa_voice v : voices) {
         engine.start_voice(v);
     }
@@ -164,6 +170,7 @@ TEST_CASE("the render path never allocates") {
                 engine.set_listener(facing(1.0f, 0.0f));
                 engine.set_voice_position(voices[4], VSA_SPATIAL_WORLD, -5.0f, 1.0f, 2.0f);
                 engine.set_voice_lowpass(voices[5], 0.06f);
+                engine.set_voice_lowpass(voices[6], 0.2f);
                 engine.set_render_mode(VSA_RENDER_SPEAKERS);
                 break;
             case 6: {

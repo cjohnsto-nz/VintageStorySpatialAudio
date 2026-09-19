@@ -48,6 +48,22 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Multichannel beds (ADR 0015): on branch `multichannel-beds`, to check in game
+
+For Chris's separate weather mod: its 5.1 rain, wind, hail, rumble and thunder tracks now play through this engine as intended.
+- **Decoding:** assets of up to 8 channels decode and stream. Each records which speaker every channel is for: Vorbis order, WAV's speaker mask or default order, and a lone surround pair at 110°.
+- **Beds:** an unpositioned sound of more than two channels is a bed.
+  - **Speakers:** each channel plays from its speaker via `BedPanner` (VBAP over the real layout). 5.1 on 5.1 is copied through. On 7.1.4, 5.1 surrounds fall between the sides and backs.
+  - **Stereo:** a fold-down, with surrounds −3 dB on their side.
+  - **LFE:** to the LFE channel, or to the front pair.
+  - **Headphones:** a head-locked order-3 Ambisonic bus with its own binaural decoder.
+- **Positioned sounds** downmix any asset to mono.
+- **Tests:** `core/test_bed_panner.cpp` and `test_beds.cpp`. Beds were added to the render path's no-allocation test. A managed test plays a vanilla-style weather bed.
+- **Not tested:** no manual listening test yet (in game or in SceneLab).
+- **The weather mod:** `C:\Projects\VintageStorySurroundWeather`, branch `weather-only` of the Surround repo, modid `surroundweather`.
+  - It patches only vanilla's OpenAL classes (`AudioOpenAl.GetSoundFormat`, `LoadedSoundNative.createSoundSource`). Those are inert under this mod and pass its foreign-patch check.
+  - Its modid isn't in `IncompatibleMods`.
+
 ## Entity sound tracking (from PLAN Phase 8, done early; managed only, uncommitted)
 
 Sounds played at a creature or player follow it while they play; vanilla leaves them where they started. No Doppler (Chris doesn't want it). Ported in spirit from VintageStorySurroundSound, with the problems found in its review fixed.

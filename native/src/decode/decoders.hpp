@@ -11,13 +11,17 @@ namespace vsa::decode {
 struct DecodedAudio {
     uint32_t channels = 0;
     uint32_t sample_rate = 0;
+    /// WAVE_FORMAT_EXTENSIBLE's speaker mask (which speaker each channel is for); 0 when the file
+    /// has none, and always for Ogg Vorbis, whose channel order is fixed by its channel count.
+    uint32_t channel_mask = 0;
     std::vector<int16_t> pcm;
 
     [[nodiscard]] uint64_t frames() const noexcept { return channels == 0 ? 0 : pcm.size() / channels; }
 };
 
-/// Largest channel count the engine accepts (the game only uses mono and stereo).
-inline constexpr uint32_t kMaxChannels = 2;
+/// Largest channel count the engine accepts: 7.1. The game's own sounds are mono and stereo;
+/// multichannel ones are speaker beds (weather mods' 5.1 rain and wind).
+inline constexpr uint32_t kMaxChannels = 8;
 
 [[nodiscard]] bool looks_like_ogg(const uint8_t* data, std::size_t size) noexcept;
 [[nodiscard]] bool looks_like_wav(const uint8_t* data, std::size_t size) noexcept;

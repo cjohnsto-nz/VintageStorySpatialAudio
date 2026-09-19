@@ -39,12 +39,15 @@ add_library(vsaudio_core STATIC
     src/engine.hpp
     src/audio/asset.cpp
     src/audio/asset.hpp
+    src/audio/bed_panner.cpp
+    src/audio/bed_panner.hpp
     src/audio/channel_layout.hpp
     src/audio/listener_pose.hpp
     src/audio/mixer.cpp
     src/audio/mixer.hpp
     src/audio/reflections.cpp
     src/audio/reflections.hpp
+    src/audio/source_layout.hpp
     src/audio/speaker_decoder.cpp
     src/audio/speaker_decoder.hpp
     src/audio/spatial.cpp

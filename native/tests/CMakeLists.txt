@@ -34,6 +34,7 @@ add_executable(vsaudio_tests
     test_main.cpp
     test_api.cpp
     test_assets.cpp
+    test_beds.cpp
     test_direct.cpp
     test_header_c.c
     test_output.cpp
@@ -66,6 +67,7 @@ add_executable(vsaudio_core_tests
     test_main.cpp
     core/alloc_counter.cpp
     core/alloc_counter.hpp
+    core/test_bed_panner.cpp
     core/test_channel_layout.cpp
     core/test_gain_ramp.cpp
     core/test_late_reverb.cpp

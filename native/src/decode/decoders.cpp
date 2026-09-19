@@ -30,7 +30,7 @@ int16_t to_s16(double x) noexcept {
 bool chunk_is(const uint8_t* p, const char* id) noexcept { return std::memcmp(p, id, 4) == 0; }
 
 std::string channel_error(uint32_t channels) {
-    return std::to_string(channels) + " channels (only mono and stereo are supported)";
+    return std::to_string(channels) + " channels (1 to " + std::to_string(kMaxChannels) + " are supported)";
 }
 
 // ---- vorbisfile over memory ----
@@ -106,6 +106,7 @@ DecodedAudio decode_wav(const uint8_t* data, std::size_t size) {
     uint32_t channels = 0;
     uint32_t sample_rate = 0;
     uint32_t bits = 0;
+    uint32_t mask = 0;
     const uint8_t* samples = nullptr;
     std::size_t sample_bytes = 0;
 
@@ -128,6 +129,7 @@ DecodedAudio decode_wav(const uint8_t* data, std::size_t size) {
                     throw Error(VSA_ERROR_DECODE, "WAV extensible fmt chunk too short");
                 }
                 format = le16(data + body + 24);
+                mask = le32(data + body + 20);
             }
             have_format = true;
         } else if (chunk_is(chunk, "data")) {
@@ -170,6 +172,7 @@ DecodedAudio decode_wav(const uint8_t* data, std::size_t size) {
     DecodedAudio out;
     out.channels = channels;
     out.sample_rate = sample_rate;
+    out.channel_mask = mask;
     out.pcm.resize(count);
     for (std::size_t i = 0; i < count; ++i) {
         const uint8_t* p = samples + i * bytes;

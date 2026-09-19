@@ -38,8 +38,9 @@ bool Vbap::position(Speaker speaker, float& azimuth, float& elevation) noexcept 
     }
 }
 
-Vbap::Vbap(uint32_t channels) : channels_(std::min(channels, kMaxOutputChannels)) {
+Vbap::Vbap(uint32_t channels, float lone_surround_azimuth) : channels_(std::min(channels, kMaxOutputChannels)) {
     const auto layout = steam_layout(channels_);
+    const bool has_sides = std::find(layout.begin(), layout.end(), Speaker::SideLeft) != layout.end();
     constexpr double kRadians = std::numbers::pi / 180.0;
     std::vector<int> heights;
     std::vector<int> ear_level;
@@ -48,6 +49,9 @@ Vbap::Vbap(uint32_t channels) : channels_(std::min(channels, kMaxOutputChannels)
         float elevation = 0.0f;
         if (!position(layout[c], azimuth, elevation)) {
             continue;
+        }
+        if (!has_sides && (layout[c] == Speaker::BackLeft || layout[c] == Speaker::BackRight)) {
+            azimuth = azimuth < 0.0f ? -lone_surround_azimuth : lone_surround_azimuth;
         }
         const double az = static_cast<double>(azimuth) * kRadians;
         const double el = static_cast<double>(elevation) * kRadians;
