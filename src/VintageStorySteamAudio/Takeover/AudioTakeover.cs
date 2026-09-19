@@ -79,6 +79,12 @@ internal sealed class AudioTakeover : IDisposable
         var takeover = new AudioTakeover(api, logger, session, members);
         try
         {
+            string? conflict = takeover.ForeignPatches();
+            if (conflict is not null)
+            {
+                throw new InvalidOperationException(conflict);
+            }
+
             takeover.OpenDevice(api.Settings.String[SoundCategories.DeviceSetting]);
             takeover.masterLevel = api.Settings.Int[SoundCategories.MasterSetting] / 100f;
             takeover.PollSettings(force: true);
@@ -109,7 +115,7 @@ internal sealed class AudioTakeover : IDisposable
         harmony.UnpatchAll(HarmonyId);
         ResetEmptiedSamples();
         ReopenOpenAl();
-        logger.Notification("[vssteamaudio] Audio handed back to vanilla OpenAL.");
+        logger.Notification("Audio handed back to vanilla OpenAL.");
     }
 
     // ---- called by the patches ----
@@ -120,9 +126,15 @@ internal sealed class AudioTakeover : IDisposable
         string location = asset.Location.ToString();
         var meta = new AudioMetaData(asset) { Pcm = [], BitsPerSample = 16, Loaded = 2 };
         byte[]? data = asset.Data;
-        if (data is null || data.Length == 0)
+        if (data is null || !LooksLikeAudio(data))
         {
-            MarkUndecodable(location, "no data");
+            // The game's sound table also holds non-audio files (sounds/soundconfig.json); vanilla
+            // cannot decode those either. Remember them quietly.
+            lock (undecodable)
+            {
+                undecodable.Add(location);
+            }
+
             return meta;
         }
 
@@ -183,7 +195,7 @@ internal sealed class AudioTakeover : IDisposable
         }
         catch (NativeException ex)
         {
-            logger.Warning("[vssteamaudio] device enumeration failed: {0}", ex.Message);
+            logger.Warning("device enumeration failed: {0}", ex.Message);
         }
 
         return deviceNames;
@@ -197,7 +209,7 @@ internal sealed class AudioTakeover : IDisposable
         }
         catch (NativeException ex)
         {
-            logger.Error("[vssteamaudio] could not switch output to '{0}': {1}", name ?? "(default)", ex.Message);
+            logger.Error("could not switch output to '{0}': {1}", name ?? "(default)", ex.Message);
         }
     }
 
@@ -212,7 +224,7 @@ internal sealed class AudioTakeover : IDisposable
             device = MatchDevice(devices, preferredName);
             if (device is null)
             {
-                logger.Notification("[vssteamaudio] no device matches '{0}'; using the system default", preferredName);
+                logger.Notification("no device matches '{0}'; using the system default", preferredName);
             }
         }
 
@@ -220,7 +232,7 @@ internal sealed class AudioTakeover : IDisposable
         EngineStats stats = session.Engine.GetStats();
         CurrentDevice = stats.DeviceName;
         logger.Notification(
-            "[vssteamaudio] output: '{0}', {1} Hz, {2} channels, period {3} frames",
+            "output: '{0}', {1} Hz, {2} channels, period {3} frames",
             stats.DeviceName, stats.SampleRate, stats.Channels, stats.DevicePeriodFrames);
     }
 
@@ -235,6 +247,40 @@ internal sealed class AudioTakeover : IDisposable
         return devices.FirstOrDefault(d => string.Equals(d.Name, wanted, StringComparison.OrdinalIgnoreCase))
             ?? devices.FirstOrDefault(d => d.Name.Contains(wanted, StringComparison.OrdinalIgnoreCase)
                                            || wanted.Contains(d.Name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Every game method the takeover patches.</summary>
+    private IEnumerable<MethodBase> PatchedMethods() =>
+    [
+        members.StartAudio, members.CreateAudioData, members.CreateAudio, members.CreateAudioInGame, members.UpdateListener,
+        members.Devices.GetMethod!, members.CurrentDevice.GetMethod!, members.CurrentDevice.SetMethod!,
+        members.MasterLevel.GetMethod!, members.MasterLevel.SetMethod!, members.ChangeOutputDevice, members.PlaySoundAt,
+    ];
+
+    /// <summary>
+    /// Other mods' Harmony patches on the methods we take over: a description of the conflict, or null.
+    /// Two mods replacing the same audio calls cannot both work, so we step aside.
+    /// </summary>
+    public string? ForeignPatches()
+    {
+        var conflicts = new List<string>();
+        foreach (MethodBase method in PatchedMethods())
+        {
+            Patches? info = Harmony.GetPatchInfo(method);
+            if (info is null)
+            {
+                continue;
+            }
+
+            string[] owners = info.Prefixes.Concat(info.Postfixes).Concat(info.Transpilers).Concat(info.Finalizers)
+                .Select(p => p.owner).Where(owner => owner != HarmonyId).Distinct().ToArray();
+            if (owners.Length > 0)
+            {
+                conflicts.Add($"{method.DeclaringType?.Name}.{method.Name} by {string.Join(", ", owners)}");
+            }
+        }
+
+        return conflicts.Count == 0 ? null : "other mods patch the game's audio: " + string.Join("; ", conflicts);
     }
 
     private void Patch()
@@ -256,7 +302,7 @@ internal sealed class AudioTakeover : IDisposable
         SoundCapRemoved = PlatformPatches.SoundCapRemoved;
         if (!SoundCapRemoved)
         {
-            logger.Warning("[vssteamaudio] the 250-sound cap was not found in PlaySoundAtInternal; it stays in place");
+            logger.Warning("the 250-sound cap was not found in PlaySoundAtInternal; it stays in place");
         }
     }
 
@@ -290,7 +336,7 @@ internal sealed class AudioTakeover : IDisposable
         }
 
         members.IntroMusic.SetValue(null, twin);
-        logger.Notification("[vssteamaudio] carried the menu music over at {0:0.0} s", position);
+        logger.Notification("carried the menu music over at {0:0.0} s", position);
     }
 
     private void CloseOpenAl()
@@ -332,11 +378,11 @@ internal sealed class AudioTakeover : IDisposable
                 }
             }
 
-            logger.VerboseDebug("[vssteamaudio] {0} samples reset for vanilla", reset);
+            logger.VerboseDebug("{0} samples reset for vanilla", reset);
         }
         catch (Exception ex) when (ex is InvalidOperationException or TargetInvocationException)
         {
-            logger.Warning("[vssteamaudio] could not reset samples for vanilla: {0}", ex.Message);
+            logger.Warning("could not reset samples for vanilla: {0}", ex.Message);
         }
     }
 
@@ -355,7 +401,7 @@ internal sealed class AudioTakeover : IDisposable
         }
         catch (TargetInvocationException ex)
         {
-            logger.Error("[vssteamaudio] reopening OpenAL failed: {0}", ex.InnerException?.Message ?? ex.Message);
+            logger.Error("reopening OpenAL failed: {0}", ex.InnerException?.Message ?? ex.Message);
         }
     }
 
@@ -410,8 +456,12 @@ internal sealed class AudioTakeover : IDisposable
             }
         }
 
-        logger.Warning("[vssteamaudio] could not decode {0}: {1}", location, reason);
+        logger.Warning("could not decode {0}: {1}", location, reason);
     }
+
+    /// <summary>Ogg ("OggS") or RIFF WAVE, the only formats the game ships.</summary>
+    internal static bool LooksLikeAudio(ReadOnlySpan<byte> data) =>
+        data.StartsWith("OggS"u8) || (data.Length >= 12 && data.StartsWith("RIFF"u8) && data[8..12].SequenceEqual("WAVE"u8));
 
     private bool IsUndecodable(string location)
     {

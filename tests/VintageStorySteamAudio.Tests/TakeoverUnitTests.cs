@@ -120,6 +120,17 @@ public sealed class TakeoverUnitTests
         Assert.Equal(3, trims.Count);
     }
 
+    [Fact]
+    public void Only_Ogg_and_RIFF_WAVE_data_is_treated_as_audio()
+    {
+        byte[] riff(string form) => [.. "RIFF"u8, 36, 0, 0, 0, .. System.Text.Encoding.ASCII.GetBytes(form)];
+        Assert.True(AudioTakeover.LooksLikeAudio([.. "OggS"u8, 0, 2]));
+        Assert.True(AudioTakeover.LooksLikeAudio(riff("WAVEfmt ")));
+        Assert.False(AudioTakeover.LooksLikeAudio(riff("AVI LIST")));
+        Assert.False(AudioTakeover.LooksLikeAudio("{ \"defaultBlockSounds\": {} }"u8));
+        Assert.False(AudioTakeover.LooksLikeAudio([]));
+    }
+
     private static void AssertVector(float x, float y, float z, float ax, float ay, float az)
     {
         Assert.Equal(x, ax, 4);

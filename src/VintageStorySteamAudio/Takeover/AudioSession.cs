@@ -104,7 +104,7 @@ public sealed class AudioSession : IDisposable
                 {
                     if (e.Type is EngineEventType.DeviceLost or EngineEventType.DeviceRestored or EngineEventType.DeviceRerouted)
                     {
-                        logger?.Notification("[vssteamaudio] output device: {0}", e.Type);
+                        logger?.Notification("output device: {0}", e.Type);
                     }
 
                     continue;
@@ -255,7 +255,7 @@ public sealed class AudioSession : IDisposable
 
         int suppressed = Interlocked.Exchange(ref suppressedFailures, 0);
         logger?.Warning(
-            "[vssteamaudio] {0}: {1}{2}",
+            "{0}: {1}{2}",
             what,
             ex.Message,
             suppressed > 0 ? string.Create(CultureInfo.InvariantCulture, $" ({suppressed} similar failures suppressed)") : string.Empty);

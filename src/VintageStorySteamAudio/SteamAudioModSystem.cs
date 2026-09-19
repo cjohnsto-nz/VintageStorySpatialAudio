@@ -16,6 +16,9 @@ namespace VintageStorySteamAudio;
 /// </summary>
 public sealed class SteamAudioModSystem : ModSystem, IDisposable
 {
+    /// <summary>Mods that replace or drive the game's audio themselves (docs/PLAN.md §6.5).</summary>
+    private static readonly string[] IncompatibleMods = ["vintagestorysurroundsound", "vintagestoryacousticlab"];
+
     private AudioEngine? engine;
     private AudioTakeover? takeover;
     private TestPlayback? playback;
@@ -52,6 +55,15 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
 
     public override void StartClientSide(ICoreClientAPI api)
     {
+        // Mods that load after us may patch the same calls; they would fight our patches all session.
+        if (takeover?.ForeignPatches() is string conflict)
+        {
+            Mod.Logger.Warning("{0}. Handing audio back to vanilla for this session.", conflict);
+            takeover.Dispose();
+            takeover = null;
+            status = status with { TakeoverActive = false, TakeoverNote = conflict };
+        }
+
         if (engine is not null)
         {
             SteamAudioConfig config = LoadConfig(api);
@@ -112,6 +124,12 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         if (!config.TakeOverGameAudio)
         {
             return report with { TakeoverNote = $"TakeOverGameAudio is off in {SteamAudioConfig.FileName}" };
+        }
+
+        string[] conflicting = IncompatibleMods.Where(api.ModLoader.IsModEnabled).ToArray();
+        if (conflicting.Length > 0)
+        {
+            return report with { TakeoverNote = $"incompatible audio mod enabled: {string.Join(", ", conflicting)}" };
         }
 
         try
