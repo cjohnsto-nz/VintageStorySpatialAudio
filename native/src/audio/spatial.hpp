@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace vsa {
@@ -48,7 +49,8 @@ struct Orientation {
 /// for the render thread only and never allocate.
 class SpatialRenderer {
 public:
-    SpatialRenderer(const steam::SteamContext& steam, uint32_t pool_size);
+    /// `sofa_path`: an HRTF to load instead of Steam Audio's default (empty: the default).
+    SpatialRenderer(const steam::SteamContext& steam, uint32_t pool_size, std::string sofa_path = {});
 
     SpatialRenderer(const SpatialRenderer&) = delete;
     SpatialRenderer& operator=(const SpatialRenderer&) = delete;
@@ -114,6 +116,7 @@ private:
 
     const steam::SteamContext& steam_;
     uint32_t pool_size_;
+    std::string sofa_path_;
     uint32_t frames_ = 0;
     uint32_t speaker_channels_ = 2;
     steam::Hrtf hrtf_;

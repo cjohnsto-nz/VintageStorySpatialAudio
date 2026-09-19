@@ -151,6 +151,14 @@ typedef struct vsa_engine_config {
      * 0 = 64; at most max_real_voices.
      */
     uint32_t max_binaural_voices;
+    /** Must be 0. */
+    uint32_t reserved;
+    /**
+     * A SOFA file (UTF-8 path) with the HRTF to use instead of Steam Audio's default, or NULL.
+     * Copied at creation. If it cannot be loaded (at the output's rate), the engine logs a
+     * warning and uses the default HRTF.
+     */
+    const char* hrtf_sofa_path;
 } vsa_engine_config;
 
 typedef struct vsa_engine_info {

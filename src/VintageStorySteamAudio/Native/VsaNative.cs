@@ -164,6 +164,8 @@ internal unsafe struct VsaEngineConfig
     public uint StreamThresholdMs;
     public uint MaxRealVoices;
     public uint MaxBinauralVoices;
+    public uint Reserved;
+    public byte* HrtfSofaPath;
 }
 
 [StructLayout(LayoutKind.Sequential)]

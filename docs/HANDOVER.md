@@ -105,6 +105,10 @@ Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1)
 - `.steamaudio speakertest` plays a noise burst from each 7.1.4 position in turn, named in chat, then straight overhead. Use it with the receiver's display to confirm the heights.
 - SceneLab writes `WAVE_FORMAT_EXTENSIBLE` with the speaker mask for more than 2 channels; `scenarios/surround-714.json` is a 7.1.4 listening scene.
 
+### SOFA HRTF
+
+- `vsa_engine_config.hrtf_sofa_path` (the config struct is now 72 bytes, with a `reserved` field that must be 0 at offset 60) and the `HrtfSofaFile` config option (absolute, or relative to ModConfig). If it can't be loaded, the engine logs a warning and uses the default HRTF. Tested with a missing file and a junk file; **a real SOFA file has not been tried yet** (none is in the repo or the Steam Audio SDK; one needs downloading, e.g. a KEMAR set from sofacoustics.org).
+
 ### Still to do for Phase 3
 
 - SOFA HRTF loading (config option).

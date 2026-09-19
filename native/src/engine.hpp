@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -87,6 +88,7 @@ public:
         uint32_t stream_threshold_ms = 20000;
         uint32_t max_real_voices = 256;
         uint32_t max_binaural_voices = 64;
+        std::string hrtf_sofa_path;  // empty: Steam Audio's default HRTF
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 

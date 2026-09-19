@@ -28,8 +28,8 @@ constexpr float kAmbisonicMakeup = 1.72f;  // +4.7 dB
 
 }  // namespace
 
-SpatialRenderer::SpatialRenderer(const steam::SteamContext& steam, uint32_t pool_size)
-    : steam_(steam), pool_size_(pool_size) {}
+SpatialRenderer::SpatialRenderer(const steam::SteamContext& steam, uint32_t pool_size, std::string sofa_path)
+    : steam_(steam), pool_size_(pool_size), sofa_path_(std::move(sofa_path)) {}
 
 void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames, uint32_t channels) {
     const auto started = std::chrono::steady_clock::now();
@@ -43,10 +43,25 @@ void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames, uint3
     audio.frameSize = static_cast<IPLint32>(block_frames);
 
     IPLHRTFSettings hrtf_settings{};
-    hrtf_settings.type = IPL_HRTFTYPE_DEFAULT;
     hrtf_settings.volume = 1.0f;
     hrtf_settings.normType = IPL_HRTFNORMTYPE_NONE;
-    check(iplHRTFCreate(steam_.context(), &audio, &hrtf_settings, hrtf_.out()), "iplHRTFCreate");
+    bool sofa_loaded = false;
+    if (!sofa_path_.empty()) {
+        hrtf_settings.type = IPL_HRTFTYPE_SOFA;
+        hrtf_settings.sofaFileName = sofa_path_.c_str();
+        const IPLerror error = iplHRTFCreate(steam_.context(), &audio, &hrtf_settings, hrtf_.out());
+        sofa_loaded = error == IPL_STATUS_SUCCESS;
+        if (!sofa_loaded) {
+            hrtf_.reset();
+            Log::writef(VSA_LOG_WARNING, "spatial: the SOFA HRTF '%s' could not be loaded at %u Hz (%s); using the default HRTF",
+                        sofa_path_.c_str(), sample_rate, steam::error_name(error));
+        }
+    }
+    if (!sofa_loaded) {
+        hrtf_settings.type = IPL_HRTFTYPE_DEFAULT;
+        hrtf_settings.sofaFileName = nullptr;
+        check(iplHRTFCreate(steam_.context(), &audio, &hrtf_settings, hrtf_.out()), "iplHRTFCreate");
+    }
 
     IPLDirectEffectSettings direct{};
     direct.numChannels = 1;
@@ -99,8 +114,8 @@ void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames, uint3
     frames_ = block_frames;
 
     const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-    Log::writef(VSA_LOG_INFO, "spatial: HRTF and %u effect sets ready for %u Hz / %u frames, %u-speaker panning (%.0f ms)",
-                pool_size_, sample_rate, block_frames, speaker_channels_, ms);
+    Log::writef(VSA_LOG_INFO, "spatial: %s HRTF and %u effect sets ready for %u Hz / %u frames, %u-speaker panning (%.0f ms)",
+                sofa_loaded ? "SOFA" : "default", pool_size_, sample_rate, block_frames, speaker_channels_, ms);
 }
 
 int SpatialRenderer::acquire() noexcept {

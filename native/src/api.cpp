@@ -24,7 +24,8 @@
 static_assert(sizeof(vsa_result) == 4 && sizeof(vsa_log_level) == 4, "vsaudio enums must be 32-bit");
 static_assert(std::is_standard_layout_v<vsa_engine_config> && std::is_standard_layout_v<vsa_self_test_report>);
 // Layouts the managed bindings mirror (tests/.../NativeLayoutTests.cs). 64-bit targets only.
-static_assert(sizeof(vsa_engine_config) == 64 && offsetof(vsa_engine_config, max_binaural_voices) == 56);
+static_assert(sizeof(vsa_engine_config) == 72 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
+              offsetof(vsa_engine_config, hrtf_sofa_path) == 64);
 static_assert(sizeof(vsa_asset_desc) == 48 && offsetof(vsa_asset_desc, storage) == 32);
 static_assert(sizeof(vsa_asset_info) == 40);
 static_assert(sizeof(vsa_voice_desc) == 48 && offsetof(vsa_voice_desc, gain) == 16 && offsetof(vsa_voice_desc, position) == 32);

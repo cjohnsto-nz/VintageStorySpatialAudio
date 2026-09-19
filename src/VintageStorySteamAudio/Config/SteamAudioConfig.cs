@@ -65,10 +65,17 @@ public sealed class SteamAudioConfig
     /// </summary>
     public bool SpatialAudio { get; set; } = true;
 
+    /// <summary>
+    /// A SOFA file with a personal HRTF for headphones (absolute, or relative to the ModConfig
+    /// folder); empty = Steam Audio's default. Falls back to the default if it cannot be loaded.
+    /// </summary>
+    public string? HrtfSofaFile { get; set; }
+
     /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 
-    public EngineOptions ToEngineOptions() => new()
+    /// <param name="modConfigDirectory">Where relative paths (HrtfSofaFile) are resolved; null leaves them as they are.</param>
+    public EngineOptions ToEngineOptions(string? modConfigDirectory = null) => new()
     {
         RayTracer = RayTracer,
         SteamAudioValidation = SteamAudioValidation,
@@ -77,6 +84,9 @@ public sealed class SteamAudioConfig
         MaxVoices = MaxVoices,
         MaxRealVoices = MaxRealVoices,
         MaxBinauralVoices = MaxBinauralVoices,
+        HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
+            : modConfigDirectory is null ? HrtfSofaFile.Trim()
+            : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),
     };
 
     /// <summary>The trims by bus; unknown names are ignored.</summary>

@@ -42,7 +42,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
 
         capi = clientApi;
         SteamAudioConfig config = LoadConfig(clientApi);
-        status = BringUp(config, Mod.Logger);
+        status = BringUp(config, Mod.Logger, api.GetOrCreateDataPath("ModConfig"));
         if (engine is not null && status.TakeoverPossible)
         {
             status = TakeOver(config, clientApi, status);
@@ -240,7 +240,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         return text;
     }
 
-    private StatusReport BringUp(SteamAudioConfig config, ILogger logger)
+    private StatusReport BringUp(SteamAudioConfig config, ILogger logger, string modConfigDirectory)
     {
         VerificationReport verification = PatchTargetVerifier.Verify(
             GameAssemblies.FromCurrentProcess(), AudioPatchTargets.Members, AudioPatchTargets.Invariants);
@@ -249,7 +249,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         {
             NativeLibraryResolver.Register(NativeLibraryResolver.DefaultNativeDirectory(typeof(SteamAudioModSystem).Assembly.Location));
             EngineVersion version = AudioEngine.GetVersion();
-            engine = AudioEngine.Create(config.ToEngineOptions(), new GameLoggerEngineLog(logger));
+            engine = AudioEngine.Create(config.ToEngineOptions(modConfigDirectory), new GameLoggerEngineLog(logger));
             SelfTestResult? selfTest = config.RunSelfTestOnStartup ? engine.RunSelfTest() : null;
             return new StatusReport { Version = version, Engine = engine.Info, SelfTest = selfTest, Verification = verification };
         }

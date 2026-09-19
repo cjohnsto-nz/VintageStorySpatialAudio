@@ -21,7 +21,8 @@ public sealed class NativeLayoutTests
     [Fact]
     public unsafe void EngineConfig_matches_header()
     {
-        Assert.Equal(64, sizeof(VsaEngineConfig));
+        Assert.Equal(72, sizeof(VsaEngineConfig));
+        Assert.Equal(64, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.HrtfSofaPath)));
         Assert.Equal(52, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxRealVoices)));
         Assert.Equal(56, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxBinauralVoices)));
         Assert.Equal(8, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.Log)));

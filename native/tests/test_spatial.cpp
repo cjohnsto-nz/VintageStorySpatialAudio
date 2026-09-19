@@ -6,8 +6,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <numbers>
+#include <string>
 
 using namespace vsa_test;
 
@@ -660,3 +663,31 @@ TEST_CASE("the ambisonic tier matches the binaural tier's level, averaged over d
     CHECK(std::abs(offset) < 1.0);
 }
 
+
+TEST_CASE("an HRTF from a SOFA file that cannot be loaded falls back to the default HRTF") {
+    const auto junk = std::filesystem::temp_directory_path() / "vsaudio-test-junk.sofa";
+    {
+        std::ofstream file(junk, std::ios::binary);
+        file << "this is not a SOFA file";
+    }
+    const std::string junk_path = junk.string();
+    for (const char* path : {"C:/does/not/exist.sofa", junk_path.c_str()}) {
+        CAPTURE(path);
+        CapturedLog log;
+        vsa_engine_config config = make_config(VSA_RAY_TRACER_STEAM, &log);
+        config.hrtf_sofa_path = path;
+        OfflineEngine e(config);
+        CHECK(log.contains("could not be loaded"));
+        CHECK(log.contains("default HRTF"));
+        const AssetPtr asset = e.pcm(directional_tone(), 1, 48000);
+        const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 3.0f, 0.0f, 0.0f);
+        REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+        CHECK(listen(e).balance() > 6.0);
+    }
+    std::filesystem::remove(junk);
+
+    vsa_engine_config reserved = make_config(VSA_RAY_TRACER_STEAM);
+    reserved.reserved = 1;
+    vsa_engine* engine = nullptr;
+    CHECK(vsa_engine_create(&reserved, &engine) == VSA_ERROR_INVALID_ARGUMENT);
+}

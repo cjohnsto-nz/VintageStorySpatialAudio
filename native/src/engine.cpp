@@ -66,6 +66,12 @@ Engine::Settings validate(const vsa_engine_config& config) {
         settings.max_binaural_voices = config.max_binaural_voices;
     }
     settings.max_binaural_voices = std::min(settings.max_binaural_voices, settings.max_real_voices);
+    if (config.reserved != 0) {
+        throw invalid("reserved must be 0");
+    }
+    if (config.hrtf_sofa_path != nullptr) {
+        settings.hrtf_sofa_path = config.hrtf_sofa_path;
+    }
     return settings;
 }
 
@@ -127,7 +133,7 @@ Engine::Engine(const vsa_engine_config& config)
       commands_(kCommandCapacity),
       events_(kEventRingCapacity),
       retired_(settings_.max_voices),
-      spatial_(*steam_, settings_.max_real_voices),
+      spatial_(*steam_, settings_.max_real_voices, settings_.hrtf_sofa_path),
       mixer_(kernel_, slots_.get(), settings_.max_voices, commands_, events_, retired_, rt_log_, spatial_, listener_,
              settings_.block_frames, settings_.max_binaural_voices),
       stream_history_frames_(static_cast<uint32_t>(kernel_.max_taps_per_side())),

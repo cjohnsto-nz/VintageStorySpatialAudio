@@ -27,6 +27,11 @@
 
 #include <algorithm>
 #include <array>
+
+// COM identifies interfaces with __uuidof, a Microsoft extension clang warns about.
+#ifdef __clang__
+#pragma clang diagnostic ignored "-Wlanguage-extension-token"
+#endif
 #endif
 
 namespace vsa::backend {

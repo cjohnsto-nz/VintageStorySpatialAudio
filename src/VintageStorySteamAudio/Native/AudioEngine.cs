@@ -44,6 +44,9 @@ public sealed record EngineOptions
 
     /// <summary>Of those, how many get per-voice HRTF in headphones mode. 0 = 64.</summary>
     public int MaxBinauralVoices { get; init; }
+
+    /// <summary>A SOFA file with the HRTF to use (null = Steam Audio's default). Falls back to the default, with a warning, if it cannot be loaded.</summary>
+    public string? HrtfSofaPath { get; init; }
 }
 
 /// <summary>Where a positional voice is and how it falls off with distance.</summary>
@@ -134,26 +137,33 @@ public sealed class AudioEngine : IDisposable
         }
 
         GCHandle logHandle = log is null ? default : GCHandle.Alloc(log);
+        byte[]? sofaPath = string.IsNullOrEmpty(options.HrtfSofaPath) ? null : Encoding.UTF8.GetBytes(options.HrtfSofaPath + "\0");
         try
         {
-            var config = new VsaEngineConfig
+            nint engine;
+            fixed (byte* sofa = sofaPath)
             {
-                StructSize = (uint)sizeof(VsaEngineConfig),
-                AbiVersion = VsaNative.AbiVersion,
-                Log = log is null ? null : &OnNativeLog,
-                LogUserData = log is null ? 0 : GCHandle.ToIntPtr(logHandle),
-                RayTracer = (uint)options.RayTracer,
-                Flags = options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0,
-                SampleRate = checked((uint)options.SampleRate),
-                BlockFrames = checked((uint)options.BlockFrames),
-                MaxVoices = checked((uint)options.MaxVoices),
-                ResamplerQuality = (uint)options.ResamplerQuality,
-                StreamThresholdMs = checked((uint)options.StreamThresholdMs),
-                MaxRealVoices = checked((uint)options.MaxRealVoices),
-                MaxBinauralVoices = checked((uint)options.MaxBinauralVoices),
-            };
+                var config = new VsaEngineConfig
+                {
+                    StructSize = (uint)sizeof(VsaEngineConfig),
+                    AbiVersion = VsaNative.AbiVersion,
+                    Log = log is null ? null : &OnNativeLog,
+                    LogUserData = log is null ? 0 : GCHandle.ToIntPtr(logHandle),
+                    RayTracer = (uint)options.RayTracer,
+                    Flags = options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0,
+                    SampleRate = checked((uint)options.SampleRate),
+                    BlockFrames = checked((uint)options.BlockFrames),
+                    MaxVoices = checked((uint)options.MaxVoices),
+                    ResamplerQuality = (uint)options.ResamplerQuality,
+                    StreamThresholdMs = checked((uint)options.StreamThresholdMs),
+                    MaxRealVoices = checked((uint)options.MaxRealVoices),
+                    MaxBinauralVoices = checked((uint)options.MaxBinauralVoices),
+                    HrtfSofaPath = sofa,
+                };
 
-            NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out nint engine), "vsa_engine_create");
+                NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out engine), "vsa_engine_create");
+            }
+
             var engineHandle = new EngineHandle(engine, logHandle);
             logHandle = default; // now owned by engineHandle
 
