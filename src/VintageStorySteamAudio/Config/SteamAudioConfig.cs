@@ -10,6 +10,12 @@ public sealed class SteamAudioConfig
 {
     public const string FileName = "vssteamaudio.json";
 
+    /// <summary>The defaults this file was written with; see <see cref="Migrate"/>.</summary>
+    public const int CurrentConfigVersion = 1;
+
+    /// <summary>Which version of the defaults this file was written with. Left alone.</summary>
+    public int ConfigVersion { get; set; }
+
     /// <summary>Play the game's sounds through Steam Audio in-world. False keeps vanilla OpenAL (the engine still starts, for diagnostics).</summary>
     public bool TakeOverGameAudio { get; set; } = true;
 
@@ -229,6 +235,29 @@ public sealed class SteamAudioConfig
             : modConfigDirectory is null ? HrtfSofaFile.Trim()
             : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),
     };
+
+    /// <summary>
+    /// Brings a file written by an earlier version up to date. The file is rewritten with every
+    /// default, so a default that changed since is replaced where the file still holds the old
+    /// one; a value the player chose is kept. Returns true if anything changed.
+    /// </summary>
+    public bool Migrate()
+    {
+        bool changed = false;
+        if (ConfigVersion < 1 && Math.Abs(ReflectionGain - 1f) < 1e-6f)
+        {
+            ReflectionGain = 0.1f;  // the default until version 1 was 1 (as simulated): far too loud
+            changed = true;
+        }
+
+        if (ConfigVersion != CurrentConfigVersion)
+        {
+            ConfigVersion = CurrentConfigVersion;
+            changed = true;
+        }
+
+        return changed;
+    }
 
     /// <summary>The reflection gain, clamped to what the engine accepts.</summary>
     public float ReflectionGainClamped() => ClampGain(ReflectionGain);

@@ -339,9 +339,11 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         try
         {
             SteamAudioConfig? config = api.LoadModConfig<SteamAudioConfig>(SteamAudioConfig.FileName);
-            if (config is null)
+            bool fresh = config is null;
+            config ??= new SteamAudioConfig();
+            if (config.Migrate() && !fresh)
             {
-                config = new SteamAudioConfig();
+                Mod.Logger.Notification("{0} was written by an earlier version; defaults that changed since were updated.", SteamAudioConfig.FileName);
             }
 
             // Rewritten every time so new options appear in the file with their defaults.

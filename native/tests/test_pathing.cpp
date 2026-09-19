@@ -66,9 +66,10 @@ std::vector<uint16_t> room(bool doorway) {
     return cells;
 }
 
-void set_chunk(OfflineEngine& e, const std::vector<uint16_t>& cells) {
+void set_chunk(OfflineEngine& e, const std::vector<uint16_t>& cells, int32_t chunk_x = 0) {
     vsa_chunk_desc desc{};
     desc.struct_size = sizeof desc;
+    desc.x = chunk_x;
     desc.materials = cells.data();
     REQUIRE(vsa_scene_set_chunk(e.engine, &desc) == VSA_OK);
     REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
@@ -221,4 +222,51 @@ TEST_CASE("pathing: a sealed room has no path, and a sound in the open needs non
     uint32_t count = 0;
     REQUIRE(vsa_engine_get_path_segments(e.engine, segments.data(), 16, &count) == VSA_OK);
     CHECK(count == 0);
+}
+
+TEST_CASE("pathing: a sound with no path inherits none from the sound before it") {
+    // Steam Audio keeps a source's last path when it finds none (no probe in reach of the source
+    // or the listener): a run that finds nothing writes nothing. A sound far outside the box,
+    // sealed in stone, taking over the effect set of a sound that had a path through the doorway,
+    // must not play through that path.
+    OfflineEngine e(pathing_config());
+    REQUIRE(vsa_engine_set_render_mode(e.engine, VSA_RENDER_SPEAKERS) == VSA_OK);
+    vsa_output_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.kind = VSA_OUTPUT_NONE;
+    desc.channels = 12;
+    REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+    set_materials(e);
+    set_chunk(e, room(true));
+    // Two chunks east: a stone block with one air cell inside it, at world x 69.
+    std::vector<uint16_t> far_cells(VSA_CHUNK_CELLS, Air);
+    for (int y = 1; y <= 8; ++y) {
+        for (int z = 4; z <= 12; ++z) {
+            for (int x = 0; x <= 10; ++x) {
+                far_cells[cell(x, y, z)] = Stone;
+            }
+        }
+    }
+    far_cells[cell(5, 3, 8)] = Air;
+    set_chunk(e, far_cells, 2);
+    e.listener(8.0f, 3.6f, 16.0f, 0.0f, 0.0f, -1.0f);
+    render12(e, kRate / 2);  // baked
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+    const vsa_voice inside = e.positioned(tone, VSA_SPATIAL_WORLD, 5.0f, 3.0f, 6.0f);
+    REQUIRE(vsa_voice_start(e.engine, inside) == VSA_OK);
+    render12(e, kRate / 2);
+    const Lean through_doorway = lean(render12(e, kRate / 2));
+    CHECK(stats(e).found == 1);
+    REQUIRE(vsa_voice_stop(e.engine, inside) == VSA_OK);
+    render12(e, kRate / 4);  // faded out, the effect set free
+
+    REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, 69.5f, 3.5f, 8.5f)) == VSA_OK);
+    render12(e, kRate / 2);
+    const Lean sealed = lean(render12(e, kRate / 2));
+    const vsa_pathing_stats s = stats(e);
+    MESSAGE("sealed far sound: " << s.found << " of " << s.wanted << " with a path; " << 10.0 * std::log10(sealed.energy)
+            << " dB against " << 10.0 * std::log10(through_doorway.energy) << " dB through the doorway");
+    CHECK(s.wanted == 1);
+    CHECK(s.found == 0);
+    CHECK(sealed.energy < 1e-4 * through_doorway.energy);
 }

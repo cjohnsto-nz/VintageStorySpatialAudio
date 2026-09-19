@@ -55,6 +55,7 @@ PathSimulator::PathSimulator(const steam::SteamContext& steam, WorldScene& scene
     scene_.attach(simulator_.get());
     wanted_.reserve(channel.size());
     run_.assign(channel.size(), false);
+    retired_.reserve(channel.size());
     segments_.reserve(kMaxSegments);
     debug_.reserve(kMaxSegments);
 }
@@ -202,25 +203,26 @@ void PathSimulator::tick() {
     }
     for (uint32_t i = 0; i < channel_.size(); ++i) {
         Source& source = sources_[i];
+        if (source.added) {
+            iplSourceRemove(source.handle.get(), simulator_.get());
+            source.added = false;
+            retired_.push_back(std::move(source.handle));  // released once the removal is committed
+            membership_changed = true;
+        }
         if (!run[i]) {
-            if (source.added) {
-                iplSourceRemove(source.handle.get(), simulator_.get());
-                source.added = false;
-                membership_changed = true;
-            }
             continue;
         }
         PathInput& in = channel_.input(i);
-        if (!source.handle) {
-            IPLSourceSettings settings{};
-            settings.flags = IPL_SIMULATIONFLAGS_PATHING;
-            check(iplSourceCreate(simulator_.get(), &settings, source.handle.out()), "iplSourceCreate (pathing)");
-        }
-        if (!source.added) {
-            iplSourceAdd(source.handle.get(), simulator_.get());
-            source.added = true;
-            membership_changed = true;
-        }
+        // A fresh source every run. When Steam Audio finds no probe in reach of the source or the
+        // listener (a sound beyond the box, or sealed in) it writes nothing and the source keeps
+        // the coefficients of its last path: another sound taking over this set, or this one
+        // moving out of reach, would play through that path. A new source's are zero.
+        IPLSourceSettings settings{};
+        settings.flags = IPL_SIMULATIONFLAGS_PATHING;
+        check(iplSourceCreate(simulator_.get(), &settings, source.handle.out()), "iplSourceCreate (pathing)");
+        iplSourceAdd(source.handle.get(), simulator_.get());
+        source.added = true;
+        membership_changed = true;
         source.generation = in.generation.load(std::memory_order_acquire);
         double world[3] = {static_cast<double>(in.x.load(std::memory_order_relaxed)) + origin[0],
                            static_cast<double>(in.y.load(std::memory_order_relaxed)) + origin[1],
@@ -264,6 +266,7 @@ void PathSimulator::tick() {
         }
     }
     old_batch.reset();  // removed and committed: safe to release
+    retired_.clear();   // likewise
 
     uint32_t found = 0;
     for (const Wanted& w : wanted_) {

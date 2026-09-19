@@ -52,7 +52,8 @@ struct PathSimStats {
 /// The pathing simulation (Phase 7, ADR 0014): Steam Audio's baked pathing for the voices whose
 /// straight path is blocked, in the baker's current probe batch. Each run: the batch is taken
 /// over from the baker if it changed (added to the simulator and committed; the old one released
-/// after), the wanted sources are set (the loudest `max_sources`), the paths are looked up and
+/// after), the wanted sources are set (the loudest `max_sources`; a fresh Steam Audio source
+/// each run, since one that finds no path keeps its last), the paths are looked up and
 /// validated against the live scene (`enableValidation`, `findAlternatePaths`), and the path
 /// effect parameters go out through the channel. Runs on its own thread at `rate_hz` while a
 /// device plays, or synchronously from offline rendering.
@@ -98,6 +99,7 @@ private:
     steam::Simulator simulator_;
     std::shared_ptr<const PathBatch> batch_;  // the one added to the simulator
     std::vector<Source> sources_;
+    std::vector<steam::Source> retired_;  // removed this run, released after the commit
     std::vector<Wanted> wanted_;
     std::vector<bool> run_;  // per set, this run
     std::vector<PathSegment> segments_;  // this run's, reused
