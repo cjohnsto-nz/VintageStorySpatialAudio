@@ -39,11 +39,12 @@ void DirectSimulator::listen_from(const VoxelView& view, const ListenerPose& pos
         world[k] = static_cast<double>(pose.position[k]) + origin[k];
     }
     // A camera inside a block (third person against a wall) listens from just outside it, towards
-    // where it looks.
+    // where it looks. Only what the head is really inside counts: walking through an open door,
+    // the leaf beside the head must not throw the listener across the doorway.
     const double ahead[3] = {world[0] + static_cast<double>(pose.forward[0]) * 2.0,
                              world[1] + static_cast<double>(pose.forward[1]) * 2.0,
                              world[2] + static_cast<double>(pose.forward[2]) * 2.0};
-    view.escape(world, ahead, 2);
+    view.escape(world, ahead, 2, 1e-3, VoxelView::Escaping::Enclosures);
 }
 
 DirectSimulator::DirectSimulator(const steam::SteamContext& steam, WorldScene& scene, DirectChannel& channel,

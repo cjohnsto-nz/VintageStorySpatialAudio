@@ -331,7 +331,7 @@ bool VoxelView::has_partial(int64_t x, int64_t y, int64_t z) const {
     return false;
 }
 
-bool VoxelView::enclosure(const double point[3], double lo[3], double hi[3]) const {
+bool VoxelView::enclosure(const double point[3], double lo[3], double hi[3], Escaping what) const {
     int64_t c[3];
     for (int a = 0; a < 3; ++a) {
         c[a] = static_cast<int64_t>(std::floor(point[a]));
@@ -351,15 +351,23 @@ bool VoxelView::enclosure(const double point[3], double lo[3], double hi[3]) con
     if (chunk->partials.empty()) {
         return false;
     }
-    // A partial block's cell is open but for its boxes: only a point inside one is enclosed (a
-    // door leaf beside the listener walking through the doorway does not move the listener).
     const auto cell16 = static_cast<uint16_t>(index);
     auto it = std::lower_bound(chunk->partials.begin(), chunk->partials.end(), cell16,
                                [](const PartialBlock& p, uint16_t cell) { return p.cell < cell; });
     for (; it != chunk->partials.end() && it->cell == cell16; ++it) {
-        if (kind(it->material) == MaterialKind::Air) {
+        if (kind(it->material) == MaterialKind::Air || it->boxes.empty()) {
             continue;
         }
+        if (what == Escaping::Blocks) {
+            // The block's sound leaves the block's whole cell: past its leaf, whichever side.
+            for (int a = 0; a < 3; ++a) {
+                lo[a] = static_cast<double>(c[a]);
+                hi[a] = static_cast<double>(c[a] + 1);
+            }
+            return true;
+        }
+        // The listener: the cell is open but for its boxes; only a point inside one is held (a
+        // door leaf beside the listener walking through the doorway does not move the listener).
         for (const Box& box : it->boxes) {
             bool inside = true;
             for (int a = 0; a < 3 && inside; ++a) {
@@ -375,12 +383,12 @@ bool VoxelView::enclosure(const double point[3], double lo[3], double hi[3]) con
     return false;
 }
 
-bool VoxelView::escape(double point[3], const double target[3], int max_cells, double beyond) const {
+bool VoxelView::escape(double point[3], const double target[3], int max_cells, double beyond, Escaping what) const {
     bool moved = false;
     for (int i = 0; i < max_cells; ++i) {
         double lo[3];
         double hi[3];
-        if (!enclosure(point, lo, hi)) {
+        if (!enclosure(point, lo, hi, what)) {
             break;
         }
         // Step to where the line towards the target leaves what encloses the point (the cell, or

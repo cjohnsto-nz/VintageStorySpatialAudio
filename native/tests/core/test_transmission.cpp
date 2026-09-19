@@ -231,15 +231,39 @@ TEST_CASE("transmission: a listener beside an open door's leaf stays; one inside
     const double ahead[3] = {10.5, 16.5, 10.0};
     // Walking through the doorway: the cell is open where the listener is.
     double walking[3] = {10.5, 16.6, 16.7};
-    CHECK(!view.escape(walking, ahead, 2));
+    CHECK(!view.escape(walking, ahead, 2, 1e-3, VoxelView::Escaping::Enclosures));
     CHECK(walking[2] == 16.7);
     // A camera pressed into the leaf comes out of the leaf's face, still in the doorway.
     double in_leaf[3] = {10.06, 16.6, 16.7};
     const double east[3] = {14.0, 16.6, 16.7};
-    CHECK(view.escape(in_leaf, east, 2, 0.25));
+    CHECK(view.escape(in_leaf, east, 2, 0.25, VoxelView::Escaping::Enclosures));
     CHECK(in_leaf[0] > 10.125);
     CHECK(in_leaf[0] < 10.5);
     CHECK(in_leaf[2] == 16.7);
+}
+
+TEST_CASE("transmission: a door's own sound leaves the door's cell past its leaf, towards the listener") {
+    auto c = std::make_shared<ChunkVoxels>();
+    PartialBlock door;
+    door.cell = static_cast<uint16_t>(cell_index(10, 16, 16));
+    door.material = Wood;
+    door.boxes.push_back({{0.0f, 0.0f, 0.875f}, {1.0f, 1.0f, 1.0f}});  // closed: the leaf on the cell's south face
+    c->partials.push_back(door);
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView view(std::move(chunks), materials());
+    // The sound is placed at the block's centre, not inside the leaf; the listener stands south
+    // of the door, the leaf between. The sound comes out past the leaf.
+    double sound[3] = {10.5, 16.5, 16.5};
+    const double outside[3] = {10.5, 16.6, 20.0};
+    CHECK(view.trace(outside, sound).crossings == 1);
+    CHECK(view.escape(sound, outside, 2, 0.25));
+    CHECK(sound[2] > 17.0);
+    CHECK(sound[2] < 17.5);
+    CHECK(view.trace(outside, sound).crossings == 0);
+    // The listener does not get that treatment: standing in the same cell, they stay.
+    double standing[3] = {10.5, 16.6, 16.4};
+    CHECK(!view.escape(standing, outside, 2, 1e-3, VoxelView::Escaping::Enclosures));
 }
 
 TEST_CASE("first hit: a wall's face, its outward normal, and a partial block's box") {

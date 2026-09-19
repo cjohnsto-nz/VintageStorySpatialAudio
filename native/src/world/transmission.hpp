@@ -70,16 +70,25 @@ public:
     /// blocks' boxes. Chunks that are not loaded count as air.
     [[nodiscard]] TransmissionTrace trace(const double from[3], const double to[3]) const;
 
-    /// Moves `point` towards `target` until nothing encloses it (a solid cell, or a partial
-    /// block's box it is inside; at most `max_cells` steps), ending `beyond` metres past the
-    /// last face: sounds are placed at the centre of their block (breaking, placing, a door, an
-    /// anvil being struck), which must not muffle its own sound; a camera pressed into a wall
-    /// listens from outside it. A point in a partial block's cell but outside its boxes (the
-    /// listener walking through an open door) stays. Returns true if the point moved.
-    bool escape(double point[3], const double target[3], int max_cells, double beyond = 1e-3) const;
-    /// The bounds of what encloses `point`: its cell when that is solid, else the partial block
-    /// box it is inside; false in the open (the cell of a partial block counts as open).
-    bool enclosure(const double point[3], double lo[3], double hi[3]) const;
+    /// What `escape` moves a point out of.
+    enum class Escaping : uint8_t {
+        /// Solid cells and the whole cell of any partial block: for a sound placed at the centre
+        /// of its block (breaking, placing, a door opening, an anvil struck), which its own
+        /// block, boxes included (a door's leaf is on one face of the cell), must not muffle.
+        Blocks,
+        /// Solid cells and partial blocks' boxes the point is inside: for the listener, who
+        /// walks through an open door's cell beside its leaf and must stay put, and listens
+        /// from outside a wall the camera is pressed into.
+        Enclosures,
+    };
+
+    /// Moves `point` towards `target` until nothing of `what` holds it (at most `max_cells`
+    /// steps), ending `beyond` metres past the last face. Returns true if the point moved.
+    bool escape(double point[3], const double target[3], int max_cells, double beyond = 1e-3,
+                Escaping what = Escaping::Blocks) const;
+    /// The bounds of what holds `point` in the sense of `what`: its cell, or the partial block
+    /// box it is inside; false in the open.
+    bool enclosure(const double point[3], double lo[3], double hi[3], Escaping what) const;
 
     /// Keeps `point` at least `radius` from the faces of solid cells next to its own (a sound on
     /// the floor would otherwise have half its occlusion volume inside the floor).
