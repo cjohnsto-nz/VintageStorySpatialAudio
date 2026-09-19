@@ -21,7 +21,8 @@ public sealed class NativeLayoutTests
     [Fact]
     public unsafe void EngineConfig_matches_header()
     {
-        Assert.Equal(72, sizeof(VsaEngineConfig));
+        Assert.Equal(80, sizeof(VsaEngineConfig));
+        Assert.Equal(76, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.DirectRateHz)));
         Assert.Equal(64, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.HrtfSofaPath)));
         Assert.Equal(52, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxRealVoices)));
         Assert.Equal(56, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxBinauralVoices)));
@@ -152,6 +153,11 @@ public sealed class NativeLayoutTests
         Assert.Equal(32, (int)Marshal.OffsetOf<VsaChunkMesh>(nameof(VsaChunkMesh.Vertices)));
         Assert.Equal(3u, (uint)MaterialKind.Solid);
         Assert.Equal(76, sizeof(VsaRayHit));
+        Assert.Equal(64, sizeof(VsaSourceDebug));
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaSourceDebug>("Position"));
+        Assert.Equal(60, (int)Marshal.OffsetOf<VsaSourceDebug>(nameof(VsaSourceDebug.Crossings)));
+        Assert.Equal(56, Marshal.SizeOf<VsaSimulationStats>());
+        Assert.Equal(48, (int)Marshal.OffsetOf<VsaSimulationStats>(nameof(VsaSimulationStats.RateHz)));
         Assert.Equal(48, (int)Marshal.OffsetOf<VsaRayHit>(nameof(VsaRayHit.Triangle)));
         Assert.Equal(60, (int)Marshal.OffsetOf<VsaRayHit>(nameof(VsaRayHit.Cell)));
     }

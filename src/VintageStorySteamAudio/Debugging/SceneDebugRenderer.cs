@@ -20,6 +20,13 @@ public enum SceneOverlay
 
     /// <summary>Chunk outlines coloured by state: full detail, coarse, not meshed.</summary>
     Bounds = 4,
+
+    /// <summary>
+    /// A line from the listener to every simulated sound, coloured by what reaches the listener:
+    /// green clear, through yellow (-20 dB) to red (-40 dB and below); a white stub where a sound
+    /// was moved out of the block it sits in.
+    /// </summary>
+    Sources = 8,
 }
 
 /// <summary>
@@ -51,6 +58,8 @@ internal sealed class SceneDebugRenderer : IRenderer
     private SceneRayHit? probe;
     private MeshRef? probeLines;
     private MeshRef? probeFace;
+    private MeshRef? sourceLines;
+    private Vec3d sourceAnchor = new();
 
     public SceneDebugRenderer(ICoreClientAPI capi, AudioEngine engine, Func<MaterialTable?> materials, Func<ChunkKey?> centre)
     {
@@ -72,6 +81,64 @@ internal sealed class SceneDebugRenderer : IRenderer
 
     /// <summary>Triangles currently shown (for the HUD).</summary>
     public long TrianglesShown { get; private set; }
+
+    /// <summary>
+    /// The direct simulation's sources, drawn as lines from <paramref name="from"/> (world
+    /// coordinates, near the listener). Positions are scene coordinates relative to <paramref name="origin"/>.
+    /// </summary>
+    public void SetSources(IReadOnlyList<SourceDebugInfo> sources, (int X, int Y, int Z) origin, Vec3d from)
+    {
+        sourceLines?.Dispose();
+        sourceLines = null;
+        if (sources.Count == 0)
+        {
+            return;
+        }
+
+        sourceAnchor = from.Clone();
+        var lines = new MeshData(sources.Count * 10, sources.Count * 10, withNormals: false, withUv: false, withRgba: true, withFlags: true);
+        lines.SetMode(EnumDrawMode.Lines);
+        void Line(double ax, double ay, double az, double bx, double by, double bz, int rgba)
+        {
+            lines.AddVertexSkipTex((float)(ax - sourceAnchor.X), (float)(ay - sourceAnchor.Y), (float)(az - sourceAnchor.Z), rgba);
+            lines.AddIndex(lines.VerticesCount - 1);
+            lines.AddVertexSkipTex((float)(bx - sourceAnchor.X), (float)(by - sourceAnchor.Y), (float)(bz - sourceAnchor.Z), rgba);
+            lines.AddIndex(lines.VerticesCount - 1);
+        }
+
+        foreach (SourceDebugInfo s in sources)
+        {
+            double px = s.Position.X + (double)origin.X;
+            double py = s.Position.Y + (double)origin.Y;
+            double pz = s.Position.Z + (double)origin.Z;
+            double sx = s.SimulatedPosition.X + (double)origin.X;
+            double sy = s.SimulatedPosition.Y + (double)origin.Y;
+            double sz = s.SimulatedPosition.Z + (double)origin.Z;
+            int color = ToRgba(GainColor(s.Gain.Mid), 255);
+            Line(from.X, from.Y, from.Z, sx, sy, sz, color);
+            const double c = 0.25;  // a small cross at the source
+            Line(sx - c, sy, sz, sx + c, sy, sz, color);
+            Line(sx, sy - c, sz, sx, sy + c, sz, color);
+            Line(sx, sy, sz - c, sx, sy, sz + c, color);
+            if (s.Escaped)
+            {
+                Line(px, py, pz, sx, sy, sz, ToRgba(unchecked((int)0xFFFFFFFF), 255));
+            }
+        }
+
+        lines.Flags = Enumerable.Repeat(256, lines.VerticesCount).ToArray();
+        sourceLines = capi.Render.UploadMesh(lines);
+    }
+
+    /// <summary>Green (0 dB) through yellow (-20 dB) to red (-40 dB and below), as 0xAARRGGBB.</summary>
+    public static int GainColor(float gain)
+    {
+        double db = 20.0 * Math.Log10(Math.Max(gain, 1e-6f));
+        double t = Math.Clamp(-db / 40.0, 0.0, 1.0);
+        int red = (int)Math.Round(255 * Math.Min(1.0, t * 2));
+        int green = (int)Math.Round(255 * Math.Min(1.0, 2 - (t * 2)));
+        return unchecked((int)0xFF000000) | (red << 16) | (green << 8) | 40;
+    }
 
     /// <summary>The ray probe's hit, highlighted: the triangle it hit and the block that produced it.</summary>
     public void SetProbe(SceneRayHit? hit)
@@ -177,6 +244,30 @@ internal sealed class SceneDebugRenderer : IRenderer
 
         TrianglesShown = shown;
         RenderProbe(camera, program);
+        RenderSources(camera, program);
+    }
+
+    private void RenderSources(Vec3d camera, IShaderProgram program)
+    {
+        if ((Overlay & SceneOverlay.Sources) == 0 || sourceLines is null)
+        {
+            return;
+        }
+
+        matrix.Identity().Set(capi.Render.CameraMatrixOrigin)
+            .Translate(sourceAnchor.X - camera.X, sourceAnchor.Y - camera.Y, sourceAnchor.Z - camera.Z);
+        program.Use();
+        capi.Render.GLDisableDepthTest();  // through walls: that is the point
+        capi.Render.GlToggleBlend(blend: true);
+        program.Uniform("origin", 0f, 0f, 0f);
+        program.UniformMatrix("projectionMatrix", capi.Render.CurrentProjectionMatrix);
+        program.UniformMatrix("modelViewMatrix", matrix.Values);
+        program.Uniform("colorIn", white);
+        capi.Render.LineWidth = 2f;
+        capi.Render.RenderMesh(sourceLines);
+        capi.Render.LineWidth = 1.6f;
+        program.Stop();
+        capi.Render.GLEnableDepthTest();
     }
 
     private void RenderProbe(Vec3d camera, IShaderProgram program)
@@ -224,6 +315,8 @@ internal sealed class SceneDebugRenderer : IRenderer
         disposed = true;
         Clear();
         SetProbe(null);
+        sourceLines?.Dispose();
+        sourceLines = null;
         box.Dispose();
     }
 

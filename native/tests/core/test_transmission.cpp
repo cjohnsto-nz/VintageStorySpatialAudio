@@ -1,0 +1,157 @@
+// Voxel transmission (ADR 0004): losses per crossing and per metre, partial boxes, the thickness
+// matrix (Phase 5's exit criterion), and sources escaping their own block.
+
+#include "world/transmission.hpp"
+
+#include <doctest/doctest.h>
+
+#include <memory>
+#include <string>
+
+using namespace vsa::world;
+
+namespace {
+
+enum : uint16_t { Air = 0, Stone = 1, Wood = 2, Glass = 3, Leaves = 4 };
+
+/// The shipped defaults' losses (acousticmaterials.json), as the engine derives them.
+std::vector<TransmissionMaterial> materials() {
+    auto m = [](MaterialKind kind, std::array<float, 3> crossing, std::array<float, 3> bulk) {
+        TransmissionMaterial t;
+        t.kind = kind;
+        std::copy(crossing.begin(), crossing.end(), t.crossing_db);
+        std::copy(bulk.begin(), bulk.end(), t.bulk_db_per_metre);
+        return t;
+    };
+    return {
+        m(MaterialKind::Air, {0, 0, 0}, {0, 0, 0}),
+        m(MaterialKind::Solid, {25, 35, 45}, {12, 20, 30}),  // stone
+        m(MaterialKind::Solid, {15, 22, 30}, {6, 10, 16}),   // wood
+        m(MaterialKind::Solid, {12, 18, 24}, {4, 8, 12}),    // glass
+        m(MaterialKind::Porous, {0.5f, 1, 2}, {1, 2, 4}),     // leaves
+    };
+}
+
+/// A wall of `thickness` blocks of `material` across x = 10.., in chunk 0,0,0.
+VoxelView wall(uint16_t material, int thickness) {
+    auto c = std::make_shared<ChunkVoxels>();
+    for (int x = 10; x < 10 + thickness; ++x) {
+        for (int y = 0; y < kChunkSize; ++y) {
+            for (int z = 0; z < kChunkSize; ++z) {
+                c->materials[static_cast<std::size_t>(cell_index(x, y, z))] = material;
+            }
+        }
+    }
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    return VoxelView(std::move(chunks), materials());
+}
+
+TransmissionTrace through(const VoxelView& view) {
+    const double from[3] = {2.5, 16.5, 16.5};
+    const double to[3] = {25.5, 16.5, 16.5};
+    return view.trace(from, to);
+}
+
+}  // namespace
+
+TEST_CASE("transmission: glass < wood < 1 stone < 3 stone < 6 stone, in every band") {
+    const TransmissionTrace glass = through(wall(Glass, 1));
+    const TransmissionTrace wood = through(wall(Wood, 1));
+    const TransmissionTrace stone1 = through(wall(Stone, 1));
+    const TransmissionTrace stone3 = through(wall(Stone, 3));
+    const TransmissionTrace stone6 = through(wall(Stone, 6));
+    for (int b = 0; b < 3; ++b) {
+        CAPTURE(b);
+        CHECK(glass.loss_db[b] < wood.loss_db[b]);
+        CHECK(wood.loss_db[b] < stone1.loss_db[b]);
+        CHECK(stone1.loss_db[b] < stone3.loss_db[b]);
+        CHECK(stone3.loss_db[b] < stone6.loss_db[b]);
+    }
+    // Exactly: one crossing, plus the bulk loss over the thickness.
+    CHECK(stone1.crossings == 1);
+    CHECK(stone3.crossings == 1);
+    CHECK(static_cast<double>(stone3.solid_metres) == doctest::Approx(3.0));
+    CHECK(static_cast<double>(stone3.loss_db[1]) == doctest::Approx(35.0 + 3 * 20.0));
+    CHECK(static_cast<double>(stone6.loss_db[2]) == doctest::Approx(45.0 + 6 * 30.0));
+    // Higher bands lose more.
+    CHECK(stone1.loss_db[0] < stone1.loss_db[2]);
+    // Clear air loses nothing.
+    const TransmissionTrace clear = through(wall(Air, 1));
+    CHECK(!clear.blocked());
+    CHECK(static_cast<double>(clear.gain(1)) == doctest::Approx(1.0));
+}
+
+TEST_CASE("transmission: a slanted path counts its true length, and materials in a row each cost a crossing") {
+    auto c = std::make_shared<ChunkVoxels>();
+    for (int y = 0; y < kChunkSize; ++y) {
+        for (int z = 0; z < kChunkSize; ++z) {
+            c->materials[static_cast<std::size_t>(cell_index(10, y, z))] = Stone;
+            c->materials[static_cast<std::size_t>(cell_index(11, y, z))] = Wood;
+        }
+    }
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView view(std::move(chunks), materials());
+    // 45 degrees in x/z through 2 blocks: sqrt(2) metres in each.
+    const double from[3] = {5.0, 16.5, 5.0};
+    const double to[3] = {17.0, 16.5, 17.0};
+    const TransmissionTrace t = view.trace(from, to);
+    CHECK(t.crossings == 2);
+    CHECK(static_cast<double>(t.solid_metres) == doctest::Approx(2.0 * std::sqrt(2.0)).epsilon(1e-6));
+    CHECK(static_cast<double>(t.loss_db[1]) == doctest::Approx(35 + 22 + std::sqrt(2.0) * (20 + 10)).epsilon(1e-5));
+
+    // A wall of leaves ten deep barely matters at low frequencies.
+    const TransmissionTrace foliage = through(wall(Leaves, 10));
+    CHECK(foliage.loss_db[0] < 12.0f);
+    CHECK(foliage.crossings == 1);
+}
+
+TEST_CASE("transmission: partial blocks count the boxes the path passes, and unloaded chunks are air") {
+    auto c = std::make_shared<ChunkVoxels>();
+    PartialBlock door;
+    door.cell = static_cast<uint16_t>(cell_index(10, 16, 16));
+    door.material = Wood;
+    door.boxes.push_back({{0.0f, 0.0f, 0.875f}, {1.0f, 1.0f, 1.0f}});  // a closed door: 1/8 thick, along x
+    c->partials.push_back(door);
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView view(std::move(chunks), materials());
+
+    // Along z through the door leaf: 0.125 m of wood, one crossing.
+    const double from[3] = {10.5, 16.5, 12.0};
+    const double to[3] = {10.5, 16.5, 20.0};
+    const TransmissionTrace through_door = view.trace(from, to);
+    CHECK(through_door.crossings == 1);
+    CHECK(static_cast<double>(through_door.solid_metres) == doctest::Approx(0.125));
+    CHECK(static_cast<double>(through_door.loss_db[0]) == doctest::Approx(15 + 0.125 * 6));
+
+    // Past its edge (the door is open to this path): nothing.
+    const double beside[3] = {10.5, 16.5, 16.2};
+    const double beyond[3] = {14.0, 16.5, 16.2};
+    CHECK(!view.trace(beside, beyond).blocked());
+
+    // Beyond the loaded chunk: air.
+    const double far_from[3] = {40.0, 16.5, 16.5};
+    const double far_to[3] = {80.0, 16.5, 16.5};
+    CHECK(!view.trace(far_from, far_to).blocked());
+}
+
+TEST_CASE("transmission: a sound at the centre of a block escapes it towards the listener") {
+    const VoxelView view = wall(Stone, 3);  // x 10..13
+    double source[3] = {11.5, 16.5, 16.5};  // inside the wall
+    const double listener[3] = {2.5, 16.5, 16.5};
+    CHECK(view.escape(source, listener, 1));
+    CHECK(source[0] < 11.0);  // moved one cell towards the listener, still in the wall
+    CHECK(source[0] > 10.0);
+    CHECK(view.escape(source, listener, 2));
+    CHECK(source[0] < 10.0);  // out
+    CHECK(!view.trace(source, listener).blocked());
+    CHECK(!view.escape(source, listener, 2));  // already out
+
+    // A block deep inside rock stays inside after the allowed steps.
+    const VoxelView thick = wall(Stone, 6);
+    double buried[3] = {14.5, 16.5, 16.5};
+    thick.escape(buried, listener, 2);
+    CHECK(thick.trace(buried, listener).blocked());
+}

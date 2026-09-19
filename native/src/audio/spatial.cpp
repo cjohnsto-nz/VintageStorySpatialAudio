@@ -235,8 +235,14 @@ void SpatialRenderer::apply_direct(EffectSet& set, const SpatialParams& params, 
     float* channels[1] = {mono};
     IPLAudioBuffer buffer{1, static_cast<IPLint32>(frames_), channels};
     IPLDirectEffectParams direct{};
-    direct.flags = static_cast<IPLDirectEffectFlags>(IPL_DIRECTEFFECTFLAGS_APPLYDISTANCEATTENUATION |
-                                                     IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION);
+    direct.flags = static_cast<IPLDirectEffectFlags>(
+        IPL_DIRECTEFFECTFLAGS_APPLYDISTANCEATTENUATION | IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION |
+        IPL_DIRECTEFFECTFLAGS_APPLYOCCLUSION | IPL_DIRECTEFFECTFLAGS_APPLYTRANSMISSION);
+    direct.transmissionType = IPL_TRANSMISSIONTYPE_FREQDEPENDENT;
+    direct.occlusion = params.occlusion;
+    direct.transmission[0] = params.transmission[0];
+    direct.transmission[1] = params.transmission[1];
+    direct.transmission[2] = params.transmission[2];
     direct.distanceAttenuation = params.distance_gain;
     direct.airAbsorption[0] = params.air_absorption[0];
     direct.airAbsorption[1] = params.air_absorption[1];

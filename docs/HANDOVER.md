@@ -48,6 +48,40 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Phase 5 (direct simulation): in progress on `phase5-direct-simulation`
+
+Phase 4 is merged into `main` (not pushed).
+
+### Native (ABI v6)
+
+- `world/transmission.*` walks the voxels from source to listener (Amanatides–Woo). Each material entered costs its crossing loss; each metre inside costs its bulk loss; partial blocks' boxes are intersected exactly (ADR 0008 amends ADR 0004). `VoxelView` is an immutable snapshot of shared chunk grids plus material losses and the origin, cached by `WorldScene::voxel_view()` and rebuilt only after a change.
+- **Escaping:** sounds at the centre of a solid block (block sounds) are moved out of it towards the listener, by up to two cells, before simulation.
+- `world/direct_sim.*` is `DirectSimulator`. It has one Steam Audio source per effect set in use, volumetric occlusion (16 rays by default), and the voxel transmission. It runs on its own thread at 30 Hz while a device plays, and synchronously from offline rendering on the output's clock, so tests are deterministic. It commits the simulator only when sources or the scene changed. Its steady state allocates nothing (tested).
+- `world/direct_channel.hpp` holds the lock-free per-set slots:
+  - **inputs:** position, radius, voice, and a generation the mixer bumps when a set changes voices;
+  - **outputs:** occlusion and transmission per band, published under that generation.
+- **Mixer:**
+  - It publishes world voices' positions and smooths results over about 60 ms.
+  - `gain = occlusion + (1 − occlusion) · T` goes to Steam Audio's direct effect (frequency-dependent transmission).
+  - A voice's **onset** waits up to 80 ms for its first result when the scene has chunks, so nothing blips at full level behind a wall.
+  - Occlusion affects **ranking** (binaural budget, stealing) but not **virtualisation**, so occluded voices stay simulated and are heard the moment a door opens. The first attempt virtualised them, which oscillated.
+  - Head-locked voices aren't simulated.
+- Config `occlusion_samples` and `direct_rate_hz`; flag `VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION`. Debug: `vsa_engine_get_sources`, `vsa_engine_get_simulation_stats`.
+- Tests (`test_transmission.cpp`, `test_direct.cpp`):
+  - The thickness matrix (glass < wood < 1 < 3 < 6 stone, every band) in voxels.
+  - End to end through Steam Audio. Glass measures 17/26/34 dB, one stone 40/54/59 dB and three stone 65/83/85 dB. Steam Audio's EQ limits the deepest losses.
+  - No onset blip; a smooth corner; escaping; head-locked voices unaffected; source readout.
+
+### Managed
+
+- `Occlusion`, `OcclusionSamples` and `OcclusionRateHz` in the config. The shipped materials were retuned to crossing and bulk losses (documented in the JSON).
+- **Overlay "sources":** in the Ctrl+F7 cycle and `.steamaudio scene sources`. It draws a line to every simulated sound, through walls, coloured green (clear) → yellow (−20 dB) → red (−40 dB), with a white stub where a sound was moved out of its block. The HUD adds the simulation's timings and the six nearest sounds: asset name, distance, visible fraction, metres and materials in the way, and the resulting dB per band.
+
+### To check in game (Chris)
+
+- Walk around a house with something making noise inside (a chicken, a fire, a door): muffled through walls, clear through an open door, gradual around corners, more muffled through stone than wood or glass.
+- Watch the sources overlay and HUD for anything that looks wrong (a clear line through rock, a red line in the open), and note the simulation tick time with many sounds around.
+
 ## Phase 4 (world geometry): in progress on `phase4-world-geometry`
 
 Phases 2 and 3 are merged into `main` (not pushed; Linux and macOS CI deferred to the end, at Chris's request). The design change from the plan is recorded in ADR 0007.

@@ -2,9 +2,11 @@
 
 #include "steam/ipl_handle.hpp"
 #include "world/mesher.hpp"
+#include "world/transmission.hpp"
 #include "world/voxel.hpp"
 
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -105,10 +107,16 @@ public:
     [[nodiscard]] bool raycast(const float origin[3], const float direction[3], float max_distance, RayHit& hit) const;
     [[nodiscard]] std::size_t material_count() const;
 
+    /// The voxels and material losses as they are now, for transmission (cheap: shares the chunk
+    /// grids; rebuilt only after a change).
+    [[nodiscard]] std::shared_ptr<const VoxelView> voxel_view() const;
+
     /// The top-level Steam Audio scene. A simulator using it must hold scene_lock() while it
     /// runs, since the worker adds and removes instances under the same lock.
     [[nodiscard]] IPLScene top() const noexcept { return top_.get(); }
     [[nodiscard]] std::mutex& scene_lock() noexcept { return scene_mutex_; }
+    /// Top-level commits so far (read under scene_lock(), or loosely).
+    [[nodiscard]] uint64_t commit_count() const noexcept { return commits_.load(std::memory_order_acquire); }
 
 private:
     struct Built;
@@ -127,6 +135,7 @@ private:
     const steam::SteamContext& steam_;
     steam::Scene top_;
     mutable std::mutex scene_mutex_;  // the top-level scene's instances and commits
+    std::atomic<uint64_t> commits_{0};
 
     mutable std::mutex mutex_;  // everything below
     std::condition_variable wake_;
@@ -138,6 +147,9 @@ private:
     std::shared_ptr<const Mesher> mesher_;
     int32_t origin_[3] = {0, 0, 0};
     bool origin_dirty_ = false;
+    uint64_t revision_ = 1;  // bumped by every change voxel_view reflects
+    mutable uint64_t view_revision_ = 0;
+    mutable std::shared_ptr<const VoxelView> view_;
     bool busy_ = false;
     bool stop_ = false;
     SceneStats stats_;

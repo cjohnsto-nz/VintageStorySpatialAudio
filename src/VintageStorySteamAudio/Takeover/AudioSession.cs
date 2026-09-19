@@ -228,6 +228,15 @@ public sealed class AudioSession : IDisposable
         });
     }
 
+    /// <summary>The asset a voice plays (for debug views), or null if it is not one of the session's.</summary>
+    public string? DescribeVoice(ulong voice)
+    {
+        lock (gate)
+        {
+            return byVoice.TryGetValue(voice, out SteamAudioSound? sound) ? sound.Params.Location?.ToShortString() : null;
+        }
+    }
+
     /// <summary>Stops every sound and releases the session's voices and assets.</summary>
     public void Dispose()
     {

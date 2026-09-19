@@ -114,7 +114,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
             .EndSubCommand()
             .BeginSubCommand("scene")
-                .WithDescription("The acoustic scene: status, or wire|faces|bounds|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
+                .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
                 .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
                 .HandleWith(args => WithEngine(() => sceneTools is null
                     ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + ")."
@@ -169,7 +169,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             config.SceneLodRadiusChunks,
             config.SceneVerticalRadiusChunks,
             config.SceneBudgetMs);
-        sceneTools = new SceneDebugTools(api, audio, world);
+        sceneTools = new SceneDebugTools(api, audio, world, voice => takeover?.Session.DescribeVoice(voice));
         api.Event.LevelFinalize += () =>
         {
             try

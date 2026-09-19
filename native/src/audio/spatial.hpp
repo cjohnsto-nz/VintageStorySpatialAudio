@@ -29,6 +29,10 @@ struct SpatialParams {
     float distance_gain = 1.0f;
     /// Steam Audio 3-band air absorption, 0..1 each.
     float air_absorption[3] = {1.0f, 1.0f, 1.0f};
+    /// From the direct simulation (Phase 5): the visible fraction of the source, and the amplitude
+    /// per band of what passes through the geometry in the way.
+    float occlusion = 1.0f;
+    float transmission[3] = {1.0f, 1.0f, 1.0f};
     /// Unit listener-to-source direction in world space (for the world ambisonic bus).
     float world_direction[3] = {0.0f, 0.0f, -1.0f};
 };

@@ -47,6 +47,15 @@ public sealed record EngineOptions
 
     /// <summary>A SOFA file with the HRTF to use (null = Steam Audio's default). Falls back to the default, with a warning, if it cannot be loaded.</summary>
     public string? HrtfSofaPath { get; init; }
+
+    /// <summary>Occlusion and transmission by the world scene (the direct simulation).</summary>
+    public bool DirectSimulation { get; init; } = true;
+
+    /// <summary>Rays per source for volumetric occlusion. 0 = 16.</summary>
+    public int OcclusionSamples { get; init; }
+
+    /// <summary>Direct simulation updates per second. 0 = 30.</summary>
+    public int DirectRateHz { get; init; }
 }
 
 /// <summary>Where a positional voice is and how it falls off with distance.</summary>
@@ -150,7 +159,8 @@ public sealed partial class AudioEngine : IDisposable
                     Log = log is null ? null : &OnNativeLog,
                     LogUserData = log is null ? 0 : GCHandle.ToIntPtr(logHandle),
                     RayTracer = (uint)options.RayTracer,
-                    Flags = options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0,
+                    Flags = (options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0)
+                        | (options.DirectSimulation ? 0 : VsaNative.EngineFlagNoDirectSimulation),
                     SampleRate = checked((uint)options.SampleRate),
                     BlockFrames = checked((uint)options.BlockFrames),
                     MaxVoices = checked((uint)options.MaxVoices),
@@ -159,6 +169,8 @@ public sealed partial class AudioEngine : IDisposable
                     MaxRealVoices = checked((uint)options.MaxRealVoices),
                     MaxBinauralVoices = checked((uint)options.MaxBinauralVoices),
                     HrtfSofaPath = sofa,
+                    OcclusionSamples = checked((uint)options.OcclusionSamples),
+                    DirectRateHz = checked((uint)options.DirectRateHz),
                 };
 
                 NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out engine), "vsa_engine_create");

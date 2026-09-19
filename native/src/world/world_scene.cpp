@@ -119,6 +119,7 @@ void WorldScene::set_materials(std::vector<AcousticMaterial> materials) {
     std::lock_guard lock(mutex_);
     materials_ = std::move(materials);
     ipl_materials_ = std::move(ipl);
+    ++revision_;
     mesher_ = std::make_shared<Mesher>(std::move(kinds));
     for (const auto& [key, chunk] : chunks_) {
         mark_dirty_locked(key);
@@ -135,6 +136,7 @@ void WorldScene::set_origin(int32_t x, int32_t y, int32_t z) {
     origin_[1] = y;
     origin_[2] = z;
     origin_dirty_ = true;
+    ++revision_;
     wake_.notify_all();
 }
 
@@ -146,6 +148,7 @@ void WorldScene::set_chunk(ChunkKey key, std::shared_ptr<const ChunkVoxels> voxe
     chunk.voxels = std::move(voxels);
     chunk.lod = lod > 0 ? 1 : 0;
     ++chunk.version;
+    ++revision_;
     mark_dirty_locked(key);
     if (previous == nullptr || previous_lod != chunk.lod) {
         mark_neighbours_dirty_locked(key);
@@ -170,6 +173,7 @@ void WorldScene::remove_chunk(ChunkKey key) {
     }
     it->second.voxels.reset();
     ++it->second.version;
+    ++revision_;
     mark_dirty_locked(key);
     mark_neighbours_dirty_locked(key);
     wake_.notify_all();
@@ -177,6 +181,7 @@ void WorldScene::remove_chunk(ChunkKey key) {
 
 void WorldScene::clear() {
     std::lock_guard lock(mutex_);
+    ++revision_;
     for (auto& [key, chunk] : chunks_) {
         chunk.voxels.reset();
         ++chunk.version;
@@ -350,6 +355,7 @@ void WorldScene::worker_main() {
             }
             const auto start = std::chrono::steady_clock::now();
             iplSceneCommit(top_.get());
+            commits_.fetch_add(1, std::memory_order_acq_rel);
             commit_ms = since_ms(start);
             stats_.last_commit_ms = commit_ms;
         }
@@ -519,6 +525,36 @@ bool WorldScene::raycast(const float origin[3], const float direction[3], float 
         }
     }
     return found;
+}
+
+std::shared_ptr<const VoxelView> WorldScene::voxel_view() const {
+    std::lock_guard lock(mutex_);
+    if (view_ && view_revision_ == revision_) {
+        return view_;
+    }
+    VoxelView::Chunks chunks;
+    chunks.reserve(chunks_.size());
+    for (const auto& [key, chunk] : chunks_) {
+        if (chunk.voxels) {
+            chunks.emplace(key, chunk.voxels);
+        }
+    }
+    std::vector<TransmissionMaterial> losses;
+    losses.reserve(materials_.size());
+    for (const AcousticMaterial& m : materials_) {
+        TransmissionMaterial t;
+        t.kind = m.kind;
+        for (int b = 0; b < 3; ++b) {
+            // Surface transmission is an amplitude per crossing.
+            t.crossing_db[b] = -20.0f * std::log10(std::clamp(m.transmission[b], 1e-6f, 1.0f));
+            t.bulk_db_per_metre[b] = std::max(0.0f, m.attenuation_db_per_metre[b]);
+        }
+        losses.push_back(t);
+    }
+    view_ = std::make_shared<const VoxelView>(std::move(chunks), std::move(losses),
+                                              std::array<int32_t, 3>{origin_[0], origin_[1], origin_[2]});
+    view_revision_ = revision_;
+    return view_;
 }
 
 std::size_t WorldScene::material_count() const {

@@ -229,4 +229,49 @@ public sealed class WorldSceneEngineTests
         Assert.True(engine.WaitSceneIdle(TimeSpan.FromSeconds(10)));
         Assert.Equal(0, engine.GetSceneStats().Chunks);
     }
+
+    [Fact]
+    public void A_wall_between_listener_and_sound_is_seen_by_the_direct_simulation()
+    {
+        NativeTestEnvironment.RequireNatives();
+        MaterialTable table = MaterialTable.Build(WorldSceneTests.ShippedConfig());
+        foreach (bool enabled in new[] { true, false })
+        {
+            using AudioEngine engine = AudioEngine.Create(new EngineOptions { RayTracer = RayTracer.Steam, DirectSimulation = enabled }, null);
+            engine.SetSceneMaterials(table.Materials);
+            var snapshot = new ChunkSnapshot();
+            for (int y = 0; y < 32; y++)
+            {
+                for (int z = 0; z < 32; z++)
+                {
+                    snapshot.Materials[(y * 32 + z) * 32 + 10] = table.IdOf("stone");
+                }
+            }
+
+            engine.SetSceneChunk(snapshot);
+            Assert.True(engine.WaitSceneIdle(TimeSpan.FromSeconds(10)));
+            engine.SetListener(4, 16.5f, 16.5f, 1, 0, 0, 0, 1, 0);
+            using AudioAsset tone = engine.CreatePcmAsset(NativeEngineTests.Sine(440, 48000, 4800, 0.3), 1, 48000, "tone");
+            using Voice voice = engine.CreateVoice(tone, AudioBus.Sound, 1, 1, looping: true, new VoicePlacement(SpatialMode.World, 20, 16.5f, 16.5f));
+            voice.Start();
+            engine.RenderOffline(new float[9600 * 2]);
+
+            IReadOnlyList<SourceDebugInfo> sources = engine.GetSimulatedSources();
+            if (!enabled)
+            {
+                Assert.Empty(sources);
+                Assert.Equal(0, engine.GetSimulationStats().Ticks);
+                continue;
+            }
+
+            SourceDebugInfo s = Assert.Single(sources);
+            Assert.Equal(voice.Handle, s.Voice);
+            Assert.True(s.Occlusion < 0.05f);
+            Assert.Equal(1, s.Crossings);
+            Assert.Equal(1f, s.SolidMetres, 3);
+            // Shipped stone: 35 dB crossing + 20 dB/m in the mid band.
+            Assert.Equal(-55.0, 20 * Math.Log10(s.Gain.Mid), 1);
+            Assert.True(engine.GetSimulationStats().Ticks > 3);
+        }
+    }
 }

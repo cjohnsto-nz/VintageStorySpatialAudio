@@ -117,6 +117,34 @@ public sealed record SceneRayHit(
     (int X, int Y, int Z) Cell,
     int Lod);
 
+/// <summary>One simulated source's latest direct-simulation results.</summary>
+/// <param name="Voice">The voice handle.</param>
+/// <param name="Position">Scene coordinates.</param>
+/// <param name="SimulatedPosition">Where it was simulated from (moved out of a solid block if <paramref name="Escaped"/>).</param>
+/// <param name="Escaped">Moved out of the block it sits in.</param>
+/// <param name="Occlusion">Visible fraction, 0..1.</param>
+/// <param name="Transmission">Amplitude per band through what is in the way.</param>
+/// <param name="SolidMetres">Metres of material on the centre line.</param>
+/// <param name="Crossings">Materials the centre line entered.</param>
+public sealed record SourceDebugInfo(
+    ulong Voice,
+    (float X, float Y, float Z) Position,
+    (float X, float Y, float Z) SimulatedPosition,
+    bool Escaped,
+    float Occlusion,
+    (float Low, float Mid, float High) Transmission,
+    float SolidMetres,
+    int Crossings)
+{
+    /// <summary>The direct sound's gain per band: the visible part plus what passes through.</summary>
+    public (float Low, float Mid, float High) Gain =>
+        (Occlusion + ((1 - Occlusion) * Transmission.Low),
+         Occlusion + ((1 - Occlusion) * Transmission.Mid),
+         Occlusion + ((1 - Occlusion) * Transmission.High));
+}
+
+public sealed record SimulationStats(int Sources, long Ticks, double LastTickMs, double MaxTickMs, double OcclusionMs, double TransmissionMs, int RateHz, int OcclusionSamples);
+
 /// <summary>A chunk's mesh as submitted to Steam Audio, in chunk-local block units.</summary>
 public sealed record ChunkMeshData(int Lod, uint Version, float[] Vertices, int[] Triangles, ushort[] Materials);
 
@@ -329,6 +357,49 @@ public sealed partial class AudioEngine
             hit.FromPartial != 0,
             (hit.Cell[0], hit.Cell[1], hit.Cell[2]),
             (int)hit.Lod);
+    }
+
+    /// <summary>The sources the direct simulation handled in its latest tick.</summary>
+    public unsafe IReadOnlyList<SourceDebugInfo> GetSimulatedSources()
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineGetSources(lease.Engine, null, 0, out uint count), "vsa_engine_get_sources");
+        if (count == 0)
+        {
+            return [];
+        }
+
+        var buffer = new VsaSourceDebug[count + 8];
+        buffer[0].StructSize = (uint)sizeof(VsaSourceDebug);
+        fixed (VsaSourceDebug* p = buffer)
+        {
+            NativeException.ThrowIfFailed(VsaNative.EngineGetSources(lease.Engine, p, (uint)buffer.Length, out count), "vsa_engine_get_sources");
+        }
+
+        var result = new List<SourceDebugInfo>((int)Math.Min(count, (uint)buffer.Length));
+        for (int i = 0; i < result.Capacity; i++)
+        {
+            ref VsaSourceDebug d = ref buffer[i];
+            result.Add(new SourceDebugInfo(
+                d.Voice,
+                (d.Position[0], d.Position[1], d.Position[2]),
+                (d.SimulatedPosition[0], d.SimulatedPosition[1], d.SimulatedPosition[2]),
+                (d.Flags & VsaNative.SourceEscaped) != 0,
+                d.Occlusion,
+                (d.Transmission[0], d.Transmission[1], d.Transmission[2]),
+                d.SolidMetres,
+                (int)d.Crossings));
+        }
+
+        return result;
+    }
+
+    public unsafe SimulationStats GetSimulationStats()
+    {
+        using Lease lease = new(handle);
+        var s = new VsaSimulationStats { StructSize = (uint)sizeof(VsaSimulationStats) };
+        NativeException.ThrowIfFailed(VsaNative.EngineGetSimulationStats(lease.Engine, ref s), "vsa_engine_get_simulation_stats");
+        return new SimulationStats((int)s.Sources, (long)s.Ticks, s.LastTickMs, s.MaxTickMs, s.OcclusionMs, s.TransmissionMs, (int)s.RateHz, (int)s.OcclusionSamples);
     }
 
     /// <summary>Writes the scene as OBJ + MTL in world block coordinates.</summary>

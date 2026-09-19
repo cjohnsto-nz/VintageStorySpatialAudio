@@ -107,9 +107,12 @@ LoadResult measure(vsa::Engine& engine) {
 }  // namespace
 
 TEST_CASE("the render path never allocates") {
-    // One binaural place: of the two positional voices, one takes the world ambisonic bus.
+    // One binaural place: of the two positional voices, one takes the world ambisonic bus. The
+    // direct simulation is off: offline, it runs on this thread, and adding and removing sources
+    // allocates (the steady state is checked below).
     vsa_engine_config config = make_config();
     config.max_binaural_voices = 1;
+    config.flags = VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION;
     vsa::Engine engine(config);
     AssetRef mono(pcm_asset(engine, vsa_test::sine(440.0, 44100.0, 22050), 1, 44100));
     AssetRef stereo(pcm_asset(engine, vsa_test::sine(660.0, 48000.0, 9600, 0.4f, 2), 2, 48000));
@@ -178,6 +181,35 @@ TEST_CASE("the render path never allocates") {
     const vsa_engine_stats stats = engine.stats();
     CHECK(stats.stream_underruns == 0);
     CHECK(stats.limiter_peak_reduction_db < -1.0f);  // the +18 dB master gain drove the limiter
+}
+
+TEST_CASE("the direct simulation's steady state never allocates") {
+    // Positional voices playing and moving, with the simulation ticking on the rendering thread
+    // (offline): once the sources exist, neither the simulation nor the render path allocates.
+    vsa::Engine engine(make_config());
+    AssetRef mono(pcm_asset(engine, vsa_test::sine(440.0, 48000.0, 48000, 0.2f), 1, 48000));
+    std::vector<vsa_voice> voices;
+    for (int i = 0; i < 8; ++i) {
+        voices.push_back(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.5f, 1.0f, true, VSA_SPATIAL_WORLD,
+                               static_cast<float>(i) - 4.0f, -3.0f));
+        engine.start_voice(voices.back());
+    }
+    std::vector<float> out(4800 * 2);
+    for (int i = 0; i < 20; ++i) {
+        engine.render_offline(out.data(), 4800);  // warm up: sources created and added
+    }
+    uint64_t allocations = 0;
+    for (int round = 0; round < 10; ++round) {
+        for (std::size_t i = 0; i < voices.size(); ++i) {
+            engine.set_voice_position(voices[i], VSA_SPATIAL_WORLD, static_cast<float>(i) - 4.0f, 1.0f,
+                                      -3.0f + 0.2f * static_cast<float>(round));
+        }
+        vsa_test::AllocationScope scope;
+        engine.render_offline(out.data(), 4800);
+        allocations += scope.count();
+    }
+    CHECK(allocations == 0);
+    CHECK(engine.direct()->stats().sources == 8);
 }
 
 TEST_CASE("256 voices render faster than real time") {

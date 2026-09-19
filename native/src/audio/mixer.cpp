@@ -23,6 +23,9 @@ constexpr float kRealAbove = 6.3e-4f;
 constexpr float kAirAbsorption[3] = {0.0002f, 0.0017f, 0.0182f};
 // Within this distance of the head a source blends to centred (no meaningful direction).
 constexpr float kCentreRadius = 0.5f;
+// Direct simulation results: smoothing time, and how long a new voice may wait for its first.
+constexpr double kDirectSmoothSeconds = 0.06;
+constexpr double kDirectMaxHoldSeconds = 0.08;
 
 template <typename T>
 void store_max(std::atomic<T>& target, T value) noexcept {
@@ -42,7 +45,8 @@ void store_min(std::atomic<T>& target, T value) noexcept {
 
 Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
              SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
-             LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget)
+             LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget,
+             world::DirectChannel* direct)
     : kernel_(kernel),
       slots_(slots),
       slot_count_(slot_count),
@@ -53,8 +57,11 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
       spatial_(spatial),
       listener_(listener),
       block_frames_(block_frames),
-      binaural_budget_(binaural_budget) {
+      binaural_budget_(binaural_budget),
+      direct_(direct) {
     ranking_.resize(spatial.pool_size());
+    set_generation_.assign(spatial.pool_size(), 0);
+    direct_state_.resize(spatial.pool_size());
     active_.resize(slot_count);
     coef_.resize(kernel.scratch_floats());
 
@@ -94,6 +101,10 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
     smooth_frames_ = std::max(1u, static_cast<uint32_t>(std::lround(kSmoothSeconds * sample_rate)));
     declick_step_ = 1.0f / static_cast<float>(std::max(1L, std::lround(kDeclickSeconds * sample_rate)));
     block_period_ns_ = static_cast<uint64_t>(1e9 * block_frames_ / sample_rate);
+    // Simulation results are smoothed over ~60 ms; a new voice waits up to 80 ms for its first.
+    const double block_seconds = static_cast<double>(block_frames_) / sample_rate;
+    direct_alpha_ = static_cast<float>(1.0 - std::exp(-block_seconds / kDirectSmoothSeconds));
+    direct_max_hold_ = static_cast<uint32_t>(std::ceil(kDirectMaxHoldSeconds / block_seconds));
     limiter_.prepare(sample_rate);
     block_out_.assign(static_cast<std::size_t>(block_frames_) * channels, 0.0f);
     block_read_ = block_frames_;  // empty: the next render() starts a block
@@ -343,6 +354,7 @@ void Mixer::start(VoiceSlot& s) noexcept {
     }
     v.pending = static_cast<uint8_t>(v.pending & ~RenderVoice::kPause);
     v.state = VSA_VOICE_PLAYING;
+    v.sounded = false;
     v.env_target = 1.0f;  // env == 1 after a clean stop (instant start), 0 after pause/seek (ramp in)
 }
 
@@ -523,13 +535,20 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
     } else {
         release_effects(v);
     }
+    // Ranking (binaural budget, effect-set stealing) counts walls: a voice muffled behind rock
+    // ranks low. Virtualisation does not: an occluded voice stays real, so it keeps being
+    // simulated and is heard again the moment a door opens.
     v.level = level;
+    if (spatial && v.effect_set >= 0 && direct_state_[static_cast<std::size_t>(v.effect_set)].primed) {
+        const DirectState& d = direct_state_[static_cast<std::size_t>(v.effect_set)];
+        v.level = level * (d.occlusion + (1.0f - d.occlusion) * d.transmission[1]);
+    }
     // Streams are never virtual (skipping ahead would need a seek on the decoder thread); one
     // that cannot get an effect set plays unpositioned until it can.
     const bool streamed = s.stream != nullptr;
     bool silent = !streamed && level < (v.is_virtual ? kRealAbove : kVirtualBelow);
     if (!silent && spatial && v.effect_set < 0) {
-        v.effect_set = acquire_effects(slot, level);
+        v.effect_set = acquire_effects(slot, v.level);
         silent = v.effect_set < 0 && !streamed;
     }
     if (silent) {
@@ -540,12 +559,16 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
     if (positioned) {
         SpatialTier tier = SpatialTier::Panned;
         if (render_mode_ == VSA_RENDER_HEADPHONES) {
-            const float ranked = level * (v.tier == SpatialTier::Binaural ? 2.0f : 1.0f);
+            const float ranked = v.level * (v.tier == SpatialTier::Binaural ? 2.0f : 1.0f);
             tier = ranked >= binaural_threshold_ ? SpatialTier::Binaural : SpatialTier::Ambisonic;
         }
         if (tier != v.tier) {
             spatial_.reset_tier(v.effect_set, tier);  // its state is from an earlier use
             v.tier = tier;
+        }
+        if (update_direct(s, params)) {
+            publish_position(s);  // held until its first simulation result
+            return false;
         }
     }
 
@@ -572,6 +595,7 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
 
     if (generated == Generated::Produced || generated == Generated::ProducedAndEnded) {
         mix(s, params, gain, positioned);
+        v.sounded = true;
     }
 
     if (ramp_done) {
@@ -737,7 +761,59 @@ int Mixer::acquire_effects(uint32_t slot, float level) noexcept {
         loser.is_virtual = true;
     }
     spatial_.reset(set);
+    if (direct_ != nullptr) {
+        uint32_t& generation = set_generation_[static_cast<std::size_t>(set)];
+        generation = generation + 1 == 0 ? 1 : generation + 1;
+        direct_state_[static_cast<std::size_t>(set)] = DirectState{};
+    }
+    slots_[slot].render.direct_hold = 0;
     return set;
+}
+
+bool Mixer::update_direct(VoiceSlot& s, SpatialParams& params) noexcept {
+    RenderVoice& v = s.render;
+    if (direct_ == nullptr || v.effect_set < 0) {
+        return false;
+    }
+    const auto set = static_cast<uint32_t>(v.effect_set);
+    world::DirectInput& in = direct_->input(set);
+    if (v.spatial != VSA_SPATIAL_WORLD) {
+        in.generation.store(0, std::memory_order_release);  // head-locked: nothing in the way
+        return false;
+    }
+    const uint32_t generation = set_generation_[set];
+    in.x.store(v.position[0], std::memory_order_relaxed);
+    in.y.store(v.position[1], std::memory_order_relaxed);
+    in.z.store(v.position[2], std::memory_order_relaxed);
+    in.voice.store(s.handle, std::memory_order_relaxed);
+    in.generation.store(generation, std::memory_order_release);
+
+    DirectState& state = direct_state_[set];
+    const world::DirectOutput& out = direct_->output(set);
+    if (out.generation.load(std::memory_order_acquire) == generation) {
+        const float occlusion = out.occlusion.load(std::memory_order_relaxed);
+        float transmission[3];
+        for (int b = 0; b < 3; ++b) {
+            transmission[b] = out.transmission[b].load(std::memory_order_relaxed);
+        }
+        if (!state.primed) {
+            state.occlusion = occlusion;
+            std::copy_n(transmission, 3, state.transmission);
+            state.primed = true;
+        } else {
+            state.occlusion += direct_alpha_ * (occlusion - state.occlusion);
+            for (int b = 0; b < 3; ++b) {
+                state.transmission[b] += direct_alpha_ * (transmission[b] - state.transmission[b]);
+            }
+        }
+    } else if (!state.primed && !v.sounded && v.direct_hold < direct_max_hold_ &&
+               direct_->scene_has_chunks.load(std::memory_order_relaxed)) {
+        ++v.direct_hold;
+        return true;
+    }
+    params.occlusion = state.occlusion;
+    std::copy_n(state.transmission, 3, params.transmission);
+    return false;
 }
 
 void Mixer::update_binaural_threshold() noexcept {
@@ -765,6 +841,9 @@ void Mixer::update_binaural_threshold() noexcept {
 
 void Mixer::release_effects(RenderVoice& v) noexcept {
     if (v.effect_set >= 0) {
+        if (direct_ != nullptr) {
+            direct_->input(static_cast<uint32_t>(v.effect_set)).generation.store(0, std::memory_order_release);
+        }
         spatial_.release(v.effect_set);
         v.effect_set = -1;
     }

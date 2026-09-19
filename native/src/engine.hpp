@@ -10,6 +10,7 @@
 #include "core/spsc_ring.hpp"
 #include "dsp/resampler.hpp"
 #include "steam/steam_context.hpp"
+#include "world/direct_sim.hpp"
 #include "world/world_scene.hpp"
 #include "vsaudio.h"
 
@@ -90,11 +91,16 @@ public:
         uint32_t max_real_voices = 256;
         uint32_t max_binaural_voices = 64;
         std::string hrtf_sofa_path;  // empty: Steam Audio's default HRTF
+        uint32_t occlusion_samples = 16;
+        uint32_t direct_rate_hz = 30;
+        bool direct_simulation = true;
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
     /// The world as Steam Audio geometry (thread-safe).
     [[nodiscard]] world::WorldScene& scene() noexcept { return *scene_; }
+    /// The direct simulation (thread-safe queries); null when disabled.
+    [[nodiscard]] world::DirectSimulator* direct() noexcept { return direct_sim_.get(); }
 
 private:
     enum class StateChange { None, Start, Pause, Stop };
@@ -139,6 +145,9 @@ private:
     RtLog rt_log_;
 
     std::unique_ptr<world::WorldScene> scene_;
+    std::unique_ptr<world::DirectChannel> direct_channel_;
+    std::unique_ptr<world::DirectSimulator> direct_sim_;
+    double offline_seconds_ = 0.0;  // offline output time, for the synchronous simulation
     SpatialRenderer spatial_;
     LatestValue<ListenerPose> listener_;
     Mixer mixer_;

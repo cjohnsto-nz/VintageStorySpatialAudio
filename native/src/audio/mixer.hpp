@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/channel_layout.hpp"
+#include "audio/listener_pose.hpp"
 #include "audio/spatial.hpp"
 #include "audio/voice.hpp"
 #include "core/latest_value.hpp"
@@ -10,6 +11,7 @@
 #include "dsp/limiter.hpp"
 #include "dsp/resampler.hpp"
 #include "vsaudio.h"
+#include "world/direct_channel.hpp"
 
 #include <array>
 #include <atomic>
@@ -35,14 +37,6 @@ struct MixerStats {
     std::atomic<uint32_t> virtual_voices{0};
 };
 
-/// Listener pose as the render thread uses it: an orthonormal basis.
-struct ListenerPose {
-    float position[3] = {0.0f, 0.0f, 0.0f};
-    float right[3] = {1.0f, 0.0f, 0.0f};
-    float up[3] = {0.0f, 1.0f, 0.0f};
-    float forward[3] = {0.0f, 0.0f, -1.0f};
-};
-
 /// The render core. Everything here runs on the render thread (the device callback, or the
 /// caller of an offline render) except the constructor and prepare(). It never allocates,
 /// locks, logs directly or calls into managed code: it talks to the rest of the engine only
@@ -58,7 +52,8 @@ public:
 
     Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
           SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
-          LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget);
+          LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget,
+          world::DirectChannel* direct = nullptr);
 
     Mixer(const Mixer&) = delete;
     Mixer& operator=(const Mixer&) = delete;
@@ -118,6 +113,9 @@ private:
     int acquire_effects(uint32_t slot, float level) noexcept;
     void release_effects(RenderVoice& v) noexcept;
     void update_binaural_threshold() noexcept;
+    /// Publishes a world voice's position to the direct simulation and takes (smoothed) results
+    /// into `params`. Returns true while a new voice should wait for its first result.
+    bool update_direct(VoiceSlot& s, SpatialParams& params) noexcept;
     void advance_env(RenderVoice& v, uint32_t frames) const noexcept;
     void gather(const Asset& asset, int64_t first, int64_t end, bool loop, bool wrap_before_start) noexcept;
     void publish_position(VoiceSlot& s) noexcept;
@@ -140,6 +138,19 @@ private:
     uint32_t binaural_budget_;
     float binaural_threshold_ = 0.0f;
     std::vector<float> ranking_;
+
+    // Direct simulation (Phase 5): per effect set, the generation published with its inputs (bumped
+    // when the set changes voices) and the smoothed results.
+    struct DirectState {
+        float occlusion = 1.0f;
+        float transmission[3] = {1.0f, 1.0f, 1.0f};
+        bool primed = false;
+    };
+    world::DirectChannel* direct_;
+    std::vector<uint32_t> set_generation_;
+    std::vector<DirectState> direct_state_;
+    float direct_alpha_ = 1.0f;
+    uint32_t direct_max_hold_ = 0;
 
     uint32_t sample_rate_ = 48000;
     uint32_t channels_ = 2;
