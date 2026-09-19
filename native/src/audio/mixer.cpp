@@ -11,6 +11,9 @@
 #include <limits>
 
 namespace vsa {
+
+static_assert(dsp::HighShelf::kMaxChannels >= decode::kMaxChannels, "every channel of a bed needs its own filter state");
+
 namespace {
 
 constexpr float kMonoPan = 0.70710678f;  // equal power, -3 dB per side
@@ -87,13 +90,12 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
     coef_.resize(kernel.scratch_floats());
 
     window_capacity_ = kernel.max_span_frames(block_frames);
-    window_storage_.resize(static_cast<std::size_t>(window_capacity_) * 2);
-    window_[0] = window_storage_.data();
-    window_[1] = window_storage_.data() + window_capacity_;
-
-    voice_storage_.resize(static_cast<std::size_t>(block_frames) * 2);
-    voice_out_[0] = voice_storage_.data();
-    voice_out_[1] = voice_storage_.data() + block_frames;
+    window_storage_.resize(static_cast<std::size_t>(window_capacity_) * decode::kMaxChannels);
+    voice_storage_.resize(static_cast<std::size_t>(block_frames) * decode::kMaxChannels);
+    for (std::size_t c = 0; c < decode::kMaxChannels; ++c) {
+        window_[c] = window_storage_.data() + c * window_capacity_;
+        voice_out_[c] = voice_storage_.data() + c * block_frames;
+    }
     gain_buf_.resize(block_frames);
     bus_gain_storage_.resize(static_cast<std::size_t>(block_frames) * VSA_BUS_COUNT);
     for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
@@ -135,6 +137,7 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
     // New effect sets for the new rate: every voice re-acquires one on its next block.
     spatial_.prepare(sample_rate, block_frames_, channels_);
     path_decoder_ = paths_ != nullptr ? std::make_unique<SpeakerDecoder>(channels_, 1) : nullptr;
+    bed_panner_ = std::make_unique<BedPanner>(channels_);
     path_bus_used_ = false;
     for (uint32_t i = 0; i < active_count_; ++i) {
         RenderVoice& v = slots_[active_[i]].render;
@@ -223,6 +226,16 @@ void Mixer::render_block() noexcept {
         {pose_.position[0], pose_.position[1], pose_.position[2]},
     };
     if (spatial_.decode(orientation, spatial_out_[0], spatial_out_[1])) {
+        for (uint32_t c = 0; c < 2; ++c) {
+            const float* in = spatial_out_[c];
+            float* sum = master_[c];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += in[j];
+            }
+        }
+    }
+    // Beds on headphones (bus gains already applied), decoded facing ahead: they turn with the head.
+    if (spatial_.decode_head(spatial_out_[0], spatial_out_[1])) {
         for (uint32_t c = 0; c < 2; ++c) {
             const float* in = spatial_out_[c];
             float* sum = master_[c];
@@ -688,15 +701,10 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
     }
 
     if (positioned) {
-        // Positioned: mono (stereo assets downmixed) -> gain -> shelf -> Steam Audio -> stereo.
-        if (channels == 2) {
-            for (uint32_t j = 0; j < frames; ++j) {
-                left[j] = 0.5f * (left[j] + right[j]) * gain[j];
-            }
-        } else {
-            for (uint32_t j = 0; j < frames; ++j) {
-                left[j] *= gain[j];
-            }
+        // Positioned: mono (other assets downmixed) -> gain -> shelf -> Steam Audio -> stereo.
+        downmix(*s.asset);
+        for (uint32_t j = 0; j < frames; ++j) {
+            left[j] *= gain[j];
         }
         if (v.shelf.active()) {
             v.shelf.process(left, frames, 0);
@@ -727,7 +735,14 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         return;
     }
 
-    for (uint32_t c = 0; c < channels; ++c) {
+    // A bed plays from the speakers; a positional voice still waiting for an effect set plays
+    // centred, like a mono one.
+    const bool bed = channels > 2 && v.spatial == VSA_SPATIAL_NONE && bed_panner_ != nullptr;
+    const uint32_t used = channels > 2 && !bed ? 1u : channels;
+    if (used != channels) {
+        downmix(*s.asset);
+    }
+    for (uint32_t c = 0; c < used; ++c) {
         float* x = voice_out_[c];
         for (uint32_t j = 0; j < frames; ++j) {
             x[j] *= gain[j];
@@ -736,7 +751,9 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
             v.shelf.process(x, frames, c);
         }
     }
-    if (channels == 1) {
+    if (bed) {
+        mix_bed(*s.asset, b);
+    } else if (used == 1) {
         for (uint32_t j = 0; j < frames; ++j) {
             const float x = left[j] * kMonoPan;
             bl[j] += x;
@@ -746,6 +763,92 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         for (uint32_t j = 0; j < frames; ++j) {
             bl[j] += left[j];
             br[j] += right[j];
+        }
+    }
+}
+
+void Mixer::downmix(const Asset& asset) noexcept {
+    const uint32_t channels = asset.channels();
+    if (channels == 1) {
+        return;
+    }
+    const uint32_t frames = block_frames_;
+    float* mono = voice_out_[0];
+    if (channels == 2) {
+        const float* right = voice_out_[1];
+        for (uint32_t j = 0; j < frames; ++j) {
+            mono[j] = 0.5f * (mono[j] + right[j]);
+        }
+        return;
+    }
+    // A bed: the average of its speaker channels (the LFE carries nothing a direction needs).
+    const SourceLayout& layout = asset.layout();
+    uint32_t count = layout[0].lfe ? 0u : 1u;
+    if (layout[0].lfe) {
+        std::fill(mono, mono + frames, 0.0f);
+    }
+    for (uint32_t c = 1; c < channels; ++c) {
+        if (layout[c].lfe) {
+            continue;
+        }
+        const float* x = voice_out_[c];
+        for (uint32_t j = 0; j < frames; ++j) {
+            mono[j] += x[j];
+        }
+        ++count;
+    }
+    const float scale = 1.0f / static_cast<float>(std::max(count, 1u));
+    for (uint32_t j = 0; j < frames; ++j) {
+        mono[j] *= scale;
+    }
+}
+
+void Mixer::mix_bed(const Asset& asset, std::size_t b) noexcept {
+    const uint32_t frames = block_frames_;
+    const uint32_t channels = asset.channels();
+    const SourceLayout& layout = asset.layout();
+    float* const* bus = &bus_[b * kMaxOutputChannels];
+
+    if (render_mode_ == VSA_RENDER_HEADPHONES) {
+        // Binaural: each channel from its speaker's direction through the head bus, which is
+        // decoded after every bus gain, so this voice's is applied now. The LFE has no direction
+        // and plays in the middle.
+        const float* bus_gain = bus_gains_[b];
+        for (uint32_t c = 0; c < channels; ++c) {
+            float* x = voice_out_[c];
+            if (layout[c].lfe) {
+                for (uint32_t j = 0; j < frames; ++j) {
+                    const float centred = x[j] * kMonoPan;
+                    bus[0][j] += centred;
+                    bus[1][j] += centred;
+                }
+                continue;
+            }
+            for (uint32_t j = 0; j < frames; ++j) {
+                x[j] *= bus_gain[j];
+            }
+            float direction[3];
+            layout[c].direction(direction);
+            spatial_.encode_head(direction, x);
+        }
+        return;
+    }
+
+    // Speakers: each channel from its speaker (panned between two where the layout lacks it).
+    std::array<float, kMaxOutputChannels> gains{};
+    const uint32_t outputs = std::min(bed_panner_->channels(), channels_);
+    for (uint32_t c = 0; c < channels; ++c) {
+        bed_panner_->gains(layout[c], gains.data());
+        const float* x = voice_out_[c];
+        for (uint32_t o = 0; o < outputs; ++o) {
+            const float k = gains[o];
+            if (k == 0.0f) {
+                continue;
+            }
+            float* sum = bus[o];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += k * x[j];
+            }
         }
     }
 }
@@ -1234,26 +1337,27 @@ void Mixer::gather(const Asset& asset, int64_t first, int64_t end, bool loop, bo
     const auto length = static_cast<int64_t>(asset.frames());
     const uint32_t channels = asset.channels();
     const int16_t* pcm = asset.pcm();
-    float* left = window_[0];
-    float* right = window_[1];
 
     const auto copy = [&](int64_t src, int64_t count, std::size_t out) {
         const int16_t* p = pcm + static_cast<std::size_t>(src) * channels;
         if (channels == 1) {
+            float* mono = window_[0] + out;
             for (int64_t r = 0; r < count; ++r) {
-                left[out + static_cast<std::size_t>(r)] = static_cast<float>(p[r]) * kScale;
+                mono[r] = static_cast<float>(p[r]) * kScale;
             }
-        } else {
+            return;
+        }
+        for (uint32_t c = 0; c < channels; ++c) {
+            float* x = window_[c] + out;
+            const int16_t* q = p + c;
             for (int64_t r = 0; r < count; ++r) {
-                left[out + static_cast<std::size_t>(r)] = static_cast<float>(p[2 * r]) * kScale;
-                right[out + static_cast<std::size_t>(r)] = static_cast<float>(p[2 * r + 1]) * kScale;
+                x[r] = static_cast<float>(q[static_cast<std::size_t>(r) * channels]) * kScale;
             }
         }
     };
     const auto zero = [&](int64_t count, std::size_t out) {
-        std::fill(left + out, left + out + count, 0.0f);
-        if (channels == 2) {
-            std::fill(right + out, right + out + count, 0.0f);
+        for (uint32_t c = 0; c < channels; ++c) {
+            std::fill(window_[c] + out, window_[c] + out + count, 0.0f);
         }
     };
 

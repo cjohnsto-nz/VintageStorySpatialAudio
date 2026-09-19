@@ -20,7 +20,9 @@ namespace vsa {
 class Vbap {
 public:
     /// Builds the triangulation for the engine's layout of `channels` (12 = 7.1.4). Allocates.
-    explicit Vbap(uint32_t channels);
+    /// `lone_surround_azimuth`: where the back pair sits in a layout without sides (quad, 5.1);
+    /// position() says 150, the back pair's place in 7.1.
+    explicit Vbap(uint32_t channels, float lone_surround_azimuth = 150.0f);
 
     [[nodiscard]] uint32_t channels() const noexcept { return channels_; }
 
