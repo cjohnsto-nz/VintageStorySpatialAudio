@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "steam/steam_context.hpp"
 #include "world/direct_sim.hpp"
 #include "world/world_scene.hpp"
@@ -153,6 +154,7 @@ void ReflectionSimulator::set_threaded(bool threaded) {
 }
 
 void ReflectionSimulator::thread_main() {
+    ThreadScope scope("reflection simulation");
     const auto period = std::chrono::microseconds(1'000'000 / std::max(1u, settings_.rate_hz));
     constexpr auto kPoll = std::chrono::milliseconds(4);  // how soon a new place's first run starts
     auto next = std::chrono::steady_clock::now();

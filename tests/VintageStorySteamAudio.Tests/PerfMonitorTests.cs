@@ -1,0 +1,139 @@
+using System.Diagnostics;
+using VintageStorySteamAudio.Diagnostics;
+using VintageStorySteamAudio.Native;
+
+namespace VintageStorySteamAudio.Tests;
+
+/// <summary>The main-thread profiler (Phase 8): sections, nesting, frames, and the thread shares.</summary>
+public sealed class PerfMonitorTests
+{
+    [Fact]
+    public void Sections_accumulate_calls_time_and_the_worst_call()
+    {
+        var perf = new PerfMonitor();
+        perf.AttachThread();
+        for (int i = 0; i < 3; i++)
+        {
+            using (perf.Measure(PerfSection.SceneTick))
+            {
+                Spin(i == 1 ? 4.0 : 0.5);
+            }
+        }
+
+        PerfSectionTotals tick = perf.Snapshot().Sections.Single(s => s.Section == PerfSection.SceneTick);
+        Assert.Equal(3, tick.Calls);
+        Assert.InRange(tick.TotalMs, 4.5, 60.0);
+        Assert.InRange(tick.MaxMs, 3.5, 60.0);
+        Assert.True(tick.MaxMs <= tick.TotalMs);
+        Assert.Equal(0, perf.Snapshot().Sections.Single(s => s.Section == PerfSection.Hud).Calls);
+    }
+
+    [Fact]
+    public void A_nested_scope_of_the_same_section_counts_once_and_allocations_are_attributed()
+    {
+        var perf = new PerfMonitor();
+        perf.AttachThread();
+        using (perf.Measure(PerfSection.SoundApi))
+        {
+            using (perf.Measure(PerfSection.SoundApi))
+            {
+                _ = new byte[64 * 1024];
+            }
+        }
+
+        PerfSectionTotals api = perf.Snapshot().Sections.Single(s => s.Section == PerfSection.SoundApi);
+        Assert.Equal(1, api.Calls);
+        Assert.InRange(api.AllocatedBytes, 64 * 1024, 256 * 1024);
+    }
+
+    [Fact]
+    public void The_shared_instance_records_every_section()
+    {
+        // The singleton is what the hooks use; it must be built whole (static initialisation order).
+        foreach (PerfSection section in Enum.GetValues<PerfSection>())
+        {
+            using (PerfMonitor.Instance.Measure(section))
+            {
+            }
+        }
+
+        Assert.All(PerfMonitor.Instance.Snapshot().Sections, s => Assert.True(s.Calls >= 1));
+    }
+
+    [Fact]
+    public void Another_thread_is_not_recorded()
+    {
+        var perf = new PerfMonitor();
+        perf.AttachThread();
+        var worker = new Thread(() =>
+        {
+            using (perf.Measure(PerfSection.SoundApi))
+            {
+                Spin(0.2);
+            }
+        });
+        worker.Start();
+        worker.Join();
+        Assert.Equal(0, perf.Snapshot().Sections.Single(s => s.Section == PerfSection.SoundApi).Calls);
+    }
+
+    [Fact]
+    public void Frames_give_median_p99_and_worst_from_the_histogram()
+    {
+        var perf = new PerfMonitor();
+        // 99 frames of 16 ms and one of 50 ms.
+        for (int i = 0; i < 99; i++)
+        {
+            perf.RecordFrame(Ticks(16.0));
+        }
+
+        perf.RecordFrame(Ticks(50.0));
+        PerfSnapshot snap = perf.Snapshot();
+        Assert.Equal(100, snap.Frames);
+        Assert.InRange(snap.FrameMedianMs, 15.5, 16.5);
+        Assert.InRange(snap.FrameP99Ms, 15.5, 16.5);  // the 99th of 100 is still a 16 ms frame
+        Assert.InRange(snap.FrameMaxMs, 49.9, 50.1);
+        perf.Reset();
+        Assert.Equal(0, perf.Snapshot().Frames);
+    }
+
+    [Fact]
+    public void Thread_shares_are_per_engine_thread_one_row_for_Steam_Audio_and_by_module_for_the_rest()
+    {
+        ThreadStats[] start =
+        [
+            new("render (device callback)", ThreadKind.Engine, 1, 100.0),
+            new("direct simulation", ThreadKind.Engine, 2, 50.0),
+            new("steam audio worker", ThreadKind.SteamAudio, 3, 10.0),
+            new("steam audio worker", ThreadKind.SteamAudio, 4, 10.0),
+            new("Vintagestory.exe", ThreadKind.Other, 5, 1000.0),
+        ];
+        ThreadStats[] end =
+        [
+            new("render (device callback)", ThreadKind.Engine, 1, 200.0),   // +100 of 1000 ms: 10 %
+            new("direct simulation", ThreadKind.Engine, 2, 80.0),            // 3 %
+            new("steam audio worker", ThreadKind.SteamAudio, 3, 110.0),      // +100
+            new("steam audio worker", ThreadKind.SteamAudio, 4, 160.0),      // +150: 25 % together
+            new("Vintagestory.exe", ThreadKind.Other, 5, 1900.0),            // 90 %
+            new("coreclr.dll", ThreadKind.Other, 6, 40.0),                   // new this window: 4 %
+        ];
+        IReadOnlyList<ThreadShare> shares = PerfReporter.ThreadShares(start, end, 1000.0);
+        Assert.Equal(5, shares.Count);
+        Assert.Equal(new ThreadShare("render (device callback)", ThreadKind.Engine, 1, 10.0), shares[0]);
+        Assert.Equal(new ThreadShare("direct simulation", ThreadKind.Engine, 1, 3.0), shares[1]);
+        Assert.Equal(new ThreadShare("steam audio workers", ThreadKind.SteamAudio, 2, 25.0), shares[2]);
+        Assert.Equal(new ThreadShare("Vintagestory.exe", ThreadKind.Other, 1, 90.0), shares[3]);
+        Assert.Equal(new ThreadShare("coreclr.dll", ThreadKind.Other, 1, 4.0), shares[4]);
+        Assert.Empty(PerfReporter.ThreadShares(start, end, 0.0));
+    }
+
+    private static void Spin(double ms)
+    {
+        long until = Stopwatch.GetTimestamp() + Ticks(ms);
+        while (Stopwatch.GetTimestamp() < until)
+        {
+        }
+    }
+
+    private static long Ticks(double ms) => (long)(ms / 1000.0 * Stopwatch.Frequency);
+}

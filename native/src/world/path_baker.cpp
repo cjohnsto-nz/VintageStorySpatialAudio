@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "steam/steam_context.hpp"
 #include "world/transmission.hpp"
 #include "world/world_scene.hpp"
@@ -67,6 +68,7 @@ void PathBaker::set_threaded(bool threaded) {
 }
 
 void PathBaker::thread_main() {
+    ThreadScope scope("path baker");
     const auto started = std::chrono::steady_clock::now();
     std::unique_lock lock(thread_mutex_);
     while (!stop_) {

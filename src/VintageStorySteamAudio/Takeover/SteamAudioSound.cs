@@ -1,6 +1,7 @@
 using Vintagestory.API.Client;
 using Vintagestory.API.MathTools;
 using VintageStorySteamAudio.Native;
+using VintageStorySteamAudio.Diagnostics;
 
 namespace VintageStorySteamAudio.Takeover;
 
@@ -114,6 +115,7 @@ public sealed class SteamAudioSound : ILoadedSound
 
     public void Start()
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.SoundApi);
         lock (gate)
         {
             if (disposed)
@@ -158,6 +160,7 @@ public sealed class SteamAudioSound : ILoadedSound
 
     public void SetPitch(float val)
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.SoundApi);
         lock (gate)
         {
             Params.Pitch = val;
@@ -176,6 +179,7 @@ public sealed class SteamAudioSound : ILoadedSound
 
     public void SetVolume(float val)
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.SoundApi);
         lock (gate)
         {
             Params.Volume = val;  // SoundParams clamps to 0..1
@@ -199,6 +203,7 @@ public sealed class SteamAudioSound : ILoadedSound
 
     public void SetPosition(float x, float y, float z)
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.SoundApi);
         lock (gate)
         {
             if (Params.Position is null)
@@ -250,6 +255,7 @@ public sealed class SteamAudioSound : ILoadedSound
 
     public void FadeTo(double newVolume, float duration, Action<ILoadedSound> onFaded)
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.SoundApi);
         lock (gate)
         {
             if (disposed)
@@ -464,6 +470,7 @@ public sealed class SteamAudioSound : ILoadedSound
 
     private void Transport(VoiceState pending, Action<Voice> command)
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.SoundApi);
         lock (gate)
         {
             if (disposed)

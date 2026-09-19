@@ -72,6 +72,7 @@ add_executable(vsaudio_core_tests
     core/test_gain_ramp.cpp
     core/test_late_reverb.cpp
     core/test_limiter.cpp
+    core/test_thread_stats.cpp
     core/test_mesher.cpp
     core/test_pathing_bake.cpp
     core/test_render_budget.cpp

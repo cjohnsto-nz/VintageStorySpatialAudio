@@ -5,6 +5,7 @@ using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using VintageStorySteamAudio.Native;
+using VintageStorySteamAudio.Diagnostics;
 
 namespace VintageStorySteamAudio.World;
 
@@ -249,6 +250,7 @@ internal sealed class WorldAcoustics : IDisposable
 
     private void Tick()
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.SceneTick);
         if (blocks is null || capi.World.Player?.Entity is not { } player)
         {
             return;
@@ -281,6 +283,7 @@ internal sealed class WorldAcoustics : IDisposable
 
             foreach ((ChunkKey key, int lod) in streamer.Next(reader.IsLoaded, now))
             {
+                using PerfMonitor.Scope readScope = PerfMonitor.Instance.Measure(PerfSection.ChunkRead);
                 long readStart = clock.ElapsedTicks;
                 if (reader.Read(key, lod, blocks, snapshot))
                 {

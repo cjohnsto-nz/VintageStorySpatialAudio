@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/thread_stats.hpp"
+
 #include "audio/channel_layout.hpp"
 #include "vsaudio.h"
 
@@ -59,7 +61,13 @@ public:
     bool take_rerouted() noexcept { return rerouted_.exchange(false, std::memory_order_acq_rel); }
 
     // Entry points for miniaudio's callbacks (device.cpp trampolines).
-    void on_render(float* out, uint32_t frames) noexcept { render_(user_, out, frames); }
+    void on_render(float* out, uint32_t frames) noexcept {
+        render_thread_id_.store(ThreadRegistry::current_id(), std::memory_order_relaxed);
+        render_(user_, out, frames);
+    }
+    /// The id of the thread the device calls back on (0 before the first callback); the engine
+    /// worker announces it to the thread registry, since the callback itself must not allocate.
+    [[nodiscard]] uint32_t render_thread_id() const noexcept { return render_thread_id_.load(std::memory_order_relaxed); }
     void on_stopped() noexcept {
         if (!closing_.load(std::memory_order_acquire)) {
             lost_.store(true, std::memory_order_release);
@@ -86,6 +94,7 @@ private:
     void* user_ = nullptr;
     std::atomic<bool> closing_{false};
     std::atomic<bool> lost_{false};
+    std::atomic<uint32_t> render_thread_id_{0};
     std::atomic<bool> rerouted_{false};
 };
 

@@ -24,6 +24,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
     private AudioEngine? engine;
     private AudioTakeover? takeover;
     private TestPlayback? playback;
+    private PerfReporter? perf;
     private WorldAcoustics? world;
     private SceneDebugTools? sceneTools;
     private SpeakerTest? speakerTest;
@@ -73,6 +74,8 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         {
             SteamAudioConfig config = LoadConfig(api);
             playback = new TestPlayback(engine, Mod.Logger, config.TestOutputDevice);
+            PerfMonitor.Instance.AttachThread();
+            perf = new PerfReporter(PerfMonitor.Instance, engine, () => takeover?.Session);
             tickListener = api.Event.RegisterGameTickListener(_ => TickPlayback(), 100);
             if (config.BuildWorldScene)
             {
@@ -112,6 +115,11 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .WithDescription("Noise from each 7.1.4 speaker position in turn, then overhead; '.steamaudio speakertest stop' ends it")
                 .WithArgs(parsers.OptionalWord("stop"))
                 .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
+            .EndSubCommand()
+            .BeginSubCommand("perf")
+                .WithDescription("What the mod costs since the last reset: our main-thread time per frame by section, every thread's share of a core, memory; 'reset' starts a new window")
+                .WithArgs(parsers.OptionalWord("action"))
+                .HandleWith(args => WithEngine(() => perf is null ? "The engine is not running." : perf.Command(args[0] as string)))
             .EndSubCommand()
             .BeginSubCommand("scene")
                 .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|rays|paths|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
@@ -256,6 +264,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
 
     private void TickPlayback()
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.Playback);
         try
         {
             // Without the takeover nothing else drains the engine's events.

@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 11u
+#define VSA_ABI_VERSION 12u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -1013,6 +1013,39 @@ typedef struct vsa_path_segment {
  */
 VSA_API vsa_result VSA_CALL vsa_engine_get_path_segments(vsa_engine* engine, vsa_path_segment* out, uint32_t capacity,
                                                          uint32_t* out_count);
+
+/* ---- Profiling (Phase 8) ------------------------------------------------------------------- */
+
+/** Whose a thread is. */
+typedef enum vsa_thread_kind {
+    /** One of the engine's, named. */
+    VSA_THREAD_ENGINE = 0,
+    /** Steam Audio's own workers (its ray tracing runs on threads it creates). */
+    VSA_THREAD_STEAM_AUDIO = 1,
+    /** The rest of the process: the game, the runtime, drivers; named by module. */
+    VSA_THREAD_OTHER = 2
+} vsa_thread_kind;
+
+typedef struct vsa_thread_stats {
+    uint32_t struct_size;
+    /** A vsa_thread_kind value. */
+    uint32_t kind;
+    uint32_t thread_id;
+    uint32_t reserved;
+    /** User + kernel CPU time since the thread started, in milliseconds. */
+    double cpu_ms;
+    /** The engine's name for it, or (Windows) the module its start address lies in. */
+    char name[48];
+} vsa_thread_stats;
+
+/**
+ * The process's threads and their CPU time: the engine's by name; on Windows every other thread
+ * too, classified by module, so the game's and Steam Audio's own can be told from ours. Two
+ * readings some seconds apart give each thread's share of a core. Fills up to `capacity` entries
+ * (out[0].struct_size set) and sets *out_count to the total.
+ */
+VSA_API vsa_result VSA_CALL vsa_engine_get_thread_stats(vsa_engine* engine, vsa_thread_stats* out, uint32_t capacity,
+                                                        uint32_t* out_count);
 
 /** One leg of a traced sound path (vsa_scene_trace_rays). */
 typedef struct vsa_ray_segment {

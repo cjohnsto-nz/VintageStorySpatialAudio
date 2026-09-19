@@ -1,7 +1,11 @@
 #include "engine_fixture.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <string>
+#include <thread>
+#include <vector>
 
 using namespace vsa_test;
 
@@ -122,4 +126,42 @@ TEST_CASE("the log sink is detached when the engine is destroyed") {
     REQUIRE(next.result == VSA_OK);
     std::lock_guard lock(log.mutex);
     CHECK(log.lines.size() == lines_after_destroy);
+}
+
+TEST_CASE("thread stats name the engine's threads and measure their CPU time") {
+    OfflineEngine e(make_config(VSA_RAY_TRACER_AUTO));
+    std::vector<vsa_thread_stats> threads(128);
+    uint32_t count = 0;
+    bool worker = false;
+    bool builder = false;
+    // The engine's threads register as they start, moments after the engine exists.
+    for (int attempt = 0; attempt < 100 && !(worker && builder); ++attempt) {
+        if (attempt > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        threads[0].struct_size = sizeof(vsa_thread_stats);
+        REQUIRE(vsa_engine_get_thread_stats(e.engine, threads.data(), 128, &count) == VSA_OK);
+        for (uint32_t i = 0; i < std::min(count, 128u); ++i) {
+            const vsa_thread_stats& t = threads[i];
+            CHECK(t.struct_size == sizeof(vsa_thread_stats));
+            CHECK(t.name[0] != '\0');
+            CHECK(t.cpu_ms >= 0.0);
+            if (std::strcmp(t.name, "engine worker") == 0) {
+                worker = t.kind == VSA_THREAD_ENGINE && t.thread_id != 0;
+            }
+            if (std::strcmp(t.name, "scene builder") == 0) {
+                builder = t.kind == VSA_THREAD_ENGINE;
+            }
+        }
+    }
+    CHECK(worker);
+    CHECK(builder);
+    // The main thread is not the engine's (its start lies in this executable, not in vsaudio.dll).
+    for (uint32_t i = 0; i < std::min(count, 128u); ++i) {
+        CHECK(std::strcmp(threads[i].name, "engine (unnamed)") != 0);
+    }
+    // The count alone.
+    uint32_t total = 0;
+    REQUIRE(vsa_engine_get_thread_stats(e.engine, nullptr, 0, &total) == VSA_OK);
+    CHECK(total == count);
 }

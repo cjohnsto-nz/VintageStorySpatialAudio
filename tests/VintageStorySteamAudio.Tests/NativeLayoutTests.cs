@@ -191,6 +191,9 @@ public sealed class NativeLayoutTests
         Assert.Equal(72, (int)Marshal.OffsetOf<VsaPathingStats>(nameof(VsaPathingStats.Ticks)));
         Assert.Equal(112, (int)Marshal.OffsetOf<VsaPathingStats>("Listener"));
         Assert.Equal(32, sizeof(VsaPathSegment));
+        Assert.Equal(72, sizeof(VsaThreadStats));
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaThreadStats>(nameof(VsaThreadStats.CpuMs)));
+        Assert.Equal(24, (int)Marshal.OffsetOf<VsaThreadStats>("Name"));
         Assert.Equal(20, (int)Marshal.OffsetOf<VsaPathSegment>("To"));
     }
 }

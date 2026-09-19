@@ -3,6 +3,7 @@ using Vintagestory.API.MathTools;
 using Vintagestory.Client.NoObf;
 using VintageStorySteamAudio.Native;
 using VintageStorySteamAudio.World;
+using VintageStorySteamAudio.Diagnostics;
 
 namespace VintageStorySteamAudio.Debugging;
 
@@ -308,6 +309,8 @@ internal sealed class SceneDebugRenderer : IRenderer
         {
             return;
         }
+
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.Overlay);
 
         long now = Environment.TickCount64;
         if (now >= nextRefresh)

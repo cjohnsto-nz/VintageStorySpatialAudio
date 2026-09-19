@@ -4,6 +4,7 @@
 #include "audio/stream.hpp"
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "steam/self_test.hpp"
 
 #include <algorithm>
@@ -813,6 +814,7 @@ void Engine::render_offline(float* out, uint32_t frames) {
 // Worker
 
 void Engine::worker_main() {
+    ThreadScope scope("engine worker");
     while (running_.load(std::memory_order_acquire)) {
         try {
             service_streams();
@@ -882,6 +884,9 @@ void Engine::check_device() {
         return;
     }
     const bool spatial = output_kind_ == VSA_OUTPUT_SPATIAL;
+    if (!spatial) {
+        ThreadRegistry::instance().announce(device_.render_thread_id(), "render (device callback)");
+    }
     const auto now = std::chrono::steady_clock::now();
     if (spatial ? spatial_output_.take_rerouted() : device_.take_rerouted()) {
         // miniaudio follows the new default by itself; a spatial stream is tied to its endpoint

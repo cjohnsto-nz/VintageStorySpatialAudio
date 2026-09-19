@@ -87,7 +87,16 @@ Sounds played at a creature or player follow it while they play; vanilla leaves 
 - **Verification:** VsaDoctor 38/38 against 1.22.7. `EntitySoundTrackerTests` cover announcement, expiry, cancel, context nesting, inference (tall creatures, lag, ambiguity) and following/letting go against the engine. All 111 managed tests passed on a worktree of `f62e42a` plus these changes (the working tree's native code was mid-ABI-9 change).
 - **To check in game:** walk past running wolves or chickens, and chase a bear. Calls should come from the animal, not from where it was. Watch the stats line for "matched by position" counts.
 
-## Phase 7 (pathing): done on `phase7-pathing`, to check in game
+## Phase 8 (release hardening): in progress on `phase8-hardening`
+
+Phase 7 is merged into `main` (not pushed). Chris asked to start with performance: what the mod costs against vanilla.
+
+- **Thread stats (ABI v12):** `core/thread_stats.*`: every engine thread registers by name as it starts (`ThreadScope`); the device callback, which must not allocate, publishes its id and the engine worker announces it. `vsa_engine_get_thread_stats` reports each registered thread's CPU time and, on Windows, walks the process's other threads, naming each by the module its start address lies in (exactly: `phonon.dll` is Steam Audio's workers, `embree*`/`tbb*` ours, the rest the game's and the runtime's). Two readings apart give shares of a core.
+- **`Diagnostics/PerfMonitor`:** the mod's main-thread time by section (listener, entity tracking, event pump, sound creation with the asset decode, the `ILoadedSound` calls, scene tick and chunk reads, HUD, overlay), managed bytes allocated per section, frame time median/p99/worst from the game's per-frame listener update. Nested scopes of a section count once; other threads are ignored.
+- **`.steamaudio perf [reset]`** (`Diagnostics/PerfReporter`): the report over the window; `scripts/perf-sample.ps1` samples the game process from outside for the vanilla baseline. The method and the results table are in `docs/investigations/performance.md`.
+- **Next:** Chris runs the three spots (village, cave, forest) with the mod off and on and fills the table; then whatever the numbers say (thread priorities, Steam Audio thread count, main-thread hot spots), then the rest of Phase 8: entity-bound source tracking review, compatibility modes, presets, docs, packaging, the 2-hour soak.
+
+## Phase 7 (pathing): done, merged
 
 Phase 6 is merged into `main` (not pushed).
 

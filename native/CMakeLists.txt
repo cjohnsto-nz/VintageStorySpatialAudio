@@ -65,6 +65,7 @@ add_library(vsaudio_core STATIC
     src/core/error.cpp
     src/core/error.hpp
     src/core/log.cpp
+    src/core/thread_stats.cpp
     src/core/latest_value.hpp
     src/core/log.hpp
     src/core/rt_log.cpp

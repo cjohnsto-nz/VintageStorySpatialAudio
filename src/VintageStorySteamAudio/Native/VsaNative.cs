@@ -496,6 +496,17 @@ internal unsafe struct VsaSourceDebug
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaThreadStats
+{
+    public uint StructSize;
+    public uint Kind;
+    public uint ThreadId;
+    public uint Reserved;
+    public double CpuMs;
+    public fixed byte Name[48];
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct VsaSimulationStats
 {
     public uint StructSize;
@@ -573,7 +584,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 11;
+    public const uint AbiVersion = 12;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;
@@ -779,6 +790,10 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_path_segments")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult EngineGetPathSegments(nint engine, VsaPathSegment* segments, uint capacity, out uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_thread_stats")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineGetThreadStats(nint engine, VsaThreadStats* threads, uint capacity, out uint count);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_scene_trace_rays")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

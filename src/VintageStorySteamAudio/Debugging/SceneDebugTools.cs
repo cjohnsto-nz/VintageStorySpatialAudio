@@ -5,6 +5,7 @@ using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using VintageStorySteamAudio.Native;
 using VintageStorySteamAudio.World;
+using VintageStorySteamAudio.Diagnostics;
 
 namespace VintageStorySteamAudio.Debugging;
 
@@ -198,6 +199,7 @@ internal sealed class SceneDebugTools : IDisposable
             return;
         }
 
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.Hud);
         try
         {
             UpdateProbe();

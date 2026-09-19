@@ -265,6 +265,21 @@ public sealed record PathingStats(
 /// <param name="Occluded">Blocked in the live scene.</param>
 public readonly record struct PathSegment((float X, float Y, float Z) From, (float X, float Y, float Z) To, bool Occluded);
 
+/// <summary>Whose a thread is (vsa_thread_kind).</summary>
+public enum ThreadKind
+{
+    Engine = 0,
+    SteamAudio = 1,
+    Other = 2,
+}
+
+/// <summary>A thread of the game process and its CPU time so far (Phase 8 profiling).</summary>
+/// <param name="Name">The engine's name for it, or (Windows) the module its start address lies in.</param>
+/// <param name="Kind">Whose it is.</param>
+/// <param name="ThreadId">The operating system's id for it.</param>
+/// <param name="CpuMs">User + kernel time since the thread started.</param>
+public readonly record struct ThreadStats(string Name, ThreadKind Kind, uint ThreadId, double CpuMs);
+
 /// <summary>One leg of a traced sound path (scene coordinates).</summary>
 /// <param name="Bounce">0 for the leg leaving the origin.</param>
 /// <param name="From">Start.</param>
@@ -485,6 +500,37 @@ public sealed partial class AudioEngine
             hit.FromPartial != 0,
             (hit.Cell[0], hit.Cell[1], hit.Cell[2]),
             (int)hit.Lod);
+    }
+
+    /// <summary>
+    /// The process's threads and their CPU time: the engine's by name and, on Windows, every
+    /// other thread by module. Two readings some seconds apart give each thread's share of a core.
+    /// </summary>
+    public unsafe IReadOnlyList<ThreadStats> GetThreadStats()
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineGetThreadStats(lease.Engine, null, 0, out uint count), "vsa_engine_get_thread_stats");
+        if (count == 0)
+        {
+            return [];
+        }
+
+        var buffer = new VsaThreadStats[count + 16];
+        buffer[0].StructSize = (uint)sizeof(VsaThreadStats);
+        var result = new List<ThreadStats>();
+        fixed (VsaThreadStats* p = buffer)
+        {
+            NativeException.ThrowIfFailed(VsaNative.EngineGetThreadStats(lease.Engine, p, (uint)buffer.Length, out count), "vsa_engine_get_thread_stats");
+            int n = (int)Math.Min(count, (uint)buffer.Length);
+            result.Capacity = n;
+            for (int i = 0; i < n; i++)
+            {
+                string name = Marshal.PtrToStringUTF8((nint)p[i].Name) ?? "";
+                result.Add(new ThreadStats(name, (ThreadKind)p[i].Kind, p[i].ThreadId, p[i].CpuMs));
+            }
+        }
+
+        return result;
     }
 
     /// <summary>The sources the direct simulation handled in its latest tick.</summary>
