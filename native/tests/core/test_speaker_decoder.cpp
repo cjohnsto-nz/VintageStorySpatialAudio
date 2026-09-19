@@ -154,3 +154,18 @@ TEST_CASE("speaker decoder: follows the listener's head") {
     }
     CHECK(loudest(last) == channel_of(12, Speaker::FrontCentre));
 }
+
+TEST_CASE("speaker decoder: left/right contrast of a plane wave from the left, per order (7.1.4)") {
+    for (const int order : {1, 2, 3}) {
+        const SpeakerDecoder decoder(12, order);
+        std::vector<float> gains(12);
+        const auto d = direction(-90.0, 0.0);
+        decoder.plane_wave(d.data(), gains.data());
+        double l = 0.0, r = 0.0;
+        for (const int c : {0, 4, 6, 8, 10}) l += static_cast<double>(gains[static_cast<std::size_t>(c)]) * gains[static_cast<std::size_t>(c)];
+        for (const int c : {1, 5, 7, 9, 11}) r += static_cast<double>(gains[static_cast<std::size_t>(c)]) * gains[static_cast<std::size_t>(c)];
+        const double contrast_db = 10.0 * std::log10(l / r);
+        MESSAGE("order " << order << ": left speakers " << contrast_db << " dB above right for a plane wave from the left");
+        CHECK(contrast_db > (order == 1 ? 9.0 : order == 2 ? 14.0 : 16.0));  // 10.8 / 16.1 / 18.5 measured
+    }
+}

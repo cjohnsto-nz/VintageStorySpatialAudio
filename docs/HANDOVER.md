@@ -203,6 +203,13 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
 - **Fixed on the way:** the tail's smoothing primed on a new place's empty parameters and crept up from silence (a click at a new place had no tail).
 - **Measured:** six strikes alike from the first (-16 dB open, -19 dB behind a pillar); rendered decay matches simulated; Medium's 10 live places with 32 voices: render p99 18-21 % (budget 25 %; 12 places 22-28 %), a run ~45 ms. Each live place costs ~55 us per block: the next optimisation.
 
+### Directionality, measured (after Chris's "no panning" report)
+
+- A hole in the left or right wall of a room built round the listener, anvil outside, sounded the same.
+- **Measured (7.1.4, `test_reflections.cpp` / `test_speaker_decoder.cpp`):** a plane wave decodes at 16 dB left over right at order 2 (18.5 at order 3); a click 3 m to the side has its early reflections lean 5.5 dB to that side in the first 40 ms; over 30-150 ms the lean is 1.5 dB (the room's field is diffuse by then, and the tail is diffuse by design). So the rendering is directional; the cue is short.
+- **Why the hole test hears nothing:** reflections carry only what rays through the hole find; the sound "coming through an opening from the opening's direction" is diffraction, which is Steam Audio's *pathing* (PLAN 5.5, Phase 7), not its reflections. Meanwhile the direct sound transmitted through the wall arrives from the anvil's true direction in both cases.
+- **Knobs:** `ReflectionTransitionSeconds` (0.1) lengthens the directional, convolved part at CPU cost; `ReflectionTailGain` lowers the diffuse part.
+
 ### To check in game (Chris)
 
 - **Reverb that follows the space:** walk from outdoors into a small stone room, a big hall, a cave. The HUD's RT60 and space name should follow; outdoors should be nearly dry.

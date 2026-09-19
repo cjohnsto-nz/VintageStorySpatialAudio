@@ -551,3 +551,48 @@ TEST_CASE("reflections: every strike sounds alike, the first as the rest") {
         CHECK(*hi - *lo < 1.5);
     }
 }
+TEST_CASE("reflections: on speakers, a sound's early reflections come from its side") {
+    // A click 3 m to the listener's left, then right, in a 12 x 6 x 12 room, rendered to 7.1.4,
+    // early reflections alone: in their first 40 ms (after the direct click) the left speakers
+    // carry more than the right for the left click, and the mirror for the right one. (Later the
+    // room's field is diffuse, and the tail is diffuse by design; a plane wave itself decodes at
+    // 16 dB left over right at order 2: core/test_speaker_decoder.cpp.)
+    const Room room{12, 6, 12};
+    double lean_db[2] = {};
+    for (const int side : {0, 1}) {
+        OfflineEngine e(reflection_config());
+        REQUIRE(vsa_engine_set_render_mode(e.engine, VSA_RENDER_SPEAKERS) == VSA_OK);
+        REQUIRE(vsa_engine_set_reflection_mix(e.engine, 1.0f, 0.0f) == VSA_OK);
+        vsa_output_desc desc{};
+        desc.struct_size = sizeof desc;
+        desc.kind = VSA_OUTPUT_NONE;
+        desc.channels = 12;
+        REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+        set_materials(e);
+        build(e, &room);
+        e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+        std::vector<float> warm(static_cast<std::size_t>(kRate) / 2 * 12);
+        REQUIRE(vsa_engine_render_offline(e.engine, warm.data(), kRate / 2) == VSA_OK);
+        const AssetPtr click = e.pcm(burst(0.02), 1, kRate);
+        REQUIRE(vsa_voice_start(e.engine, one_shot(e, click, room.cx() + (side == 0 ? -3.0f : 3.0f), room.cy(), room.cz())) == VSA_OK);
+        std::vector<float> out(static_cast<std::size_t>(kRate) * 12);
+        REQUIRE(vsa_engine_render_offline(e.engine, out.data(), kRate) == VSA_OK);
+        // Engine order for 12 channels: FL FR FC LFE BL BR SL SR TFL TFR TBL TBR.
+        const int left[] = {0, 4, 6, 8, 10};
+        const int right[] = {1, 5, 7, 9, 11};
+        double l = 0.0;
+        double r = 0.0;
+        for (std::size_t i = static_cast<std::size_t>(0.022 * kRate); i < static_cast<std::size_t>(0.06 * kRate); ++i) {
+            for (const int c : left) {
+                l += static_cast<double>(out[i * 12 + static_cast<std::size_t>(c)]) * out[i * 12 + static_cast<std::size_t>(c)];
+            }
+            for (const int c : right) {
+                r += static_cast<double>(out[i * 12 + static_cast<std::size_t>(c)]) * out[i * 12 + static_cast<std::size_t>(c)];
+            }
+        }
+        lean_db[side] = 10.0 * std::log10(l / r);
+    }
+    MESSAGE("early reflections lean left by " << lean_db[0] << " dB for a click on the left, " << lean_db[1] << " dB for one on the right");
+    CHECK(lean_db[0] > 3.0);
+    CHECK(lean_db[1] < -3.0);
+}
