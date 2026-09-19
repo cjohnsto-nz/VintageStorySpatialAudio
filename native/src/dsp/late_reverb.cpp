@@ -120,6 +120,13 @@ void LateReverb::reset() noexcept {
 }
 
 void LateReverb::update(const float rt60[3], const float level[3], uint32_t frames) noexcept {
+    // Before the first simulation result (all zeros) nothing is injected: the pre-delay ring keeps
+    // the input meanwhile, so a sound's onset still reaches the tail once the result is in (as
+    // long as that is within the pre-delay). Smoothing starts from the first real values.
+    if (!primed_ && !(rt60[1] > 0.0f && level[0] + level[1] + level[2] > 0.0f)) {
+        in_gain_ = 0.0f;
+        return;
+    }
     const auto seconds = static_cast<float>(frames) / static_cast<float>(rate_);
     const float level_step = 1.0f - std::exp(-seconds / kLevelSeconds);
     const float decay_step = 1.0f - std::exp(-seconds / kDecaySeconds);

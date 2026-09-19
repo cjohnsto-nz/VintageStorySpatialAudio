@@ -126,14 +126,7 @@ public sealed class SteamAudioConfig
     [JsonConverter(typeof(StringEnumConverter))]
     public ReflectionQuality ReflectionQuality { get; set; } = ReflectionQuality.Medium;
 
-    /// <summary>
-    /// Also simulate the loudest lasting sounds (fires, machines, music) from where they are, and
-    /// hear them through reflections of their own (paths round walls, the reverb of their own
-    /// space) instead of through your reverb. Off: every sound feeds your reverb (ADR 0011).
-    /// </summary>
-    public bool VoiceReflections { get; set; }
-
-    /// <summary>How many voices, with VoiceReflections on; 0 = the preset's.</summary>
+    /// <summary>Places simulated at once (every sound is simulated from where it is; sounds within 3 m share a place); 0 = the preset's.</summary>
     public int ReflectionSources { get; set; }
 
     /// <summary>Rays per simulation; 0 = the preset's.</summary>
@@ -183,7 +176,7 @@ public sealed class SteamAudioConfig
         OcclusionSamples = Math.Clamp(OcclusionSamples, 0, 256),
         DirectRateHz = Math.Clamp(OcclusionRateHz, 0, 120),
         Reflections = Reflections,
-        ReflectionQuality = VoiceReflectionsOrNone(ReflectionPresets.Resolve(ReflectionQuality, new ReflectionQualitySettings
+        ReflectionQuality = ReflectionPresets.Resolve(ReflectionQuality, new ReflectionQualitySettings
         {
             Sources = ReflectionSources,
             Rays = ReflectionRays,
@@ -193,14 +186,11 @@ public sealed class SteamAudioConfig
             RateHz = ReflectionRateHz,
             Threads = ReflectionThreads,
             TransitionSeconds = ReflectionTransitionSeconds,
-        })),
+        }),
         HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
             : modConfigDirectory is null ? HrtfSofaFile.Trim()
             : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),
     };
-
-    private ReflectionQualitySettings VoiceReflectionsOrNone(ReflectionQualitySettings resolved) =>
-        VoiceReflections ? resolved : resolved with { Sources = 0 };
 
     /// <summary>The reflection gain, clamped to what the engine accepts.</summary>
     public float ReflectionGainClamped() => ClampGain(ReflectionGain);

@@ -25,8 +25,6 @@ struct DirectOutput {
     std::atomic<uint32_t> generation{0};
     std::atomic<float> occlusion{1.0f};
     std::atomic<float> transmission[3] = {1.0f, 1.0f, 1.0f};
-    /// Metres from the listener through the air (around obstacles), -1 if there is no such path.
-    std::atomic<float> air_path{-1.0f};
 };
 
 /// The lock-free slots between the render thread and the direct simulation.

@@ -83,8 +83,6 @@ add_library(vsaudio_core STATIC
     src/steam/self_test.hpp
     src/steam/steam_context.cpp
     src/steam/steam_context.hpp
-    src/world/air_paths.cpp
-    src/world/air_paths.hpp
     src/world/direct_channel.hpp
     src/world/direct_sim.cpp
     src/world/direct_sim.hpp

@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 9u
+#define VSA_ABI_VERSION 10u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -171,11 +171,10 @@ typedef struct vsa_engine_config {
     /** Direct simulation updates per second while a device plays, 0 = 30; 1..120. */
     uint32_t direct_rate_hz;
     /*
-     * Reflections (Phase 6): Steam Audio's ray-traced reflections against the world scene. The
-     * listener has a reverb that every world sound feeds; optionally, the loudest lasting sounds
-     * get reflections of their own. 0 = the default for each.
+     * Reflections (Phase 6): Steam Audio's ray-traced reflections against the world scene, for
+     * every sound from where it is (ADR 0012). 0 = the default for each.
      */
-    /** Voices with reflections of their own, 0 = none (the default); up to 64. */
+    /** Places simulated at once (sounds within 3 m of one another share one), 0 = 10; 1..64. */
     uint32_t reflection_sources;
     /** Rays traced from the listener per simulation, 0 = 4096; 256..32768. */
     uint32_t reflection_rays;
@@ -815,13 +814,6 @@ typedef struct vsa_source_debug {
     /** Metres of material on the centre line, and how many materials it entered. */
     float solid_metres;
     uint32_t crossings;
-    /**
-     * Metres from the listener through the air, around obstacles and through doorways (within
-     * 24 blocks); -1 if there is no such path. What the listener's reverb is fed by, when louder
-     * than the straight line through what is in the way.
-     */
-    float air_path;
-    uint32_t reserved;
 } vsa_source_debug;
 
 /**
@@ -852,27 +844,28 @@ typedef struct vsa_simulation_stats {
 VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, vsa_simulation_stats* out);
 
 /* =============================================================================================
- * Reflections (Phase 6): reverb simulated from the world scene.
+ * Reflections (Phase 6): reverb simulated from the world scene (ADR 0012).
  *
- * Steam Audio traces rays from the listener through the scene (its surfaces' absorption and
- * scattering) several times a second, for a source at the listener: the reverb of the space the
- * listener is in, early reflections (convolved, directional, Ambisonic) and a diffuse tail at
- * the simulated decay time per band. Every world sound feeds it weighted by its direct path's
- * energy, distance and walls included (PLAN 5.4, ADR 0011).
+ * Every world sound is simulated by Steam Audio from where it is: rays from the listener find
+ * the paths its sound takes off the scene's surfaces (their absorption and scattering), so its
+ * reflections come from the right directions, round corners and through doorways, and not
+ * through walls. Sounds within 3 m of one another share a "place", which keeps its simulation
+ * (refining it) while sounds keep happening there: a sound struck again and again at one spot
+ * always rings the same. A new place's first result is run at once (the first 10-20 ms of a new
+ * place's reflections are lost; nothing else changes). Head-locked sounds use a source at the
+ * listener.
  *
- * Optionally (reflection_sources), the loudest lasting sounds (looping, streamed, or 0.75 s and
- * longer; ranked without walls) are also simulated from where they are, and heard through their
- * own reflections instead: paths around walls, and the reverb of the space they are in.
- *
- * Decoded with the world's Ambisonic bus (headphones) or to the speaker layout, heights included.
+ * Per place, the early reflections are convolved (directional, Ambisonic) and the tail is a
+ * diffuse reverb at the simulated decay time per band, decoded with the world's Ambisonic bus
+ * (headphones) or to the speaker layout, heights included.
  * ============================================================================================= */
 
 typedef struct vsa_reflection_stats {
     uint32_t struct_size;
     /** Non-zero if the reflections run. */
     uint32_t enabled;
-    /** Sources for single voices (the listener's not counted), and how many are rendering the
-     *  voice's own reflections, waiting for their first simulation, or letting a tail die away. */
+    /** Places (the listener's not counted), and how many are rendering reflections, waiting for
+     *  their first simulation, or letting a tail die away after their sounds ended. */
     uint32_t slots;
     uint32_t live_slots;
     uint32_t waiting_slots;
@@ -905,8 +898,9 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_reflection_stats(vsa_engine* engine, 
 
 typedef struct vsa_reflection_source {
     uint32_t struct_size;
-    /** 0: the listener's reverb; otherwise a voice's own. */
+    /** 0: the listener's own reverb (head-locked sounds); otherwise a place. */
     uint32_t slot;
+    /** The voice that made the place; other sounds within 3 m share it. */
     vsa_voice voice;
     /** Simulated from (scene coordinates; moved out of any solid block). */
     float position[3];

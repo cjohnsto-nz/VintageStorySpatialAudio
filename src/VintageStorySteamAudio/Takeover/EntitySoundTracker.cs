@@ -218,6 +218,45 @@ public sealed class EntitySoundTracker
     }
 }
 
+/// <summary>
+/// The listening player's own sounds (armour, eating, tools): head-locked a little ahead of and
+/// below the ears, like vanilla's own footsteps (played at the head).
+/// <para>
+/// Their true place, the middle of the body, is almost straight below the ears. Panning puts that
+/// mostly on the nadir, which is shared by every ear-level speaker, so they came from the rears
+/// too (a third of their power looking ahead, more looking up, as the listener tilts with the
+/// camera).
+/// </para>
+/// </summary>
+public sealed class OwnBodyAnchor : ISoundAnchor
+{
+    public static readonly OwnBodyAnchor Instance = new();
+
+    private OwnBodyAnchor()
+    {
+    }
+
+    /// <summary>Listener space (+x right, +y up, -z ahead), metres: 18° below straight ahead.</summary>
+    public static Vec3f Position => new(0f, -0.25f, -0.75f);
+
+    public bool Inferred => false;
+
+    /// <summary>Never tracked: the sound is head-locked instead.</summary>
+    public bool TryGetPosition(out double x, out double y, out double z)
+    {
+        x = y = z = 0;
+        return false;
+    }
+
+    /// <summary>Makes a sound head-locked at <see cref="Position"/>.</summary>
+    public static void Place(SoundParams soundParams)
+    {
+        ArgumentNullException.ThrowIfNull(soundParams);
+        soundParams.Position = Position;
+        soundParams.RelativePosition = true;
+    }
+}
+
 /// <summary>A sound's place on an entity: the entity's position plus a fixed offset.</summary>
 internal sealed class EntityAnchor : ISoundAnchor
 {

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "audio/listener_pose.hpp"
-#include "world/air_paths.hpp"
 #include "world/direct_channel.hpp"
 #include "core/latest_value.hpp"
 #include "steam/ipl_handle.hpp"
@@ -35,7 +34,6 @@ struct SourceDebug {
     float transmission[3] = {1.0f, 1.0f, 1.0f};
     float solid_metres = 0.0f;
     uint32_t crossings = 0;
-    float air_path = -1.0f;  // metres around obstacles; -1: no path within reach
 };
 
 struct SimulationStats {
@@ -113,11 +111,6 @@ private:
     steam::Simulator simulator_;
     std::vector<Source> sources_;
     std::vector<Active> active_;         // per tick, reused
-    // Paths through the air from the listener, for the reverb (ADR 0011): recomputed when the
-    // listener changes block, or the scene changed and half a second has passed.
-    AirField air_;
-    std::shared_ptr<const VoxelView> air_view_;
-    std::chrono::steady_clock::time_point air_time_{};
     LatestValue<ListenerPose> listener_;
     double next_offline_ = 0.0;
     bool have_ticked_ = false;

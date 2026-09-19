@@ -61,6 +61,9 @@ Sounds played at a creature or player follow it while they play; vanilla leaves 
   - `Entity`-category sounds and `creature/` / `voice/` assets are matched to the nearest `EntityAgent` (not the local player) whose body (upright axis plus radius, from the selection box) is within `EntitySoundMatchDistance` (1 block).
   - Nothing is matched if a second creature is within 0.5 blocks of the best.
   - Only the height offset is kept: the horizontal one is mostly client interpolation lag.
+- **The player's own sounds** (armour, eating, tools: named at the local player, or at exactly their feet) are head-locked 0.75 m ahead and 0.25 m below the ears (`OwnBodyAnchor`), like vanilla's own footsteps.
+  - **Why:** Chris heard armour and eating from the rear speakers. At mid-body, almost straight below the ears, 7.1.4 VBAP puts most of the sound on the nadir, which is shared by all ear-level speakers, so the rears get it too. The listener tilts with the camera, so looking up makes it worse.
+  - **Modelled rear and side share:** 30% of the power looking level, 46% at +20°, 74% at +60°. Head-locked, it's about 2% whatever the pitch.
 - **What happens when things end:** a sound whose entity leaves `LoadedEntities` stays where it was. Tracking ends when the sound stops.
 - **What isn't tracked:** sounds that entity code loads itself (gait, bees, bells, elevators) are left to their owners, which move them.
 - **Config:** `TrackEntitySounds`, `InferEntitySounds`, `EntitySoundMatchDistance`.
@@ -191,6 +194,14 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
 - **Tests:**
   - six strikes alike, first included (in the open and behind a pillar);
   - air paths: straight in the open, round a pillar, through a doorway, dearer through a door, none out of a sealed room or between diagonal blocks.
+
+### Steam Audio's own way (ADR 0012)
+
+- **Reported (ADR 0011's single reverb):** no directionality, and leaks through walls again.
+- **Now:** every world sound is simulated from where it is (`world/reflection_sim.*` places; `Mixer::assign_place`), no fallback path at all. Sounds within 3 m share a place; places are kept while used (converging), taken over by the longest-idle or a much louder sound, let go after 30 s idle. A new place's first result runs at once (the simulation thread polls every 4 ms); its effects run muted until then so the onset is in their history.
+- **Removed:** the listener reverb for world sounds, spots, `AirField` and `air_path` (ABI v10), `VoiceReflections`. `ReflectionSources` = places (Medium 10, Low 8, High 20, Ultra 32).
+- **Fixed on the way:** the tail's smoothing primed on a new place's empty parameters and crept up from silence (a click at a new place had no tail).
+- **Measured:** six strikes alike from the first (-16 dB open, -19 dB behind a pillar); rendered decay matches simulated; Medium's 10 live places with 32 voices: render p99 18-21 % (budget 25 %; 12 places 22-28 %), a run ~45 ms. Each live place costs ~55 us per block: the next optimisation.
 
 ### To check in game (Chris)
 

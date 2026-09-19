@@ -187,7 +187,12 @@ internal sealed class AudioTakeover : IDisposable
 
         string location = meta.Asset.Location.ToString();
         ISoundAnchor? anchor = entitySounds?.Claim(sound, Environment.TickCount64);
-        if (anchor is not null && anchor.TryGetPosition(out double x, out double y, out double z))
+        if (anchor is OwnBodyAnchor)
+        {
+            OwnBodyAnchor.Place(sound);
+            anchor = null;
+        }
+        else if (anchor is not null && anchor.TryGetPosition(out double x, out double y, out double z))
         {
             sound.Position.Set((float)x, (float)y, (float)z);  // it may have moved while the asset decoded
         }
@@ -218,8 +223,10 @@ internal sealed class AudioTakeover : IDisposable
             return;
         }
 
+        Entity? self = world.Player?.Entity;
         ISoundAnchor? anchor = PlatformPatches.EmittingEntity is { } entity
-            ? EntityAnchor.Named(world, entity, x, y, z)
+            ? entity == self ? OwnBodyAnchor.Instance : EntityAnchor.Named(world, entity, x, y, z)
+            : IsAtFeet(self, x, y, z) ? OwnBodyAnchor.Instance
             : inferEntitySounds && EntitySoundInference.IsEligible(location, soundType) ? InferAnchor(world, x, y, z) : null;
         if (anchor is not null)
         {
@@ -498,6 +505,13 @@ internal sealed class AudioTakeover : IDisposable
     }
 
     // ---- helpers ----
+
+    /// <summary>
+    /// Exactly the player's own position: PlaySoundAt(…, IPlayer) and PlaySoundFor place the
+    /// player's sounds at their feet, from the same numbers.
+    /// </summary>
+    private static bool IsAtFeet(Entity? self, double x, double y, double z) =>
+        self?.Pos is { } pos && x == pos.X && y == pos.InternalY && z == pos.Z;
 
     /// <summary>The creature a coordinates-only sound came from (not the player listening), if it is clear which.</summary>
     private EntityAnchor? InferAnchor(IClientWorldAccessor world, double x, double y, double z)

@@ -14,10 +14,12 @@ public enum ReflectionQuality
 /// <summary>
 /// The reflection presets. What costs is not the rays but rebuilding every source's impulse
 /// response (about 4 ms per source per second of response at order 2): the presets mostly trade
-/// how many voices get reflections of their own, and how long and how detailed those are. Rays
+/// how many places are simulated at once, and how long and how detailed their responses are. Rays
 /// are cheap by comparison and set how noisy each run is, so every preset has plenty.
-/// Measured on a 12-thread desktop (core/test_render_budget.cpp): Medium runs a simulation in
-/// ~40 ms on two threads, and its reflections keep the render thread under 25 % at p99.
+/// Each live place costs the render thread about 55 us per block at order 2 (its convolution and
+/// tail): measured on a 12-thread desktop (core/test_render_budget.cpp), Medium's 10 places keep
+/// the render thread under the 25 % p99 budget with 32 voices, and a simulation run takes ~45 ms
+/// on two threads.
 /// </summary>
 public static class ReflectionPresets
 {
@@ -25,11 +27,11 @@ public static class ReflectionPresets
     {
         ReflectionQuality.Low => new ReflectionQualitySettings
         {
-            Sources = 4, Rays = 2048, Bounces = 8, DurationSeconds = 1.0f, Order = 1, RateHz = 5, TransitionSeconds = 0.08f,
+            Sources = 8, Rays = 2048, Bounces = 8, DurationSeconds = 1.0f, Order = 1, RateHz = 5, TransitionSeconds = 0.08f,
         },
         ReflectionQuality.High => new ReflectionQualitySettings
         {
-            Sources = 16, Rays = 8192, Bounces = 24, DurationSeconds = 1.5f, Order = 2, RateHz = 10, TransitionSeconds = 0.15f,
+            Sources = 20, Rays = 8192, Bounces = 24, DurationSeconds = 1.5f, Order = 2, RateHz = 10, TransitionSeconds = 0.15f,
         },
         ReflectionQuality.Ultra => new ReflectionQualitySettings
         {
@@ -38,7 +40,7 @@ public static class ReflectionPresets
         },
         _ => new ReflectionQualitySettings
         {
-            Sources = 8, Rays = 4096, Bounces = 16, DurationSeconds = 1.0f, Order = 2, RateHz = 10, TransitionSeconds = 0.1f,
+            Sources = 10, Rays = 4096, Bounces = 16, DurationSeconds = 1.0f, Order = 2, RateHz = 10, TransitionSeconds = 0.1f,
         },
     };
 

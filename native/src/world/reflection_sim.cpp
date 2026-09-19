@@ -154,34 +154,53 @@ void ReflectionSimulator::set_threaded(bool threaded) {
 
 void ReflectionSimulator::thread_main() {
     const auto period = std::chrono::microseconds(1'000'000 / std::max(1u, settings_.rate_hz));
+    constexpr auto kPoll = std::chrono::milliseconds(4);  // how soon a new place's first run starts
     auto next = std::chrono::steady_clock::now();
     std::unique_lock lock(thread_mutex_);
     while (!stop_) {
+        const auto now = std::chrono::steady_clock::now();
+        const bool urgent = has_new();
+        if (!urgent && now < next) {
+            wake_.wait_until(lock, std::min(next, now + kPoll), [this] { return stop_; });
+            continue;
+        }
         lock.unlock();
-        const auto started = std::chrono::steady_clock::now();
         try {
-            tick();
+            tick(urgent);
         } catch (const std::exception& e) {
             Log::writef(VSA_LOG_ERROR, "reflection simulation: %s", e.what());
         }
         lock.lock();
-        const auto now = std::chrono::steady_clock::now();
-        // At the rate asked for, but resting at least as long as the run took: whatever the
-        // quality settings, the simulation keeps its threads busy at most half the time.
-        next = std::max(next + period, now + (now - started));
-        wake_.wait_until(lock, next, [this] { return stop_; });
+        const auto done = std::chrono::steady_clock::now();
+        // At the rate asked for, but resting at least as long as each run took: whatever the
+        // quality settings, the simulation keeps its threads busy at most half the time. An
+        // urgent run (new places only) leaves the regular cadence as it was.
+        next = urgent ? std::max(next, done + (done - now)) : std::max(next + period, done + (done - now));
     }
 }
 
 void ReflectionSimulator::offline_tick(double seconds) {
+    if (has_new()) {
+        tick(true);
+    }
     if (!have_ticked_ || seconds >= next_offline_) {
-        tick();
+        tick(false);
         have_ticked_ = true;
         next_offline_ = seconds + 1.0 / std::max(1u, settings_.rate_hz);
     }
 }
 
-void ReflectionSimulator::tick() {
+bool ReflectionSimulator::has_new() const noexcept {
+    for (uint32_t i = 1; i < sources_.size(); ++i) {
+        const uint32_t generation = channel_.input(i).generation.load(std::memory_order_acquire);
+        if (generation != 0 && sources_[i].simulated != generation) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ReflectionSimulator::tick(bool urgent) {
     const auto started = std::chrono::steady_clock::now();
     const ListenerPose pose = listener_.read();
     const std::shared_ptr<const VoxelView> view = scene_.voxel_view();
@@ -196,11 +215,11 @@ void ReflectionSimulator::tick() {
         listener_scene[k] = static_cast<float>(listener_world[k] - origin[k]);
     }
 
-    // Which voice slots run this time: new voices first (their own reflections replace the
-    // listener's reverb only once simulated), then the others round-robin.
+    // Which slots run this time. Urgent: only the new places (their first result). Otherwise
+    // the listener's, then new places, then the rest round-robin.
     const auto count = static_cast<uint32_t>(sources_.size());
     std::vector<bool> run(count, false);
-    run[0] = true;
+    run[0] = !urgent;
     uint32_t budget = per_run();
     uint32_t active = 0;
     for (uint32_t i = 1; i < count; ++i) {
@@ -213,7 +232,7 @@ void ReflectionSimulator::tick() {
         }
     }
     const uint32_t start = cursor_;
-    for (uint32_t n = 0; n + 1 < count && budget > 0; ++n) {
+    for (uint32_t n = 0; !urgent && n + 1 < count && budget > 0; ++n) {
         const uint32_t i = 1 + (start - 1 + n) % (count - 1);
         if (sources_[i].generation != 0 && !run[i]) {
             run[i] = true;
@@ -317,7 +336,6 @@ void ReflectionSimulator::tick() {
             source.simulated = source.generation;
             source.last = d;
         }
-        out.observed.store(source.generation, std::memory_order_release);
     }
 
     std::lock_guard lock(debug_mutex_);
@@ -328,8 +346,8 @@ void ReflectionSimulator::tick() {
     stats_.last_tick_ms = ms;
     stats_.max_tick_ms = std::max(stats_.max_tick_ms, ms);
     stats_.simulate_ms = simulate_ms;
-    if (!debug_.empty()) {
-        std::copy_n(debug_[0].reverb_times, 3, stats_.listener_reverb_times);
+    if (sources_[0].simulated != 0) {
+        std::copy_n(sources_[0].last.reverb_times, 3, stats_.listener_reverb_times);
     }
     std::copy_n(listener_scene, 3, stats_.listener);
 }

@@ -91,12 +91,10 @@ struct RenderVoice {
     float level = 0.0f;
     /// The same without walls: what decides who gets reflections of their own.
     float open_level = 0.0f;
-    /// Reflection slot of its own (>= 1), or -1: its reflections come from the listener's reverb.
+    /// The place (a reflection slot >= 1) whose simulation its reflections come from, or -1
+    /// (ADR 0012), and that place's generation when it joined: the place may have been taken over.
     int reflection_slot = -1;
-    /// Has sent to the reflections since it started (its onset goes straight to a ready slot).
-    bool reverb_routed = false;
-    /// 0 = sends to the listener's reverb, 1 = to its own slot (cross-fades when that is ready).
-    float reverb_own = 0.0f;
+    uint32_t place_generation = 0;
     /// Panned (speakers), its own HRTF (headphones, within the binaural budget) or the world
     /// ambisonic bus (headphones, beyond it).
     SpatialTier tier = SpatialTier::Panned;

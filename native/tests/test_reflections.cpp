@@ -273,9 +273,9 @@ TEST_CASE("reflections: nothing is added when they are off") {
     CHECK(late[0] > 1e-4);
 }
 
-TEST_CASE("reflections: with voices' own reflections on, lasting sounds get them; short ones feed the listener's reverb") {
+TEST_CASE("reflections: every sound is simulated from where it is; sounds within 3 m share a place") {
     const Room room{12, 6, 12};
-    OfflineEngine e(reflection_config(8));
+    OfflineEngine e(reflection_config());
     set_materials(e);
     build(e, &room);
     e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
@@ -283,33 +283,32 @@ TEST_CASE("reflections: with voices' own reflections on, lasting sounds get them
     const AssetPtr blip = e.pcm(burst(0.2), 1, kRate);
     const vsa_voice looping = e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(), room.cz());
     REQUIRE(vsa_voice_start(e.engine, looping) == VSA_OK);
-    REQUIRE(vsa_voice_start(e.engine, one_shot(e, blip, room.cx() - 4.0f, room.cy(), room.cz())) == VSA_OK);
+    const vsa_voice short_one = one_shot(e, blip, room.cx() - 4.0f, room.cy(), room.cz());
+    REQUIRE(vsa_voice_start(e.engine, short_one) == VSA_OK);
     e.render(kRate / 2);
-    CHECK(stats(e).live_slots == 1);
-    const std::vector<vsa_reflection_source> list = sources(e);
-    REQUIRE(list.size() == 2);
+    vsa_reflection_stats s = stats(e);
+    CHECK(s.slots == 10);
+    CHECK(s.live_slots == 2);  // a place each: 7 m apart
+    std::vector<vsa_reflection_source> list = sources(e);
+    REQUIRE(list.size() == 3);
     CHECK(list[0].slot == 0);
     CHECK(list[0].voice == 0);
-    CHECK(list[1].voice == looping);
-    CHECK(static_cast<double>(list[1].position[0]) == doctest::Approx(static_cast<double>(room.cx() + 3.0f)));
-    CHECK(list[1].reverb_times[1] > 0.3f);
+    const auto own = std::find_if(list.begin(), list.end(), [&](const vsa_reflection_source& r) { return r.voice == looping; });
+    REQUIRE(own != list.end());
+    CHECK(static_cast<double>(own->position[0]) == doctest::Approx(static_cast<double>(room.cx() + 3.0f)));
+    CHECK(own->reverb_times[1] > 0.3f);
+    const auto blips = std::find_if(list.begin(), list.end(), [&](const vsa_reflection_source& r) { return r.voice == short_one; });
+    REQUIRE(blips != list.end());
+    CHECK(static_cast<double>(blips->position[0]) == doctest::Approx(static_cast<double>(room.cx() - 4.0f)));
+
+    // Sounds within 3 m of a place share it: no new places.
+    REQUIRE(vsa_voice_start(e.engine, one_shot(e, blip, room.cx() + 4.5f, room.cy(), room.cz() + 1.0f)) == VSA_OK);
+    REQUIRE(vsa_voice_start(e.engine, one_shot(e, blip, room.cx() - 3.0f, room.cy(), room.cz() - 1.0f)) == VSA_OK);
+    e.render(kRate / 2);
+    CHECK(stats(e).live_slots == 2);
+    CHECK(sources(e).size() == 3);
 }
 
-TEST_CASE("reflections: by default every sound feeds the listener's reverb, and none has its own") {
-    const Room room{12, 6, 12};
-    OfflineEngine e(reflection_config());
-    set_materials(e);
-    build(e, &room);
-    e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
-    const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
-    REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(), room.cz())) == VSA_OK);
-    e.render(kRate / 2);
-    const vsa_reflection_stats s = stats(e);
-    CHECK(s.slots == 0);
-    CHECK(s.live_slots == 0);
-    CHECK(sources(e).size() == 1);
-    CHECK(s.output_db > -40.0f);
-}
 TEST_CASE("reflections: a sound behind walls reverberates only as much as reaches the listener") {
     // The listener in a closed stone room; a short sound inside it, or outside it.
     // Its first play has no spot yet and excites the listener's reverb: by what arrives, walls
@@ -342,82 +341,76 @@ TEST_CASE("reflections: a sound behind walls reverberates only as much as reache
 
 TEST_CASE("reflections: a sound's reverb scales with its direct sound, whatever its reference distance") {
     // Game sounds keep full level within a reference distance (3 m and more): the same sound at
-    // 3 m with a reference of 1 m is 9.5 dB quieter than with 8 m, direct and reflected alike,
-    // through the listener's reverb and through reflections of its own.
+    // 3 m with a reference of 1 m is 9.5 dB quieter than with 8 m, direct and reflected alike.
     const Room room{12, 6, 12};
-    for (const uint32_t own : {0u, 1u}) {
-        CAPTURE(own);
-        double level_db[2] = {};
-        for (const float reference : {1.0f, 8.0f}) {
-            OfflineEngine e(reflection_config(own));
-            set_materials(e);
-            build(e, &room);
-            e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
-            const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
-            REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(),
-                                                            room.cz(), reference)) == VSA_OK);
-            e.render(static_cast<std::size_t>(kRate) * 2);
-            REQUIRE(stats(e).live_slots == own);
-            level_db[reference > 1.0f ? 1 : 0] = static_cast<double>(stats(e).output_db);
-        }
-        MESSAGE((own != 0 ? "own reflections: " : "listener's reverb: ") << level_db[1] - level_db[0]
-                << " dB louder with an 8 m reference (direct: 9.5 dB)");
-        CHECK(level_db[1] - level_db[0] == doctest::Approx(9.54).epsilon(0.15));
+    double level_db[2] = {};
+    for (const float reference : {1.0f, 8.0f}) {
+        OfflineEngine e(reflection_config());
+        set_materials(e);
+        build(e, &room);
+        e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+        const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
+        REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(), room.cz(),
+                                                        reference)) == VSA_OK);
+        e.render(static_cast<std::size_t>(kRate) * 2);
+        REQUIRE(stats(e).live_slots == 1);
+        level_db[reference > 1.0f ? 1 : 0] = static_cast<double>(stats(e).output_db);
     }
+    MESSAGE("reflections " << level_db[1] - level_db[0] << " dB louder with an 8 m reference (direct: 9.5 dB)");
+    CHECK(level_db[1] - level_db[0] == doctest::Approx(9.54).epsilon(0.15));
 }
-TEST_CASE("reflections: slots are handed on as voices come and go") {
+TEST_CASE("reflections: places are kept for repeated sounds, taken over by louder ones, and let go when idle") {
     const Room room{12, 6, 12};
     OfflineEngine e(reflection_config(4));
     set_materials(e);
     build(e, &room);
     e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
     const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
+    // Five lasting sounds well apart (more than 3 m), four quiet and one loud, with four places.
+    const float spots[5][2] = {{3.0f, 3.5f}, {7.5f, 3.5f}, {12.0f, 3.5f}, {3.0f, 12.0f}, {12.0f, 12.0f}};
     std::vector<vsa_voice> voices;
-    for (int i = 0; i < 10; ++i) {
-        const double angle = 2.0 * std::numbers::pi * i / 10.0;
-        voices.push_back(e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 4.0f * static_cast<float>(std::cos(angle)),
-                                      room.cy(), room.cz() + 4.0f * static_cast<float>(std::sin(angle)),
-                                      1.0f, 0.1f + 0.08f * static_cast<float>(i)));
+    for (int i = 0; i < 5; ++i) {
+        voices.push_back(e.positioned(tone, VSA_SPATIAL_WORLD, spots[i][0], room.cy(), spots[i][1], 1.0f, i == 4 ? 0.8f : 0.1f));
         REQUIRE(vsa_voice_start(e.engine, voices.back()) == VSA_OK);
+        e.render(kRate / 10);
     }
     e.render(kRate);
     vsa_reflection_stats s = stats(e);
     CHECK(s.slots == 4);
     CHECK(s.live_slots == 4);
-    // The four loudest (the last four) have them.
     std::vector<vsa_reflection_source> list = sources(e);
-    for (const vsa_reflection_source& source : list) {
-        if (source.slot > 0) {
-            CHECK(std::find(voices.end() - 4, voices.end(), source.voice) != voices.end());
-        }
-    }
-    // Stop the loudest four: their slots drain and go to the next four.
-    for (std::size_t i = 6; i < 10; ++i) {
-        REQUIRE(vsa_voice_stop(e.engine, voices[i]) == VSA_OK);
-    }
-    std::vector<float> out = e.render(static_cast<std::size_t>(kRate) * 4);
-    for (const float x : out) {
-        REQUIRE(std::isfinite(x));
-    }
-    s = stats(e);
-    CHECK(s.live_slots == 4);
-    list = sources(e);
-    for (const vsa_reflection_source& source : list) {
-        if (source.slot > 0) {
-            CHECK(std::find(voices.begin() + 2, voices.begin() + 6, source.voice) != voices.begin() + 6);
-        }
-    }
-    // Everything stops: every slot drains and is free again.
+    REQUIRE(list.size() == 5);
+    // The loud one took a quiet one's place.
+    CHECK(std::any_of(list.begin(), list.end(), [&](const vsa_reflection_source& r) { return r.voice == voices[4]; }));
+
+    // Everything stops: the places stay (idle), ready for the next sound there; a sound
+    // somewhere new takes the one unused the longest.
     for (const vsa_voice v : voices) {
         REQUIRE(vsa_voice_stop(e.engine, v) == VSA_OK);
     }
-    e.render(static_cast<std::size_t>(kRate) * 5);
+    e.render(static_cast<std::size_t>(kRate) * 3);
+    s = stats(e);
+    CHECK(s.live_slots == 4);
+    CHECK(s.draining_slots == 0);
+    const vsa_voice newcomer = e.positioned(tone, VSA_SPATIAL_WORLD, 7.5f, room.cy(), 12.0f);
+    REQUIRE(vsa_voice_start(e.engine, newcomer) == VSA_OK);
+    e.render(kRate / 2);
+    list = sources(e);
+    REQUIRE(list.size() == 5);
+    CHECK(std::any_of(list.begin(), list.end(), [&](const vsa_reflection_source& r) { return r.voice == newcomer; }));
+    REQUIRE(vsa_voice_stop(e.engine, newcomer) == VSA_OK);
+
+    // Idle for half a minute: the places are let go, their slots drain and are free again.
+    std::vector<float> out = e.render(static_cast<std::size_t>(kRate) * 33);
+    for (std::size_t i = 0; i < out.size(); i += 97) {
+        REQUIRE(std::isfinite(out[i]));
+    }
     s = stats(e);
     CHECK(s.live_slots == 0);
     CHECK(s.waiting_slots == 0);
     CHECK(s.draining_slots == 0);
+    CHECK(sources(e).size() == 1);
 }
-
 TEST_CASE("reflections: the gain scales them") {
     const Room room{4, 3, 4};
     OfflineEngine e(reflection_config());
@@ -551,8 +544,10 @@ TEST_CASE("reflections: every strike sounds alike, the first as the rest") {
             list += std::to_string(static_cast<int>(std::lround(p))) + " ";
         }
         MESSAGE((pillar ? "behind a pillar" : "in the open") << ": reflection peaks per strike (dB): " << list);
+        // The first strike makes the place; its earliest reflections (before the first result,
+        // a block or two) are lost, the rest are heard: within a decibel of the others.
         const auto [lo, hi] = std::minmax_element(peaks.begin(), peaks.end());
         CHECK(*lo > -80.0);
-        CHECK(*hi - *lo < 1.0);
+        CHECK(*hi - *lo < 1.5);
     }
 }

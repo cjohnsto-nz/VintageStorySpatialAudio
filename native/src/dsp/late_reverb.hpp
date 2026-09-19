@@ -26,7 +26,9 @@ public:
     /// Adds this block's kOutputs outputs (each `frames` long) to `out`.
     /// `rt60`: decay times per band, seconds. `level`: amplitude per band of the tail's start
     /// (Steam Audio's hybrid EQ). `predelay`: samples from the input to the tail's first echoes.
-    /// Parameters are smoothed over about a second: each simulation run's estimate is noisy. Returns false (writing nothing) when the input is
+    /// Parameters are smoothed over about a second: each simulation run's estimate is noisy.
+    /// All-zero parameters mean no result yet: nothing is injected, the input waits in the
+    /// pre-delay. Returns false (writing nothing) when the input is
     /// silent and the tail has died away.
     bool process(const float* in, uint32_t frames, const float rt60[3], const float level[3], uint32_t predelay,
                  float* const* out) noexcept;

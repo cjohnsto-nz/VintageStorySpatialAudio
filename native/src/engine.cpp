@@ -108,10 +108,7 @@ Engine::Settings validate(const vsa_engine_config& config) {
         }
         out = value;
     };
-    if (config.reflection_sources > 64) {
-        throw invalid("reflection_sources " + std::to_string(config.reflection_sources) + " exceeds 64");
-    }
-    r.sources = config.reflection_sources;  // 0 = none
+    range(config.reflection_sources, 1, 64, "reflection_sources", r.sources);
     range(config.reflection_rays, 256, 32768, "reflection_rays", r.rays);
     range(config.reflection_bounces, 1, 64, "reflection_bounces", r.bounces);
     range_f(config.reflection_duration, 0.25f, 4.0f, "reflection_duration", r.duration);

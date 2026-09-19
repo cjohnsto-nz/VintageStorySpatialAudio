@@ -1,6 +1,6 @@
 # ADR 0011: One listener reverb that every sound feeds by what reaches the listener
 
-**Status:** Accepted, 19 Sep 2026. Supersedes ADR 0010; amends ADR 0009.
+**Status:** Superseded by ADR 0012 (19 Sep 2026). Was: accepted, 19 Sep 2026, superseding ADR 0010.
 
 ## Context
 

@@ -6,7 +6,6 @@
 #include "world/world_scene.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <shared_mutex>
 #include <string>
 
@@ -148,18 +147,6 @@ void DirectSimulator::tick() {
     for (int k = 0; k < 3; ++k) {
         listener_scene[k] = static_cast<float>(listener_world[k] - origin[k]);
     }
-    {
-        bool moved = !air_.computed();
-        for (int k = 0; k < 3 && !moved; ++k) {
-            moved = static_cast<int64_t>(std::floor(listener_world[k])) != air_.centre()[k];
-        }
-        const bool changed = view != air_view_ && started - air_time_ >= std::chrono::milliseconds(500);
-        if (moved || changed) {
-            air_.compute(*view, listener_world);
-            air_view_ = view;
-            air_time_ = started;
-        }
-    }
 
     channel_.scene_has_chunks.store(view->chunk_count() > 0, std::memory_order_relaxed);
     std::vector<Active>& active = active_;
@@ -210,8 +197,6 @@ void DirectSimulator::tick() {
             radius = std::min(radius, static_cast<float>(kClear));
         }
         view->clearance(a.world, static_cast<double>(radius));
-        const double air = air_.distance(a.world);
-        a.debug.air_path = air == AirField::kNone ? -1.0f : static_cast<float>(air);
         for (int k = 0; k < 3; ++k) {
             a.debug.simulated_position[k] = static_cast<float>(a.world[k] - origin[k]);
         }
@@ -258,7 +243,6 @@ void DirectSimulator::tick() {
         a.debug.crossings = trace.crossings;
         DirectOutput& out = channel_.output(a.set);
         out.occlusion.store(a.debug.occlusion, std::memory_order_relaxed);
-        out.air_path.store(a.debug.air_path, std::memory_order_relaxed);
         for (int b = 0; b < 3; ++b) {
             a.debug.transmission[b] = trace.blocked() ? trace.gain(b) : kEdgeTransmission[b];
             out.transmission[b].store(a.debug.transmission[b], std::memory_order_relaxed);

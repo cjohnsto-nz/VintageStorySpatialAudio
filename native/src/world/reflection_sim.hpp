@@ -28,8 +28,9 @@ class WorldScene;
 /// (about 4 ms per source per second of response at order 2), not the rays: sources, duration and
 /// order are the expensive settings.
 struct ReflectionSettings {
-    /// Voices with reflections of their own (0: none, every sound shares the listener's reverb).
-    uint32_t sources = 0;
+    /// Places simulated at once (sounds within 3 m of one another share one). Each live place
+    /// costs the render thread about 55 us per block at order 2 (its convolution and tail).
+    uint32_t sources = 10;
     uint32_t rays = 4096;
     uint32_t bounces = 16;
     /// Impulse response length, seconds.
@@ -57,8 +58,8 @@ struct ReflectionSlotDebug {
 };
 
 struct ReflectionStats {
-    uint32_t slots = 0;   // per-voice slots (the listener's reverb not counted)
-    uint32_t active = 0;  // per-voice slots simulated in the latest tick
+    uint32_t slots = 0;   // places (the listener's reverb not counted)
+    uint32_t active = 0;  // places in use at the latest tick
     uint64_t ticks = 0;
     double last_tick_ms = 0.0;
     double max_tick_ms = 0.0;
@@ -68,12 +69,13 @@ struct ReflectionStats {
     ReflectionSettings settings;
 };
 
-/// The reflection simulation (Phase 6, ADR 0009): Steam Audio's real-time ray-traced reflections
-/// against the world scene, with the hybrid reverb parameters, for a fixed pool of sources: slot
-/// 0 at the listener (the reverb every other sound shares) and one per voice the render thread
-/// gives a slot. Sources and their impulse-response buffers live as long as this object, so the
-/// render thread's effects can hold on to them. Runs on its own thread at up to `rate_hz` while a
-/// device plays, or synchronously from offline rendering (deterministic).
+/// The reflection simulation (Phase 6, ADRs 0009 and 0012): Steam Audio's real-time ray-traced
+/// reflections against the world scene, with the hybrid reverb parameters, for a fixed pool of
+/// sources: slot 0 at the listener (for head-locked sounds) and one per place the render thread
+/// makes. Sources and their impulse-response buffers live as long as this object, so the render
+/// thread's effects can hold on to them. Runs on its own thread at up to `rate_hz` while a device
+/// plays (a new place's first result at once), or synchronously from offline rendering
+/// (deterministic).
 ///
 /// Its sample rate and block size are those of the output (the impulse responses are partitioned
 /// for the render block): the engine rebuilds it when they change.
@@ -102,8 +104,11 @@ public:
     [[nodiscard]] bool threaded() const noexcept { return thread_.joinable(); }
     /// Offline rendering: called before each block with the output's elapsed time.
     void offline_tick(double seconds);
-    /// One simulation run. Not concurrent with itself.
-    void tick();
+    /// One simulation run. Not concurrent with itself. Urgent: only the places that have never
+    /// been simulated (their first result, wanted at once).
+    void tick(bool urgent = false);
+    /// Whether any place awaits its first result.
+    [[nodiscard]] bool has_new() const noexcept;
 
     [[nodiscard]] ReflectionStats stats() const;
     [[nodiscard]] std::vector<ReflectionSlotDebug> slots() const;
@@ -120,9 +125,10 @@ private:
         uint32_t held_generation = 0;
     };
 
-    /// Voice slots simulated per run: at most half of them (at least 4), round-robin, so each
-    /// run costs less and fewer impulse responses change at once on the render thread.
-    [[nodiscard]] uint32_t per_run() const noexcept { return std::max(4u, (settings_.sources + 1) / 2); }
+    /// Places simulated per run: a quarter of them (at least 4), round-robin, so each run costs
+    /// less and fewer impulse responses change at once on the render thread (each change doubles
+    /// that block's convolution for its cross-fade). Places refine over several runs anyway.
+    [[nodiscard]] uint32_t per_run() const noexcept { return std::max(4u, (settings_.sources + 3) / 4); }
 
     void thread_main();
 

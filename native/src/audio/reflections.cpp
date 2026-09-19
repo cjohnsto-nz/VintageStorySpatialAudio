@@ -154,15 +154,29 @@ void ReflectionRenderer::set_position(int slot, const float position[3]) noexcep
     }
 }
 
-void ReflectionRenderer::release(int slot) noexcept {
+void ReflectionRenderer::reassign(int slot, vsa_voice voice) noexcept {
     if (slot <= 0) {
         return;
     }
     const auto i = static_cast<uint32_t>(slot);
     Slot& s = slots_[i];
+    iplReflectionEffectReset(s.early.get());
+    s.late.reset();
+    s.early_tail = 0;
+    s.late_sounding = false;
+    s.generation = s.generation + 1 == 0 ? 1 : s.generation + 1;
+    s.state = State::Waiting;
+    s.sent = false;
+    channel_->input(i).voice.store(voice, std::memory_order_relaxed);
+}
+
+void ReflectionRenderer::release(int slot) noexcept {
+    if (slot <= 0) {
+        return;
+    }
+    const auto i = static_cast<uint32_t>(slot);
     channel_->input(i).generation.store(0, std::memory_order_release);
-    s.state = State::Draining;
-    s.flushed = false;
+    slots_[i].state = State::Draining;
 }
 
 bool ReflectionRenderer::ready(int slot) const noexcept {
@@ -196,10 +210,10 @@ bool ReflectionRenderer::take_results(uint32_t index, Slot& slot) noexcept {
     return true;
 }
 
-void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush) noexcept {
+void ReflectionRenderer::render_slot(Slot& slot, bool input, bool audible) noexcept {
     const float* in = input ? slot.send.data() : silence_.data();
     const auto frames = static_cast<IPLint32>(frames_);
-    if (input || slot.early_tail > 0 || flush) {
+    if (input || slot.early_tail > 0) {
         float* in_channels[1] = {const_cast<float*>(in)};
         IPLAudioBuffer in_buffer{1, frames, in_channels};
         IPLAudioBuffer out_buffer{static_cast<IPLint32>(channels_), frames, early_out_.data()};
@@ -209,15 +223,17 @@ void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush) noexcep
         params.numChannels = static_cast<IPLint32>(channels_);
         params.irSize = static_cast<IPLint32>(early_blocks_ * frames_);
         iplReflectionEffectApply(slot.early.get(), &params, &in_buffer, &out_buffer, nullptr);
-        const float* g = early_gain_buf_.data();
-        for (uint32_t c = 0; c < channels_; ++c) {
-            const float* x = early_out_[c];
-            float* sum = bus_[c];
-            for (uint32_t j = 0; j < frames_; ++j) {
-                sum[j] += x[j] * g[j];
+        if (audible) {
+            const float* g = early_gain_buf_.data();
+            for (uint32_t c = 0; c < channels_; ++c) {
+                const float* x = early_out_[c];
+                float* sum = bus_[c];
+                for (uint32_t j = 0; j < frames_; ++j) {
+                    sum[j] += x[j] * g[j];
+                }
             }
+            bus_used_ = true;
         }
-        bus_used_ = true;
         if (input) {
             slot.early_tail = early_blocks_;
         } else if (slot.early_tail > 0) {
@@ -228,7 +244,7 @@ void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush) noexcep
     std::fill(late_storage_.begin(), late_storage_.end(), 0.0f);
     const uint32_t predelay = static_cast<uint32_t>(std::max(0, slot.delay));
     slot.late_sounding = slot.late.process(in, frames_, slot.reverb_times, slot.eq, predelay, late_out_.data());
-    if (slot.late_sounding) {
+    if (slot.late_sounding && audible) {
         const float* tail = tail_gain_buf_.data();
         for (int k = 0; k < dsp::LateReverb::kOutputs; ++k) {
             const float* x = late_out_[static_cast<std::size_t>(k)];
@@ -267,31 +283,23 @@ bool ReflectionRenderer::render(const float* gain) noexcept {
                 if (take_results(i, slot)) {
                     slot.state = State::Live;
                 }
-                if (slot.state == State::Waiting) {
-                    ++waiting;  // its voice is heard through the listener's reverb meanwhile
-                    break;
-                }
                 if (slot.sent || slot.early_tail > 0 || slot.late_sounding) {
-                    render_slot(slot, slot.sent, false);
+                    // Waiting: the effects take the input into their history, muted.
+                    render_slot(slot, slot.sent, slot.state == State::Live);
                 }
-                live += i > 0 ? 1u : 0u;  // voices' own, not the listener's
+                if (i > 0) {  // places, not the listener's
+                    live += slot.state == State::Live ? 1u : 0u;
+                    waiting += slot.state == State::Waiting ? 1u : 0u;
+                }
                 break;
-            case State::Draining: {
-                // Nothing more for the old voice can arrive once a simulation tick has started
-                // without it; one more pass through the effect then takes whatever is in flight.
-                const bool acknowledged = channel_->output(i).observed.load(std::memory_order_acquire) == 0;
-                const bool flush = acknowledged && !slot.flushed;
-                if (slot.early_tail > 0 || slot.late_sounding || flush) {
-                    render_slot(slot, false, flush);
-                    slot.flushed = slot.flushed || flush;
-                }
-                if (slot.flushed && slot.early_tail == 0 && !slot.late_sounding) {
-                    slot.state = State::Free;
-                } else {
+            case State::Draining:
+                if (slot.early_tail > 0 || slot.late_sounding) {
+                    render_slot(slot, false, true);
                     ++draining;
+                } else {
+                    slot.state = State::Free;
                 }
                 break;
-            }
         }
     }
     meter_.live_slots.store(live, std::memory_order_relaxed);

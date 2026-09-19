@@ -329,10 +329,12 @@ TEST_CASE("the reflections' render path never allocates") {
     engine.reflection_simulator()->set_threaded(true);
     AssetRef tone(pcm_asset(engine, vsa_test::sine(440.0, 48000.0, 48000, 0.2f), 1, 48000));
     AssetRef blip(pcm_asset(engine, vsa_test::sine(880.0, 48000.0, 4800, 0.2f), 1, 48000));
+    // Six lasting sounds more than 3 m apart (six places wanted) with four place slots: the
+    // louder take over the quieter's.
     std::vector<vsa_voice> voices;
     for (int i = 0; i < 6; ++i) {
         voices.push_back(voice(engine, tone.asset, VSA_BUS_ENTITY, 0.2f + 0.1f * static_cast<float>(i), 1.0f, true,
-                               VSA_SPATIAL_WORLD, 4.0f + static_cast<float>(i), 5.0f));
+                               VSA_SPATIAL_WORLD, 3.0f + 4.0f * static_cast<float>(i % 3), i < 3 ? 5.0f : 10.0f));
         engine.start_voice(voices.back());
     }
     settle(engine, 4);
@@ -384,15 +386,13 @@ TEST_CASE("the reflections' render path never allocates") {
     CHECK(engine.reflection_report().stats.ticks > 5);
 }
 
-TEST_CASE("reflections render within budget at the Medium quality, voices' own reflections on") {
+TEST_CASE("reflections render within budget at the Medium quality, every place in use") {
     // The phase's CPU budget (PLAN section 9): the render thread under 25 % of the block period at
-    // p99 with eight voices' reflections and the listener's reverb among 32 voices; a simulation
-    // run within its 100 ms period on the default threads (which, resting as long as it runs,
-    // keeps the simulation under one core at two threads).
+    // p99 with 32 voices in a room, every one of Medium's 10 places in use; a simulation run
+    // within its 100 ms period on the default threads (which, resting as long as it runs, keeps
+    // the simulation under one core at two threads).
     for (const vsa_render_mode mode : {VSA_RENDER_HEADPHONES, VSA_RENDER_SPEAKERS}) {
-        vsa_engine_config config = reflection_config();
-        config.reflection_sources = 8;  // the worst case: Medium with voices' own reflections on
-        vsa::Engine engine(config);
+        vsa::Engine engine(reflection_config());
         engine.set_render_mode(mode);
         build_room(engine);
         engine.set_listener(in_room());
@@ -405,13 +405,14 @@ TEST_CASE("reflections render within budget at the Medium quality, voices' own r
         }
         engine.reflection_simulator()->set_threaded(true);
         AssetRef mono(pcm_asset(engine, vsa_test::sine(440.0, 48000.0, 48000, 0.1f), 1, 48000));
+        // Ten sounds on a grid 3.5 m apart (ten places), and the rest 1 m from one of them.
         for (int i = 0; i < 32; ++i) {
-            const double angle = 2.0 * 3.14159265 * i / 32.0;
-            engine.start_voice(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.1f, 1.0f, true, VSA_SPATIAL_WORLD,
-                                     8.0f + 4.0f * static_cast<float>(std::cos(angle)),
-                                     8.0f + 4.0f * static_cast<float>(std::sin(angle))));
+            const int at = i % 10;
+            const float x = 2.75f + 3.5f * static_cast<float>(at % 4) + (i >= 10 ? 1.0f : 0.0f);
+            const float z = 2.75f + 3.5f * static_cast<float>(at / 4);
+            engine.start_voice(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.1f, 1.0f, true, VSA_SPATIAL_WORLD, x, z));
         }
-        settle(engine, 8);
+        settle(engine, 10);
         const uint32_t block = engine.settings().block_frames;
         std::vector<float> out(static_cast<std::size_t>(block) * 12);
         // The best of five 2-second windows half a second apart: a transient load elsewhere (the
@@ -435,10 +436,10 @@ TEST_CASE("reflections render within budget at the Medium quality, voices' own r
         }
         const double period = 1e6 * block / 48000.0;
         const vsa::Engine::ReflectionReport report = engine.reflection_report();
-        MESSAGE(std::string(mode == VSA_RENDER_HEADPHONES ? "headphones" : "7.1.4") << ", 32 voices, 8 with reflections: render p50 "
+        MESSAGE(std::string(mode == VSA_RENDER_HEADPHONES ? "headphones" : "7.1.4") << ", 32 voices at 10 places: render p50 "
                 << p50 << " us (" << 100.0 * p50 / period << " %), p99 " << p99 << " us (" << 100.0 * p99 / period
                 << " %); simulation " << report.stats.last_tick_ms << " ms (worst " << report.stats.max_tick_ms << " ms)");
-        CHECK(report.live == 8);
+        CHECK(report.live == 10);
 #if defined(NDEBUG)
         CHECK(p99 < 0.25 * period);
         CHECK(report.stats.last_tick_ms < 100.0);

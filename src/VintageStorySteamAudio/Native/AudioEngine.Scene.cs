@@ -126,7 +126,6 @@ public sealed record SceneRayHit(
 /// <param name="Transmission">Amplitude per band through what is in the way.</param>
 /// <param name="SolidMetres">Metres of material on the centre line.</param>
 /// <param name="Crossings">Materials the centre line entered.</param>
-/// <param name="AirPath">Metres from the listener through the air, around obstacles (within 24 blocks); -1 if none. What the reverb is fed by when louder than the straight line.</param>
 public sealed record SourceDebugInfo(
     ulong Voice,
     (float X, float Y, float Z) Position,
@@ -135,8 +134,7 @@ public sealed record SourceDebugInfo(
     float Occlusion,
     (float Low, float Mid, float High) Transmission,
     float SolidMetres,
-    int Crossings,
-    float AirPath)
+    int Crossings)
 {
     /// <summary>The direct sound's gain per band: the visible part plus what passes through.</summary>
     public (float Low, float Mid, float High) Gain =>
@@ -170,10 +168,10 @@ public sealed record SimulationStats(
 
 /// <summary>The reflection simulation (Phase 6), for debugging views.</summary>
 /// <param name="Enabled">Whether reflections run.</param>
-/// <param name="Slots">Voices that can have reflections of their own.</param>
-/// <param name="LiveSlots">Voices hearing their own reflections now.</param>
-/// <param name="WaitingSlots">Voices given a slot, waiting for its first simulation.</param>
-/// <param name="DrainingSlots">Slots letting a stopped voice's tail die away.</param>
+/// <param name="Slots">Places that can be simulated at once (sounds within 3 m share one).</param>
+/// <param name="LiveSlots">Places with reflections now.</param>
+/// <param name="WaitingSlots">Places waiting for their first simulation.</param>
+/// <param name="DrainingSlots">Places let go, their tails dying away.</param>
 /// <param name="Rays">Rays per simulation.</param>
 /// <param name="Bounces">Bounces per ray.</param>
 /// <param name="Order">Ambisonic order.</param>
@@ -212,8 +210,8 @@ public sealed record ReflectionStats(
     (float X, float Y, float Z) Listener);
 
 /// <summary>One simulated reflection source.</summary>
-/// <param name="Slot">0: the listener's reverb, which every other sound shares; otherwise a voice's own.</param>
-/// <param name="Voice">The voice (0 for the listener's reverb).</param>
+/// <param name="Slot">0: the listener's own reverb (head-locked sounds); otherwise a place.</param>
+/// <param name="Voice">The voice that made the place (0 for the listener's reverb); sounds within 3 m share it.</param>
 /// <param name="Position">Simulated from (scene coordinates).</param>
 /// <param name="ReverbTimes">Decay time per band, seconds.</param>
 /// <param name="Eq">The tail's starting level per band.</param>
@@ -477,8 +475,7 @@ public sealed partial class AudioEngine
                 d.Occlusion,
                 (d.Transmission[0], d.Transmission[1], d.Transmission[2]),
                 d.SolidMetres,
-                (int)d.Crossings,
-                d.AirPath));
+                (int)d.Crossings));
         }
 
         return result;

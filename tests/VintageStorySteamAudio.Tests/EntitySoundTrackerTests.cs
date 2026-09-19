@@ -62,6 +62,25 @@ public sealed class EntitySoundTrackerTests
         Assert.Null(PlatformPatches.EmittingEntity);
     }
 
+    [Fact]
+    public void The_players_own_sounds_are_head_locked_ahead_and_a_little_below()
+    {
+        var soundParams = new SoundParams { Position = new Vec3f(512000.5f, 110.9f, 511999.25f), Range = 16 };
+        OwnBodyAnchor.Place(soundParams);
+        VoicePlacement placement = SteamAudioSound.Placement(soundParams, new SceneOrigin(512000, 100, 512000));
+
+        // Listener space, -z ahead: well in front, below ear level but far from the nadir, and far
+        // enough from the head to keep its direction.
+        Assert.Equal(SpatialMode.Listener, placement.Mode);
+        Assert.Equal(0f, placement.X);
+        float distance = MathF.Sqrt((placement.Y * placement.Y) + (placement.Z * placement.Z));
+        float elevation = MathF.Asin(placement.Y / distance) * 180f / MathF.PI;
+        Assert.True(placement.Z < 0);
+        Assert.InRange(elevation, -25f, -10f);
+        Assert.InRange(distance, 0.6f, 1f);
+        Assert.False(OwnBodyAnchor.Instance.TryGetPosition(out _, out _, out _));
+    }
+
     [Theory]
     [InlineData("sounds/creature/wolf/growl", EnumSoundType.Sound, true)]
     [InlineData("sounds/voice/saxophone", EnumSoundType.Sound, true)]

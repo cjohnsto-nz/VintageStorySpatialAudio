@@ -114,11 +114,12 @@ private:
     int acquire_effects(uint32_t slot, float level) noexcept;
     void release_effects(RenderVoice& v) noexcept;
     void update_binaural_threshold() noexcept;
-    /// Gives a reflection slot of its own (when voices have them at all) to the loudest eligible
-    /// voice without one, taking the quietest one's if it is much quieter: once per block.
-    void update_reflection_slots() noexcept;
-    [[nodiscard]] bool reflection_candidate(const VoiceSlot& s) const noexcept;
-    void release_reflections(RenderVoice& v) noexcept;
+    /// Start of a block: places' levels start over; those nothing has used for a while are let go.
+    void update_places() noexcept;
+    /// A place for the voice (ADR 0012): the nearest within kPlaceRadius; else a free slot; else
+    /// the place unused the longest, or a much quieter one's. -1 if none can be had.
+    int assign_place(VoiceSlot& s) noexcept;
+    void leave_place(RenderVoice& v) noexcept;
     /// Feeds a positioned voice's signal (all gains but distance applied) to its reflections.
     void send_reflections(VoiceSlot& s, const SpatialParams& params, const float* mono) noexcept;
     /// Renders the reflections and adds them to the output (before the world bus is decoded).
@@ -154,12 +155,25 @@ private:
     struct DirectState {
         float occlusion = 1.0f;
         float transmission[3] = {1.0f, 1.0f, 1.0f};
-        float air_path = -1.0f;  // latest, metres
-        float reverb = 0.0f;     // smoothed
         bool primed = false;
     };
     world::DirectChannel* direct_;
     ReflectionRenderer* reflections_;
+    // Where sounds are simulated from (ADR 0012), one per reflection slot: sounds within
+    // kPlaceRadius of a place share its simulation, which is kept (and keeps refining) while
+    // sounds keep happening there.
+    struct Place {
+        bool used = false;
+        float position[3] = {};
+        uint32_t users = 0;      // voices sending to it now
+        uint64_t last_used = 0;  // block of its latest sound
+        float level = 0.0f;      // its loudest user this block (level without walls)
+        float ranked = 0.0f;     // the same over the last whole block: what a taker must beat
+        uint32_t generation = 0;
+    };
+    std::vector<Place> places_;
+    uint64_t block_index_ = 0;
+    uint64_t place_idle_blocks_ = 0;
     dsp::GainRamp reflection_gain_;
     std::vector<float> reflection_gain_buf_;
     std::vector<uint32_t> set_generation_;

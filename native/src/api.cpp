@@ -35,8 +35,8 @@ static_assert(sizeof(vsa_reflection_stats) == 120 && offsetof(vsa_reflection_sta
 static_assert(sizeof(vsa_reflection_source) == 56 && offsetof(vsa_reflection_source, voice) == 8 &&
               offsetof(vsa_reflection_source, delay) == 52);
 static_assert(sizeof(vsa_ray_segment) == 40 && offsetof(vsa_ray_segment, energy) == 32);
-static_assert(sizeof(vsa_source_debug) == 72 && offsetof(vsa_source_debug, position) == 16 &&
-              offsetof(vsa_source_debug, crossings) == 60 && offsetof(vsa_source_debug, air_path) == 64);
+static_assert(sizeof(vsa_source_debug) == 64 && offsetof(vsa_source_debug, position) == 16 &&
+              offsetof(vsa_source_debug, crossings) == 60);
 static_assert(sizeof(vsa_simulation_stats) == 80 && offsetof(vsa_simulation_stats, rate_hz) == 48 &&
               offsetof(vsa_simulation_stats, origin) == 68);
 static_assert(sizeof(vsa_asset_desc) == 48 && offsetof(vsa_asset_desc, storage) == 32);
@@ -678,7 +678,6 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_sources(vsa_engine* engine, vsa_sourc
             std::copy_n(s.transmission, 3, d.transmission);
             d.solid_metres = s.solid_metres;
             d.crossings = s.crossings;
-            d.air_path = s.air_path;
             out[i] = d;
         }
         return VSA_OK;

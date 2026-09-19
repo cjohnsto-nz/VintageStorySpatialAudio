@@ -13,7 +13,7 @@ public sealed class ReflectionPresetTests
     {
         // vsaudio.h documents these defaults; Medium must not quietly differ from them.
         ReflectionQualitySettings medium = ReflectionPresets.For(ReflectionQuality.Medium);
-        Assert.Equal(8, medium.Sources);
+        Assert.Equal(10, medium.Sources);
         Assert.Equal(4096, medium.Rays);
         Assert.Equal(16, medium.Bounces);
         Assert.Equal(1.0f, medium.DurationSeconds);
@@ -22,11 +22,7 @@ public sealed class ReflectionPresetTests
         Assert.Equal(0.1f, medium.TransitionSeconds);
         Assert.Equal(0, medium.Threads);
         Assert.Equal(ReflectionQuality.Medium, new SteamAudioConfig().ReflectionQuality);
-        // Voices' own reflections are off unless asked for: every sound feeds the listener's reverb
-        // (the engine's default too).
-        Assert.False(new SteamAudioConfig().VoiceReflections);
-        Assert.Equal(0, new SteamAudioConfig().ToEngineOptions().ReflectionQuality.Sources);
-        Assert.Equal(8, new SteamAudioConfig { VoiceReflections = true }.ToEngineOptions().ReflectionQuality.Sources);
+        Assert.Equal(10, new SteamAudioConfig().ToEngineOptions().ReflectionQuality.Sources);
     }
 
     [Fact]
@@ -43,7 +39,7 @@ public sealed class ReflectionPresetTests
 
         foreach (ReflectionQualitySettings p in presets)
         {
-            Assert.InRange(p.Sources, 4, 32);
+            Assert.InRange(p.Sources, 8, 32);
             Assert.InRange(p.Rays, 2048, 16384);
             Assert.InRange(p.Bounces, 8, 32);
             Assert.InRange(p.DurationSeconds, 1.0f, 2.5f);
@@ -70,10 +66,10 @@ public sealed class ReflectionPresetTests
         Assert.Equal(0.3f, r.DurationSeconds);
         Assert.True(r.TransitionSeconds < r.DurationSeconds);
 
-        var config = new SteamAudioConfig { ReflectionQuality = ReflectionQuality.Low, ReflectionBounces = 12, Reflections = false, ReflectionGain = 9f, VoiceReflections = true };
+        var config = new SteamAudioConfig { ReflectionQuality = ReflectionQuality.Low, ReflectionBounces = 12, Reflections = false, ReflectionGain = 9f };
         EngineOptions options = config.ToEngineOptions();
         Assert.False(options.Reflections);
-        Assert.Equal(4, options.ReflectionQuality.Sources);
+        Assert.Equal(8, options.ReflectionQuality.Sources);
         Assert.Equal(12, options.ReflectionQuality.Bounces);
         Assert.Equal(4f, config.ReflectionGainClamped());
         Assert.Equal((1f, 0f), new SteamAudioConfig { ReflectionTailGain = -2f }.ReflectionMixClamped());
@@ -145,7 +141,7 @@ public sealed class ReflectionEngineTests
 
         ReflectionStats stats = engine.GetReflectionStats();
         Assert.True(stats.Enabled);
-        Assert.Equal(4, stats.Slots);
+        Assert.Equal(8, stats.Slots);
         Assert.Equal(1, stats.LiveSlots);
         Assert.True(stats.Ticks >= 4);
         Assert.InRange(stats.ListenerReverbTimes.Mid, 0.2f, 3f);
