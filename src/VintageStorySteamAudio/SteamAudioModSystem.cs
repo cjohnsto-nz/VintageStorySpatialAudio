@@ -298,6 +298,11 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 $"\nGame sounds: {session.SoundCount} ({session.PendingCount} waiting for data), " +
                 $"{session.Assets.Count} assets ({session.Assets.MemoryBytes / (1024.0 * 1024.0):0.0} MB), " +
                 $"250-sound cap {(takeover.SoundCapRemoved ? "removed" : "STILL ACTIVE")}");
+            text += takeover.EntitySounds is { } entitySounds
+                ? string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"\nFollowing entities: {entitySounds.Count} sounds ({entitySounds.InferredCount} matched by position), {entitySounds.ExpectedCount} awaited")
+                : "\nFollowing entities: off";
         }
 
         return text;

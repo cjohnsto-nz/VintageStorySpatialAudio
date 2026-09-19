@@ -70,7 +70,7 @@ public sealed record EngineOptions
 /// </summary>
 public sealed record ReflectionQualitySettings
 {
-    /// <summary>Voices with reflections of their own (the rest share the listener's reverb). 1..64.</summary>
+    /// <summary>Voices with reflections of their own (0: none, every sound feeds the listener's reverb). 0..64.</summary>
     public int Sources { get; init; }
 
     /// <summary>Rays traced from the listener per simulation. 256..32768.</summary>

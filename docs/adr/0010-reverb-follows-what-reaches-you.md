@@ -1,6 +1,6 @@
 # ADR 0010: Reverb follows what reaches the listener; short sounds share spots
 
-**Status:** Accepted, 19 Sep 2026. Amends ADR 0009.
+**Status:** Superseded by ADR 0011 (19 Sep 2026). Was: accepted, 19 Sep 2026, amending ADR 0009.
 
 ## Context
 

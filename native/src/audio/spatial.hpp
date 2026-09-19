@@ -34,6 +34,9 @@ struct SpatialParams {
     /// per band of what passes through the geometry in the way.
     float occlusion = 1.0f;
     float transmission[3] = {1.0f, 1.0f, 1.0f};
+    /// How strongly it excites the listener's reverb (ADR 0011), 0..1: its direct path's gain,
+    /// or its gain over the shortest path through the air (around obstacles) if that is higher.
+    float reverb = 1.0f;
     /// Unit listener-to-source direction in world space (for the world ambisonic bus).
     float world_direction[3] = {0.0f, 0.0f, -1.0f};
 };

@@ -28,8 +28,8 @@ class WorldScene;
 /// (about 4 ms per source per second of response at order 2), not the rays: sources, duration and
 /// order are the expensive settings.
 struct ReflectionSettings {
-    /// Voices with reflections of their own; the rest share the listener's reverb.
-    uint32_t sources = 8;
+    /// Voices with reflections of their own (0: none, every sound shares the listener's reverb).
+    uint32_t sources = 0;
     uint32_t rays = 4096;
     uint32_t bounces = 16;
     /// Impulse response length, seconds.

@@ -66,6 +66,7 @@ add_executable(vsaudio_core_tests
     core/alloc_counter.cpp
     core/alloc_counter.hpp
     core/test_channel_layout.cpp
+    core/test_air_paths.cpp
     core/test_gain_ramp.cpp
     core/test_late_reverb.cpp
     core/test_limiter.cpp

@@ -232,8 +232,9 @@ TEST_CASE("reflections: the rendered reverb decays at the simulated decay time")
         REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
         const std::vector<float> out = e.render(static_cast<std::size_t>(kRate) * 3);
         const std::vector<double> energy = frame_energy(out);
-        // After the burst and its direct sound (and the limiter's look-ahead).
-        const double rt = schroeder_rt60(energy, static_cast<std::size_t>(0.05 * kRate));
+        // The tail's decay: after the burst, its direct sound and the early reflections (in a
+        // small room these carry most of the energy, and fall faster).
+        const double rt = schroeder_rt60(energy, static_cast<std::size_t>(0.12 * kRate));
         const auto simulated = static_cast<double>(stats(e).listener_reverb_times[1]);
         MESSAGE("room " << room.w << "x" << room.h << "x" << room.d << ": rendered RT60 " << rt << " s, simulated " << simulated
                         << " s");
@@ -272,9 +273,9 @@ TEST_CASE("reflections: nothing is added when they are off") {
     CHECK(late[0] > 1e-4);
 }
 
-TEST_CASE("reflections: long sounds get their own; short ones share a spot simulated where they happen") {
+TEST_CASE("reflections: with voices' own reflections on, lasting sounds get them; short ones feed the listener's reverb") {
     const Room room{12, 6, 12};
-    OfflineEngine e(reflection_config());
+    OfflineEngine e(reflection_config(8));
     set_materials(e);
     build(e, &room);
     e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
@@ -284,35 +285,31 @@ TEST_CASE("reflections: long sounds get their own; short ones share a spot simul
     REQUIRE(vsa_voice_start(e.engine, looping) == VSA_OK);
     REQUIRE(vsa_voice_start(e.engine, one_shot(e, blip, room.cx() - 4.0f, room.cy(), room.cz())) == VSA_OK);
     e.render(kRate / 2);
-    CHECK(stats(e).live_slots == 2);  // the looping voice's own, and the short one's spot
-    std::vector<vsa_reflection_source> list = sources(e);
-    REQUIRE(list.size() == 3);
+    CHECK(stats(e).live_slots == 1);
+    const std::vector<vsa_reflection_source> list = sources(e);
+    REQUIRE(list.size() == 2);
     CHECK(list[0].slot == 0);
     CHECK(list[0].voice == 0);
-    const auto own = std::find_if(list.begin(), list.end(), [&](const vsa_reflection_source& s) { return s.voice == looping; });
-    REQUIRE(own != list.end());
-    CHECK(static_cast<double>(own->position[0]) == doctest::Approx(static_cast<double>(room.cx() + 3.0f)));
-    CHECK(own->reverb_times[1] > 0.3f);
-    const auto spot = std::find_if(list.begin(), list.end(), [&](const vsa_reflection_source& s) {
-        return s.slot > 0 && s.voice != looping;
-    });
-    REQUIRE(spot != list.end());
-    CHECK(static_cast<double>(spot->position[0]) == doctest::Approx(static_cast<double>(room.cx() - 4.0f)));
-
-    // More short sounds nearby share that spot; none makes another.
-    for (int i = 0; i < 3; ++i) {
-        REQUIRE(vsa_voice_start(e.engine, one_shot(e, blip, room.cx() - 4.0f + static_cast<float>(i), room.cy(),
-                                                   room.cz() + 1.0f)) == VSA_OK);
-        e.render(kRate / 4);
-    }
-    CHECK(stats(e).live_slots == 2);
-    CHECK(sources(e).size() == 3);
-
-    // Once nothing has sounded there for a while, the spot is let go.
-    e.render(static_cast<std::size_t>(kRate) * 22);
-    CHECK(stats(e).live_slots == 1);
+    CHECK(list[1].voice == looping);
+    CHECK(static_cast<double>(list[1].position[0]) == doctest::Approx(static_cast<double>(room.cx() + 3.0f)));
+    CHECK(list[1].reverb_times[1] > 0.3f);
 }
 
+TEST_CASE("reflections: by default every sound feeds the listener's reverb, and none has its own") {
+    const Room room{12, 6, 12};
+    OfflineEngine e(reflection_config());
+    set_materials(e);
+    build(e, &room);
+    e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+    const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
+    REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(), room.cz())) == VSA_OK);
+    e.render(kRate / 2);
+    const vsa_reflection_stats s = stats(e);
+    CHECK(s.slots == 0);
+    CHECK(s.live_slots == 0);
+    CHECK(sources(e).size() == 1);
+    CHECK(s.output_db > -40.0f);
+}
 TEST_CASE("reflections: a sound behind walls reverberates only as much as reaches the listener") {
     // The listener in a closed stone room; a short sound inside it, or outside it.
     // Its first play has no spot yet and excites the listener's reverb: by what arrives, walls
@@ -345,25 +342,29 @@ TEST_CASE("reflections: a sound behind walls reverberates only as much as reache
 
 TEST_CASE("reflections: a sound's reverb scales with its direct sound, whatever its reference distance") {
     // Game sounds keep full level within a reference distance (3 m and more): the same sound at
-    // 3 m with a reference of 1 m is 9.5 dB quieter than with 8 m, direct and reflected alike.
+    // 3 m with a reference of 1 m is 9.5 dB quieter than with 8 m, direct and reflected alike,
+    // through the listener's reverb and through reflections of its own.
     const Room room{12, 6, 12};
-    double level_db[2] = {};
-    for (const float reference : {1.0f, 8.0f}) {
-        OfflineEngine e(reflection_config());
-        set_materials(e);
-        build(e, &room);
-        e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
-        const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
-        REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(), room.cz(),
-                                                        reference)) == VSA_OK);
-        e.render(static_cast<std::size_t>(kRate) * 2);
-        REQUIRE(stats(e).live_slots == 1);
-        level_db[reference > 1.0f ? 1 : 0] = static_cast<double>(stats(e).output_db);
+    for (const uint32_t own : {0u, 1u}) {
+        CAPTURE(own);
+        double level_db[2] = {};
+        for (const float reference : {1.0f, 8.0f}) {
+            OfflineEngine e(reflection_config(own));
+            set_materials(e);
+            build(e, &room);
+            e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+            const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
+            REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(),
+                                                            room.cz(), reference)) == VSA_OK);
+            e.render(static_cast<std::size_t>(kRate) * 2);
+            REQUIRE(stats(e).live_slots == own);
+            level_db[reference > 1.0f ? 1 : 0] = static_cast<double>(stats(e).output_db);
+        }
+        MESSAGE((own != 0 ? "own reflections: " : "listener's reverb: ") << level_db[1] - level_db[0]
+                << " dB louder with an 8 m reference (direct: 9.5 dB)");
+        CHECK(level_db[1] - level_db[0] == doctest::Approx(9.54).epsilon(0.15));
     }
-    MESSAGE("reflections " << level_db[1] - level_db[0] << " dB louder with an 8 m reference (direct: 9.5 dB)");
-    CHECK(level_db[1] - level_db[0] == doctest::Approx(9.54).epsilon(0.15));
 }
-
 TEST_CASE("reflections: slots are handed on as voices come and go") {
     const Room room{12, 6, 12};
     OfflineEngine e(reflection_config(4));
@@ -505,52 +506,53 @@ TEST_CASE("trace rays: paths stay in a closed room, and leave an open field") {
     }
 }
 
-TEST_CASE("reflections: a strike behind a wall is heard by its reflections, every time alike") {
-    // A 1-block stone wall between the listener and a short sound in a closed room: the direct
-    // path is blocked, the sound goes round. Its first strike makes a spot; every strike after it
-    // has its reflections from the first sample, at much the same level each time.
-    vsa_engine_config config = reflection_config();
-    config.flags = 0;  // the direct simulation too
-    OfflineEngine e(config);
-    set_materials(e);
-    std::vector<uint16_t> cells(VSA_CHUNK_CELLS, Air);
-    for (int y = 1; y <= 8; ++y) {
-        for (int z = 1; z <= 14; ++z) {
-            for (int x = 1; x <= 14; ++x) {
-                const bool shell = x == 1 || x == 14 || y == 1 || y == 8 || z == 1 || z == 14;
-                const bool wall = x == 8 && y >= 2 && y <= 7 && z >= 6 && z <= 10;
-                if (shell || wall) {
-                    cells[cell(x, y, z)] = Stone;
+TEST_CASE("reflections: every strike sounds alike, the first as the rest") {
+    // A short sound struck again and again at the same place, in the open or behind a pillar of
+    // stone: its reverb is the same every time, from the first strike on.
+    for (const bool pillar : {false, true}) {
+        CAPTURE(pillar);
+        vsa_engine_config config = reflection_config();
+        config.flags = 0;  // the direct simulation too
+        OfflineEngine e(config);
+        set_materials(e);
+        std::vector<uint16_t> cells(VSA_CHUNK_CELLS, Air);
+        for (int y = 1; y <= 8; ++y) {
+            for (int z = 1; z <= 14; ++z) {
+                for (int x = 1; x <= 14; ++x) {
+                    const bool shell = x == 1 || x == 14 || y == 1 || y == 8 || z == 1 || z == 14;
+                    const bool wall = pillar && x == 8 && y >= 2 && y <= 7 && z >= 6 && z <= 10;
+                    if (shell || wall) {
+                        cells[cell(x, y, z)] = Stone;
+                    }
                 }
             }
         }
-    }
-    vsa_chunk_desc desc{};
-    desc.struct_size = sizeof desc;
-    desc.materials = cells.data();
-    REQUIRE(vsa_scene_set_chunk(e.engine, &desc) == VSA_OK);
-    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
-    e.listener(5.0f, 3.7f, 8.5f, 0.0f, 0.0f, -1.0f);
-    e.render(kRate / 2);
-    const AssetPtr strike = e.pcm(burst(0.05), 1, kRate);
-    std::vector<double> peaks;
-    for (int i = 0; i < 6; ++i) {
-        REQUIRE(vsa_voice_start(e.engine, one_shot(e, strike, 11.5f, 3.5f, 8.5f)) == VSA_OK);
-        double peak = -200.0;
-        for (int k = 0; k < 8; ++k) {
-            e.render(kRate / 16);
-            peak = std::max(peak, static_cast<double>(stats(e).output_db));
+        vsa_chunk_desc desc{};
+        desc.struct_size = sizeof desc;
+        desc.materials = cells.data();
+        REQUIRE(vsa_scene_set_chunk(e.engine, &desc) == VSA_OK);
+        REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+        e.listener(5.0f, 3.7f, 8.5f, 0.0f, 0.0f, -1.0f);
+        e.render(kRate / 2);
+        const AssetPtr strike = e.pcm(burst(0.05), 1, kRate);
+        std::vector<double> peaks;
+        for (int i = 0; i < 6; ++i) {
+            REQUIRE(vsa_voice_start(e.engine, one_shot(e, strike, 11.5f, 3.5f, 8.5f)) == VSA_OK);
+            double peak = -200.0;
+            for (int k = 0; k < 8; ++k) {
+                e.render(kRate / 16);
+                peak = std::max(peak, static_cast<double>(stats(e).output_db));
+            }
+            e.render(kRate * 2);  // the tail dies away
+            peaks.push_back(peak);
         }
-        e.render(kRate);  // the tail dies away
-        peaks.push_back(peak);
+        std::string list;
+        for (const double p : peaks) {
+            list += std::to_string(static_cast<int>(std::lround(p))) + " ";
+        }
+        MESSAGE((pillar ? "behind a pillar" : "in the open") << ": reflection peaks per strike (dB): " << list);
+        const auto [lo, hi] = std::minmax_element(peaks.begin(), peaks.end());
+        CHECK(*lo > -80.0);
+        CHECK(*hi - *lo < 1.0);
     }
-    std::string list;
-    for (const double p : peaks) {
-        list += std::to_string(static_cast<int>(std::lround(p))) + " ";
-    }
-    MESSAGE("reflection peaks per strike (dB): " << list);
-    CHECK(peaks[0] < -80.0);  // no spot yet: the listener's reverb, and nothing reaches it directly
-    const auto [lo, hi] = std::minmax_element(peaks.begin() + 1, peaks.end());
-    CHECK(*lo > -60.0);
-    CHECK(*hi - *lo < 3.0);
 }

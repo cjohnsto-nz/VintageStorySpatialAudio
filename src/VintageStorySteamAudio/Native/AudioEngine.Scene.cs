@@ -126,6 +126,7 @@ public sealed record SceneRayHit(
 /// <param name="Transmission">Amplitude per band through what is in the way.</param>
 /// <param name="SolidMetres">Metres of material on the centre line.</param>
 /// <param name="Crossings">Materials the centre line entered.</param>
+/// <param name="AirPath">Metres from the listener through the air, around obstacles (within 24 blocks); -1 if none. What the reverb is fed by when louder than the straight line.</param>
 public sealed record SourceDebugInfo(
     ulong Voice,
     (float X, float Y, float Z) Position,
@@ -134,7 +135,8 @@ public sealed record SourceDebugInfo(
     float Occlusion,
     (float Low, float Mid, float High) Transmission,
     float SolidMetres,
-    int Crossings)
+    int Crossings,
+    float AirPath)
 {
     /// <summary>The direct sound's gain per band: the visible part plus what passes through.</summary>
     public (float Low, float Mid, float High) Gain =>
@@ -475,7 +477,8 @@ public sealed partial class AudioEngine
                 d.Occlusion,
                 (d.Transmission[0], d.Transmission[1], d.Transmission[2]),
                 d.SolidMetres,
-                (int)d.Crossings));
+                (int)d.Crossings,
+                d.AirPath));
         }
 
         return result;

@@ -454,6 +454,8 @@ internal unsafe struct VsaSourceDebug
     public fixed float Transmission[3];
     public float SolidMetres;
     public uint Crossings;
+    public float AirPath;
+    public uint Reserved;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -534,7 +536,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 8;
+    public const uint AbiVersion = 9;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;

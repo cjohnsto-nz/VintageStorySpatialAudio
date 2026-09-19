@@ -299,6 +299,21 @@ void VoxelView::clearance(double point[3], double radius) const {
     }
 }
 
+VoxelView::Passage VoxelView::passage(int64_t x, int64_t y, int64_t z) const {
+    int index = 0;
+    const ChunkVoxels* chunk = chunk_of(x, y, z, index);
+    if (chunk == nullptr) {
+        return Passage::Open;
+    }
+    switch (kind(chunk->materials[static_cast<std::size_t>(index)])) {
+        case MaterialKind::Solid:
+        case MaterialKind::Liquid: return Passage::Closed;
+        case MaterialKind::Porous: return Passage::Open;
+        case MaterialKind::Air: break;
+    }
+    return has_partial(x, y, z) ? Passage::Partial : Passage::Open;
+}
+
 bool VoxelView::has_partial(int64_t x, int64_t y, int64_t z) const {
     int index = 0;
     const ChunkVoxels* chunk = chunk_of(x, y, z, index);

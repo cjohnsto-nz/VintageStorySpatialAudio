@@ -31,6 +31,10 @@ public static class AudioPatchTargets
     private const string IAsset = "Vintagestory.API.Common.IAsset";
     private const string AssetLocation = "Vintagestory.API.Common.AssetLocation";
     private const string EnumSoundType = "Vintagestory.API.Common.EnumSoundType";
+    private const string SoundAttributes = "Vintagestory.API.Common.SoundAttributes";
+    private const string Entity = "Vintagestory.API.Common.Entities.Entity";
+    private const string IPlayer = "Vintagestory.API.Common.IPlayer";
+    private const string Bool = "System.Boolean";
 
     private static PatchTarget Method(string id, string type, string name, string returns, string[] parameters, string purpose, bool isStatic = false) =>
         new(id, type, TargetMemberKind.Method, name, returns, parameters, isStatic, purpose);
@@ -83,7 +87,12 @@ public static class AudioPatchTargets
         Method("audiodata.load", AudioData, "Load", "System.Boolean", [], "synchronous decode, as vanilla does before creating a sound"),
 
         // --- Game-side policy we replace.
-        Method("clientmain.play-sound-at", ClientMain, "PlaySoundAtInternal", Int, [AssetLocation, Double, Double, Double, Float, Float, Float, EnumSoundType], "remove the fixed 250-sound cap"),
+        Method("clientmain.play-sound-at", ClientMain, "PlaySoundAtInternal", Int, [AssetLocation, Double, Double, Double, Float, Float, Float, EnumSoundType], "remove the fixed 250-sound cap; note sounds that should follow an entity"),
+
+        // --- Sounds played at an entity: vanilla places them once; we make them follow it.
+        Method("clientmain.play-sound-at-entity", ClientMain, "PlaySoundAt", Int, [SoundAttributes, Entity, IPlayer, Float], "sounds played at an entity follow it"),
+        Method("clientmain.play-sound-at-entity-pitch", ClientMain, "PlaySoundAt", Void, [AssetLocation, Entity, IPlayer, Float, Float, Float], "sounds played at an entity follow it"),
+        Method("clientmain.play-sound-at-entity-random-pitch", ClientMain, "PlaySoundAt", Void, [AssetLocation, Entity, IPlayer, Bool, Float, Float], "sounds played at an entity follow it"),
         Field("clientmain.active-sounds", ClientMain, "ActiveSounds", "System.Collections.Generic.Queue<Vintagestory.API.Client.ILoadedSound>", "the game's sound bookkeeping"),
         Method("soundengine.reverb-scan", SystemSoundEngine, "scanReverbnessOffthread", Void, [], "retire the 40-ray reverbness scan"),
         Method("soundengine.tick-100ms", SystemSoundEngine, "OnGameTick100ms", Void, [Float], "underwater / glitch / legacy reverb application"),

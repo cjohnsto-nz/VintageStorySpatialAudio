@@ -48,6 +48,26 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Entity sound tracking (from PLAN Phase 8, done early; managed only, uncommitted)
+
+Sounds played at a creature or player follow it while they play; vanilla leaves them where they started. No Doppler (Chris doesn't want it). Ported in spirit from VintageStorySurroundSound, with the problems found in its review fixed.
+
+- **Named by the game:** prefixes on the three `ClientMain.PlaySoundAt(…, Entity, …)` overloads put the entity in a thread-static context (restored by a finalizer).
+- **Announce and claim:** a prefix on `PlaySoundAtInternal` announces the sound with its exact float position (`EntitySoundTracker.Expect`). `CreateSound` claims it by that position.
+  - Announce/claim is needed because the first play of an asset decodes on the thread pool, so the sound is created after the call returns.
+  - A postfix withdraws the announcement when the call returned 0; otherwise it expires after 10 s.
+  - The claimed sound starts at the entity's current position, then moves once per frame in `OnFrame` (only when it has moved at least 1 cm).
+- **Matched by position:** the server sends creature sounds as plain coordinates, even in single player, and those come through the typed `PlaySoundAt` overload.
+  - `Entity`-category sounds and `creature/` / `voice/` assets are matched to the nearest `EntityAgent` (not the local player) whose body (upright axis plus radius, from the selection box) is within `EntitySoundMatchDistance` (1 block).
+  - Nothing is matched if a second creature is within 0.5 blocks of the best.
+  - Only the height offset is kept: the horizontal one is mostly client interpolation lag.
+- **What happens when things end:** a sound whose entity leaves `LoadedEntities` stays where it was. Tracking ends when the sound stops.
+- **What isn't tracked:** sounds that entity code loads itself (gait, bees, bells, elevators) are left to their owners, which move them.
+- **Config:** `TrackEntitySounds`, `InferEntitySounds`, `EntitySoundMatchDistance`.
+- **Stats:** `.steamaudio stats` has a "Following entities" line.
+- **Verification:** VsaDoctor 38/38 against 1.22.7. `EntitySoundTrackerTests` cover announcement, expiry, cancel, context nesting, inference (tall creatures, lag, ambiguity) and following/letting go against the engine. All 111 managed tests passed on a worktree of `f62e42a` plus these changes (the working tree's native code was mid-ABI-9 change).
+- **To check in game:** walk past running wolves or chickens, and chase a bear. Calls should come from the animal, not from where it was. Watch the stats line for "matched by position" counts.
+
 ## Phase 6 (reflections and reverb): in progress on `phase6-reflections`
 
 Phase 5 is merged into `main` (not pushed). The design, and why it differs from PLAN §5.4, is ADR 0009.
@@ -158,6 +178,19 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
   - early and tail can each be turned off.
 - **Materials pulled apart** (wood and stone sounded alike after the first retune): stone 0.07 / 0.10 / 0.13 absorbed, brick 0.08 / 0.11 / 0.14, wood 0.20 / 0.30 / 0.33. A 7×4×7 room decays in about 0.4 s built of wood and 1.4 s of stone; a large cave in about 5 s.
 - **Worth knowing:** in a small room about 97% of the reflected energy is early reflections (the first 0.1 s). `.steamaudio reverb early 0` shows how much is them.
+
+### Back to the plan (ADR 0011)
+
+- **Reported:** reverb volume jumping from hit to hit on an anvil in a small room.
+- **Measured:** Steam Audio's output is identical from run to run. The cause was our routing: own slots, spots, or a tail-only listener reverb, with about 15 dB between them, chosen by slot bookkeeping.
+- **Now:**
+  - one listener reverb (early reflections and tail) for every sound;
+  - each sound feeds it by the louder of its direct path and its shortest path round obstacles through the air (`world/air_paths.*`, recomputed when the listener changes block);
+  - spots removed;
+  - voices' own reflections optional (`VoiceReflections`, ABI v9 `reflection_sources` 0 = none, the default).
+- **Tests:**
+  - six strikes alike, first included (in the open and behind a pillar);
+  - air paths: straight in the open, round a pillar, through a doorway, dearer through a door, none out of a sealed room or between diagonal blocks.
 
 ### To check in game (Chris)
 

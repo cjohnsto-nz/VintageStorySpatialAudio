@@ -86,6 +86,11 @@ public:
     [[nodiscard]] bool first_hit(const double origin[3], const double direction[3], double max_distance,
                                  VoxelHit& hit) const;
 
+    /// How sound passes a cell through the air: freely (air, foliage, unloaded), through a
+    /// partial block's gaps (a door, a fence, a slab), or not at all (solid, liquid).
+    enum class Passage : uint8_t { Open, Partial, Closed };
+    [[nodiscard]] Passage passage(int64_t x, int64_t y, int64_t z) const;
+
     /// The material of the full cell at a world block, 0 (air) if unknown or partial.
     [[nodiscard]] uint16_t material_at(int64_t x, int64_t y, int64_t z) const;
 

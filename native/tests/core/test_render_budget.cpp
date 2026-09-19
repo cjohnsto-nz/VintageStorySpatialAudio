@@ -384,13 +384,15 @@ TEST_CASE("the reflections' render path never allocates") {
     CHECK(engine.reflection_report().stats.ticks > 5);
 }
 
-TEST_CASE("reflections render within budget at the default (Balanced) quality") {
+TEST_CASE("reflections render within budget at the Medium quality, voices' own reflections on") {
     // The phase's CPU budget (PLAN section 9): the render thread under 25 % of the block period at
     // p99 with eight voices' reflections and the listener's reverb among 32 voices; a simulation
     // run within its 100 ms period on the default threads (which, resting as long as it runs,
     // keeps the simulation under one core at two threads).
     for (const vsa_render_mode mode : {VSA_RENDER_HEADPHONES, VSA_RENDER_SPEAKERS}) {
-        vsa::Engine engine(reflection_config());
+        vsa_engine_config config = reflection_config();
+        config.reflection_sources = 8;  // the worst case: Medium with voices' own reflections on
+        vsa::Engine engine(config);
         engine.set_render_mode(mode);
         build_room(engine);
         engine.set_listener(in_room());

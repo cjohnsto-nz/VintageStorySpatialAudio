@@ -157,7 +157,8 @@ public sealed class NativeLayoutTests
         Assert.Equal(32, (int)Marshal.OffsetOf<VsaChunkMesh>(nameof(VsaChunkMesh.Vertices)));
         Assert.Equal(3u, (uint)MaterialKind.Solid);
         Assert.Equal(76, sizeof(VsaRayHit));
-        Assert.Equal(64, sizeof(VsaSourceDebug));
+        Assert.Equal(72, sizeof(VsaSourceDebug));
+        Assert.Equal(64, (int)Marshal.OffsetOf<VsaSourceDebug>(nameof(VsaSourceDebug.AirPath)));
         Assert.Equal(16, (int)Marshal.OffsetOf<VsaSourceDebug>("Position"));
         Assert.Equal(60, (int)Marshal.OffsetOf<VsaSourceDebug>(nameof(VsaSourceDebug.Crossings)));
         Assert.Equal(80, Marshal.SizeOf<VsaSimulationStats>());

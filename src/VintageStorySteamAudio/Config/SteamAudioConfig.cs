@@ -92,6 +92,21 @@ public sealed class SteamAudioConfig
     /// </summary>
     public float SoundRangeMultiplier { get; set; } = 3f;
 
+    /// <summary>
+    /// Sounds a creature or player makes follow them while they play. Vanilla leaves each sound where
+    /// it started, so a running wolf's growl stays behind it.
+    /// </summary>
+    public bool TrackEntitySounds { get; set; } = true;
+
+    /// <summary>
+    /// Also for creature sounds the server sends as plain coordinates (most calls, even in single
+    /// player): each is matched to the creature it came from, when only one is close enough.
+    /// </summary>
+    public bool InferEntitySounds { get; set; } = true;
+
+    /// <summary>How far (blocks, 0..4) such a sound may be from a creature's body to be matched to it.</summary>
+    public float EntitySoundMatchDistance { get; set; } = 1f;
+
     /// <summary>Walls muffle what is behind them (occlusion and transmission by the world scene, Phase 5).</summary>
     public bool Occlusion { get; set; } = true;
 
@@ -111,7 +126,14 @@ public sealed class SteamAudioConfig
     [JsonConverter(typeof(StringEnumConverter))]
     public ReflectionQuality ReflectionQuality { get; set; } = ReflectionQuality.Medium;
 
-    /// <summary>Voices with reflections of their own (the rest share yours); 0 = the preset's.</summary>
+    /// <summary>
+    /// Also simulate the loudest lasting sounds (fires, machines, music) from where they are, and
+    /// hear them through reflections of their own (paths round walls, the reverb of their own
+    /// space) instead of through your reverb. Off: every sound feeds your reverb (ADR 0011).
+    /// </summary>
+    public bool VoiceReflections { get; set; }
+
+    /// <summary>How many voices, with VoiceReflections on; 0 = the preset's.</summary>
     public int ReflectionSources { get; set; }
 
     /// <summary>Rays per simulation; 0 = the preset's.</summary>
@@ -161,7 +183,7 @@ public sealed class SteamAudioConfig
         OcclusionSamples = Math.Clamp(OcclusionSamples, 0, 256),
         DirectRateHz = Math.Clamp(OcclusionRateHz, 0, 120),
         Reflections = Reflections,
-        ReflectionQuality = ReflectionPresets.Resolve(ReflectionQuality, new ReflectionQualitySettings
+        ReflectionQuality = VoiceReflectionsOrNone(ReflectionPresets.Resolve(ReflectionQuality, new ReflectionQualitySettings
         {
             Sources = ReflectionSources,
             Rays = ReflectionRays,
@@ -171,11 +193,14 @@ public sealed class SteamAudioConfig
             RateHz = ReflectionRateHz,
             Threads = ReflectionThreads,
             TransitionSeconds = ReflectionTransitionSeconds,
-        }),
+        })),
         HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
             : modConfigDirectory is null ? HrtfSofaFile.Trim()
             : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),
     };
+
+    private ReflectionQualitySettings VoiceReflectionsOrNone(ReflectionQualitySettings resolved) =>
+        VoiceReflections ? resolved : resolved with { Sources = 0 };
 
     /// <summary>The reflection gain, clamped to what the engine accepts.</summary>
     public float ReflectionGainClamped() => ClampGain(ReflectionGain);

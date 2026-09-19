@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 8u
+#define VSA_ABI_VERSION 9u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -172,10 +172,10 @@ typedef struct vsa_engine_config {
     uint32_t direct_rate_hz;
     /*
      * Reflections (Phase 6): Steam Audio's ray-traced reflections against the world scene. The
-     * listener has a reverb of its own that every world sound shares; the loudest longer sounds
-     * also get reflections of their own. 0 = the default for each.
+     * listener has a reverb that every world sound feeds; optionally, the loudest lasting sounds
+     * get reflections of their own. 0 = the default for each.
      */
-    /** Voices with reflections of their own, 0 = 8; 1..64. */
+    /** Voices with reflections of their own, 0 = none (the default); up to 64. */
     uint32_t reflection_sources;
     /** Rays traced from the listener per simulation, 0 = 4096; 256..32768. */
     uint32_t reflection_rays;
@@ -815,6 +815,13 @@ typedef struct vsa_source_debug {
     /** Metres of material on the centre line, and how many materials it entered. */
     float solid_metres;
     uint32_t crossings;
+    /**
+     * Metres from the listener through the air, around obstacles and through doorways (within
+     * 24 blocks); -1 if there is no such path. What the listener's reverb is fed by, when louder
+     * than the straight line through what is in the way.
+     */
+    float air_path;
+    uint32_t reserved;
 } vsa_source_debug;
 
 /**
@@ -848,16 +855,15 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, 
  * Reflections (Phase 6): reverb simulated from the world scene.
  *
  * Steam Audio traces rays from the listener through the scene (its surfaces' absorption and
- * scattering) several times a second, for a pool of sources:
- *   - one each for the loudest world sounds that last (looping, streamed, or 0.75 s and longer;
- *     ranked without walls);
- *   - "spots" where short sounds happen: the next short sounds within 4 m share its reflections,
- *     so an animal's calls ring in its own room (a spot is let go 20 s after its last sound);
- *   - one at the listener: the room around the listener ringing with what reaches it. Sounds with
- *     no source of their own or nearby feed it at their direct path's level, walls included.
- * Sources behind walls reach the listener only by the paths Steam Audio finds. Early reflections
- * are convolved (directional, Ambisonic; not the listener's own, which would comb against every
- * sound); the tail is a diffuse reverb at the simulated decay time per band, around the listener.
+ * scattering) several times a second, for a source at the listener: the reverb of the space the
+ * listener is in, early reflections (convolved, directional, Ambisonic) and a diffuse tail at
+ * the simulated decay time per band. Every world sound feeds it weighted by its direct path's
+ * energy, distance and walls included (PLAN 5.4, ADR 0011).
+ *
+ * Optionally (reflection_sources), the loudest lasting sounds (looping, streamed, or 0.75 s and
+ * longer; ranked without walls) are also simulated from where they are, and heard through their
+ * own reflections instead: paths around walls, and the reverb of the space they are in.
+ *
  * Decoded with the world's Ambisonic bus (headphones) or to the speaker layout, heights included.
  * ============================================================================================= */
 
