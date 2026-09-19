@@ -114,11 +114,18 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
             .EndSubCommand()
             .BeginSubCommand("scene")
-                .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
+                .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|rays|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
                 .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
                 .HandleWith(args => WithEngine(() => sceneTools is null
                     ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + ")."
                     : sceneTools.Command(args[0] as string, args[1] as string)))
+            .EndSubCommand()
+            .BeginSubCommand("reverb")
+                .WithDescription("Reverb from the world: status, gain N (0-4, 1 = as simulated), rays (show sound paths)")
+                .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
+                .HandleWith(args => WithEngine(() => sceneTools is null
+                    ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + "): nothing to reflect off."
+                    : sceneTools.ReverbCommand(args[0] as string, args[1] as string)))
             .EndSubCommand();
     }
 
@@ -306,6 +313,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             NativeLibraryResolver.Register(NativeLibraryResolver.DefaultNativeDirectory(typeof(SteamAudioModSystem).Assembly.Location));
             EngineVersion version = AudioEngine.GetVersion();
             engine = AudioEngine.Create(config.ToEngineOptions(modConfigDirectory), new GameLoggerEngineLog(logger));
+            engine.SetReflectionGain(config.ReflectionGainClamped());
             SelfTestResult? selfTest = config.RunSelfTestOnStartup ? engine.RunSelfTest() : null;
             return new StatusReport { Version = version, Engine = engine.Info, SelfTest = selfTest, Verification = verification };
         }

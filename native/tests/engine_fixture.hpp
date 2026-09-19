@@ -40,6 +40,8 @@ inline vsa_engine_config make_config(vsa_ray_tracer ray_tracer, CapturedLog* log
     config.log = log != nullptr ? &CapturedLog::sink : nullptr;
     config.log_user_data = log;
     config.ray_tracer = static_cast<uint32_t>(ray_tracer);
+    // Reflections add reverb to every level a test measures; the tests that want them clear this.
+    config.flags = VSA_ENGINE_FLAG_NO_REFLECTIONS;
     return config;
 }
 

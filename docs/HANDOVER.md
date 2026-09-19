@@ -48,6 +48,81 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Phase 6 (reflections and reverb): in progress on `phase6-reflections`
+
+Phase 5 is merged into `main` (not pushed). The design, and why it differs from PLAN §5.4, is ADR 0009.
+
+### Native (ABI v8)
+
+- **`world/reflection_sim.*` (`ReflectionSimulator`):**
+  - Steam Audio real-time reflections (HYBRID simulation) for a fixed pool of sources that live as long as the simulator.
+  - Slot 0 sits at the listener: the reverb every other world sound shares. Slots 1..N follow the voices the mixer gives them.
+  - Runs on its own thread at up to `rate_hz`, resting at least as long as each run took (so it is busy half the time at most); runs synchronously offline.
+  - Each run simulates the listener's slot plus at most half the voice slots (new voices first, then round-robin).
+  - Rebuilt when the output's sample rate changes (its impulse responses are partitioned for the render block).
+- **`world/reflection_channel.hpp`:** lock-free per-slot inputs (position, voice, generation) and outputs:
+  - the hybrid RT60 / EQ / delay, published under the generation;
+  - `observed`, the input generation the last run started with.
+- **`audio/reflections.*` (`ReflectionRenderer`):** per slot:
+  - a Steam Audio CONVOLUTION effect over the first `transition` seconds;
+  - our `dsp::LateReverb` tail: 16-line FDN, per-band decay, 8 independent outputs as plane waves from a cube's corners.
+  - Everything goes into a world-space Ambisonic bus. A released slot drains and is reused only once `observed == 0` and one pass has consumed any response in flight.
+- **`audio/speaker_decoder.*`:** AllRAD for every speaker layout (VBAP onto the real speakers, max-rE, normalised to a panned voice's power), following the head per block.
+- **Mixer:**
+  - ranks voices for slots by level without walls;
+  - short sounds (< 0.75 s, one-shot) always use the listener's reverb;
+  - sends are taken after voice gain, fades and the bus gain;
+  - a voice cross-fades from the shared reverb to its own slot over 8 blocks.
+  - **Headphones:** the reflections join the world bus's binaural decode, which now runs only at the highest order present (order 2 when only reflections are there).
+  - **Speakers:** the speaker decoder.
+  - `vsa_engine_set_reflection_gain`.
+- **`WorldScene`'s lock is now a writer-preferring shared lock (`SceneLock`):** the direct and reflection simulations trace at once; edits wait at most one run.
+- **Config:**
+  - `reflection_sources`, `_rays`, `_bounces`, `_duration`, `_order`, `_rate_hz`, `_threads`, `_transition`;
+  - defaults are the Medium preset (8 / 2048 / 16 / 1.0 s / order 2 / 10 Hz / 0.1 s);
+  - flag `VSA_ENGINE_FLAG_NO_REFLECTIONS`.
+- **Debug:**
+  - `vsa_engine_get_reflection_stats`: RT60 at the listener per band, output level, slots live/waiting/draining, timings;
+  - `vsa_engine_get_reflection_sources`;
+  - `vsa_scene_trace_rays`: deterministic specular or scattered paths off the voxels, losing each surface's absorption.
+- **Tests:**
+  - **Golden RT60, `test_reflections.cpp`:** closed stone rooms at 20% absorption give 0.40 / 1.08 / 2.29 s against Eyring's 0.43 / 1.08 / 2.43. Also: the open field (13 dB less), the rendered decay against the simulated one, slots and hand-over, gain, validation, and ray paths.
+  - **Tail calibration, `core/test_reflection_calibration.cpp`:** against Steam Audio's full convolution response in five rooms.
+  - **Late reverb, `core/test_late_reverb.cpp`:** RT per band, decorrelation, level, silence, no allocation.
+  - **Speaker decoder, `core/test_speaker_decoder.cpp`:** even power per layout, 7.1.4 heights, direction, head tracking.
+  - **Voxel ray query, `core/test_transmission.cpp`:** first hit.
+  - **Budgets, `core/test_render_budget.cpp`:**
+    - the reflections' render path allocates nothing (slot churn, mode switch, 7.1.4 reopen);
+    - Medium within PLAN's budget: render p99 about 17% (headphones) and 13% (7.1.4) of the block, a run about 27 ms.
+  - The engine test fixture turns reflections off by default: they would add reverb to every level the older tests measure. SceneLab turns them off too (no geometry; offline they would count in its block load).
+
+### Managed
+
+- **Config (`vssteamaudio.json`):**
+  - `Reflections` (on);
+  - `ReflectionQuality` (Low / Medium / High / Ultra, `Config/ReflectionPresets.cs`);
+  - per-value overrides (`ReflectionSources`, `ReflectionRays`, `ReflectionBounces`, `ReflectionDurationSeconds`, `ReflectionOrder`, `ReflectionRateHz`, `ReflectionThreads`, `ReflectionTransitionSeconds`; 0 = the preset's);
+  - `ReflectionGain` (1).
+- **`.steamaudio reverb [status|gain N|rays]`.**
+- **Overlay "reflections"** (in the Ctrl+F7 cycle, or `.steamaudio scene rays`):
+  - 48 sound paths from your head bouncing off the scene, bright cyan fading to dark blue as surfaces absorb them;
+  - a magenta line and diamond to each voice with reflections of its own.
+- **The HUD's reflection lines:**
+  - RT60 where you are per band, with a name for the space ("a small room", "a hall", "a cave or cathedral");
+  - the reflections' level;
+  - slots live/waiting/fading;
+  - the simulation's timings and settings;
+  - with the overlay on, each voice with its own reflections and its RT60.
+- **Vanilla's `SetReverb`** is recorded and ignored. There is no fallback reverb when reflections are off.
+
+### To check in game (Chris)
+
+- **Reverb that follows the space:** walk from outdoors into a small stone room, a big hall, a cave. The HUD's RT60 and space name should follow; outdoors should be nearly dry.
+- **The occlusion feel from Phase 5:** is it better now that sound also arrives by reflections? If reverb is too much or too little overall, try `.steamaudio reverb gain 0.5` or `2` and report which sounds right.
+- **Reflections overlay:** paths should stay inside rooms and escape to the sky outdoors. Magenta lines should go to the loud, lasting sounds (a fire, a trader's music, rain?).
+- **Speakers:** reverb should surround you on the 7.1.4 system (including the heights), not sit in the centre.
+- **Stats:** note `.steamaudio stats` render time and the HUD's simulation time in a busy place.
+
 ## Phase 5 (direct simulation): in progress on `phase5-direct-simulation`
 
 Phase 4 is merged into `main` (not pushed).

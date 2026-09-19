@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 7u
+#define VSA_ABI_VERSION 8u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -106,7 +106,9 @@ enum {
     /** Enables Steam Audio's API validation layer. Slow; for development builds only. */
     VSA_ENGINE_FLAG_STEAM_AUDIO_VALIDATION = 1u << 0,
     /** Disables the direct simulation: no occlusion or transmission by the world scene. */
-    VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION = 1u << 1
+    VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION = 1u << 1,
+    /** Disables the reflections: no reverb from the world scene. */
+    VSA_ENGINE_FLAG_NO_REFLECTIONS = 1u << 2
 };
 
 /** Resampler quality: zero crossings per side of the bandlimited-interpolation kernel. */
@@ -168,6 +170,35 @@ typedef struct vsa_engine_config {
     uint32_t occlusion_samples;
     /** Direct simulation updates per second while a device plays, 0 = 30; 1..120. */
     uint32_t direct_rate_hz;
+    /*
+     * Reflections (Phase 6): Steam Audio's ray-traced reflections against the world scene. The
+     * listener has a reverb of its own that every world sound shares; the loudest longer sounds
+     * also get reflections of their own. 0 = the default for each.
+     */
+    /** Voices with reflections of their own, 0 = 8; 1..64. */
+    uint32_t reflection_sources;
+    /** Rays traced from the listener per simulation, 0 = 2048; 256..32768. */
+    uint32_t reflection_rays;
+    /** Bounces per ray, 0 = 16; 1..64. */
+    uint32_t reflection_bounces;
+    /** Impulse response length in seconds, 0 = 1; 0.25..4. */
+    float reflection_duration;
+    /** Ambisonic order of the reflections, 0 = 2; 1..3. */
+    uint32_t reflection_order;
+    /**
+     * Reflection simulations per second at most while a device plays, 0 = 10; 1..60. A run that
+     * takes longer is followed by a rest as long as itself (the simulation's threads are busy at
+     * most half the time, whatever the settings).
+     */
+    uint32_t reflection_rate_hz;
+    /** Worker threads for one simulation, 0 = a quarter of the cores (1..4); 1..32. */
+    uint32_t reflection_threads;
+    /**
+     * Seconds of each impulse response rendered by convolution (early reflections, directional);
+     * the rest is a parametric tail at the simulated decay time. 0 = 0.1; 0.02..0.5, below
+     * reflection_duration.
+     */
+    float reflection_transition;
 } vsa_engine_config;
 
 typedef struct vsa_engine_info {
@@ -812,6 +843,104 @@ typedef struct vsa_simulation_stats {
 } vsa_simulation_stats;
 
 VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, vsa_simulation_stats* out);
+
+/* =============================================================================================
+ * Reflections (Phase 6): reverb simulated from the world scene.
+ *
+ * Steam Audio traces rays from the listener through the scene (its surfaces' absorption and
+ * scattering) several times a second, for a pool of sources: one at the listener, whose reverb
+ * every world sound without a source of its own shares (at a level falling gently with distance),
+ * and one each for the loudest world sounds that last (looping, streamed, or 0.75 s and longer;
+ * ranked without walls). Each source's early reflections are convolved (directional, Ambisonic);
+ * its tail is a diffuse reverb at the simulated decay time per band, around the listener. Decoded
+ * with the world's Ambisonic bus (headphones) or to the speaker layout, heights included.
+ * ============================================================================================= */
+
+typedef struct vsa_reflection_stats {
+    uint32_t struct_size;
+    /** Non-zero if the reflections run. */
+    uint32_t enabled;
+    /** Sources for single voices (the listener's not counted), and how many are rendering the
+     *  voice's own reflections, waiting for their first simulation, or letting a tail die away. */
+    uint32_t slots;
+    uint32_t live_slots;
+    uint32_t waiting_slots;
+    uint32_t draining_slots;
+    /** The settings in use. */
+    uint32_t rays;
+    uint32_t bounces;
+    uint32_t order;
+    uint32_t rate_hz;
+    uint32_t threads;
+    float duration;
+    float transition;
+    uint32_t reserved;
+    uint64_t ticks;
+    double last_tick_ms;
+    double max_tick_ms;
+    /** The latest tick's Steam Audio run. */
+    double simulate_ms;
+    /** Decay time (RT60, seconds) at the listener, bands below 800 Hz, to 8 kHz, above. */
+    float listener_reverb_times[3];
+    /** Level of the reflections' output (omnidirectional), dB full scale; -120 when silent. */
+    float output_db;
+    /** vsa_engine_set_reflection_gain. */
+    float gain;
+    /** Where the latest simulation listened from (scene coordinates). */
+    float listener[3];
+} vsa_reflection_stats;
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_reflection_stats(vsa_engine* engine, vsa_reflection_stats* out);
+
+typedef struct vsa_reflection_source {
+    uint32_t struct_size;
+    /** 0: the listener's reverb; otherwise a voice's own. */
+    uint32_t slot;
+    vsa_voice voice;
+    /** Simulated from (scene coordinates; moved out of any solid block). */
+    float position[3];
+    /** Decay time per band, seconds. */
+    float reverb_times[3];
+    /** The tail's starting level per band (amplitude). */
+    float eq[3];
+    /** Samples from the sound to the start of its tail. */
+    int32_t delay;
+} vsa_reflection_source;
+
+/**
+ * The sources simulated in the latest reflection tick: fills up to `capacity` entries
+ * (out[0].struct_size set) and sets *out_count to the total.
+ */
+VSA_API vsa_result VSA_CALL vsa_engine_get_reflection_sources(vsa_engine* engine, vsa_reflection_source* out,
+                                                              uint32_t capacity, uint32_t* out_count);
+
+/** Scales every reflection (smoothly): 1 = as simulated; 0..4. */
+VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_gain(vsa_engine* engine, float gain);
+
+/** One leg of a traced sound path (vsa_scene_trace_rays). */
+typedef struct vsa_ray_segment {
+    uint32_t struct_size;
+    /** 0 for the leg leaving the origin. */
+    uint32_t bounce;
+    /** Scene coordinates. */
+    float from[3];
+    float to[3];
+    /** Mid-band energy left on arrival (1 at the origin). */
+    float energy;
+    /** The material at `to`; 0 if the leg ended in the open. */
+    uint32_t material;
+} vsa_ray_segment;
+
+/**
+ * Debugging: follows `rays` sound paths from `origin` (scene coordinates) through up to `bounces`
+ * reflections off the voxel world (specular, or diffuse by each material's scattering; losing
+ * each surface's absorption), legs up to `max_distance` long. Deterministic. Fills up to
+ * `capacity` segments (out[0].struct_size set) and sets *out_count to how many were filled.
+ * Not Steam Audio's own rays, but the same surfaces: it shows where sound goes.
+ */
+VSA_API vsa_result VSA_CALL vsa_scene_trace_rays(vsa_engine* engine, const float origin[3], uint32_t rays,
+                                                 uint32_t bounces, float max_distance, vsa_ray_segment* out,
+                                                 uint32_t capacity, uint32_t* out_count);
 
 /**
  * Message for the most recent failure on the calling thread, or "" if none.

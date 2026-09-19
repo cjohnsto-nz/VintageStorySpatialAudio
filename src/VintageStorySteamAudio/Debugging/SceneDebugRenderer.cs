@@ -27,6 +27,13 @@ public enum SceneOverlay
     /// was moved out of the block it sits in.
     /// </summary>
     Sources = 8,
+
+    /// <summary>
+    /// Sound paths from the listener bouncing off the scene (the reflections' view of the world),
+    /// bright cyan fading to dark blue as each surface absorbs energy; and a magenta line to each
+    /// voice with reflections of its own.
+    /// </summary>
+    Reflections = 16,
 }
 
 /// <summary>
@@ -60,6 +67,9 @@ internal sealed class SceneDebugRenderer : IRenderer
     private MeshRef? probeFace;
     private MeshRef? sourceLines;
     private Vec3d sourceAnchor = new();
+    private MeshRef? rayLines;
+    private MeshRef? slotLines;
+    private Vec3d rayAnchor = new();
 
     public SceneDebugRenderer(ICoreClientAPI capi, AudioEngine engine, Func<MaterialTable?> materials, Func<ChunkKey?> centre)
     {
@@ -129,6 +139,80 @@ internal sealed class SceneDebugRenderer : IRenderer
         lines.Flags = Enumerable.Repeat(256, lines.VerticesCount).ToArray();
         sourceLines = capi.Render.UploadMesh(lines);
     }
+
+    /// <summary>
+    /// The reflections view: traced sound paths (scene coordinates relative to
+    /// <paramref name="origin"/>), and lines from <paramref name="from"/> (world coordinates) to each
+    /// voice with reflections of its own.
+    /// </summary>
+    public void SetReflections(IReadOnlyList<RaySegment> rays, IReadOnlyList<ReflectionSourceInfo> slots, (int X, int Y, int Z) origin, Vec3d from)
+    {
+        rayLines?.Dispose();
+        rayLines = null;
+        slotLines?.Dispose();
+        slotLines = null;
+        rayAnchor = from.Clone();
+        if (rays.Count > 0)
+        {
+            var lines = new MeshData(rays.Count * 2, rays.Count * 2, withNormals: false, withUv: false, withRgba: true, withFlags: true);
+            lines.SetMode(EnumDrawMode.Lines);
+            foreach (RaySegment r in rays)
+            {
+                // The energy on leaving the previous surface (at the start) and on arrival.
+                int start = ToRgba(EnergyColor(r.Bounce == 0 ? 1f : r.Energy / Math.Max(1e-3f, 1f - 0.1f)), EnergyAlpha(r.Energy));
+                int end = ToRgba(EnergyColor(r.Energy), EnergyAlpha(r.Energy));
+                lines.AddVertexSkipTex((float)(r.From.X + origin.X - rayAnchor.X), (float)(r.From.Y + origin.Y - rayAnchor.Y), (float)(r.From.Z + origin.Z - rayAnchor.Z), start);
+                lines.AddIndex(lines.VerticesCount - 1);
+                lines.AddVertexSkipTex((float)(r.To.X + origin.X - rayAnchor.X), (float)(r.To.Y + origin.Y - rayAnchor.Y), (float)(r.To.Z + origin.Z - rayAnchor.Z), end);
+                lines.AddIndex(lines.VerticesCount - 1);
+            }
+
+            lines.Flags = Enumerable.Repeat(256, lines.VerticesCount).ToArray();
+            rayLines = capi.Render.UploadMesh(lines);
+        }
+
+        var voices = slots.Where(s => s.Slot > 0).ToList();
+        if (voices.Count > 0)
+        {
+            var lines = new MeshData(voices.Count * 8, voices.Count * 8, withNormals: false, withUv: false, withRgba: true, withFlags: true);
+            lines.SetMode(EnumDrawMode.Lines);
+            int magenta = ToRgba(unchecked((int)0xFFFF40FF), 255);
+            void Line(double ax, double ay, double az, double bx, double by, double bz)
+            {
+                lines.AddVertexSkipTex((float)(ax - rayAnchor.X), (float)(ay - rayAnchor.Y), (float)(az - rayAnchor.Z), magenta);
+                lines.AddIndex(lines.VerticesCount - 1);
+                lines.AddVertexSkipTex((float)(bx - rayAnchor.X), (float)(by - rayAnchor.Y), (float)(bz - rayAnchor.Z), magenta);
+                lines.AddIndex(lines.VerticesCount - 1);
+            }
+
+            foreach (ReflectionSourceInfo s in voices)
+            {
+                double x = s.Position.X + (double)origin.X;
+                double y = s.Position.Y + (double)origin.Y;
+                double z = s.Position.Z + (double)origin.Z;
+                Line(from.X, from.Y, from.Z, x, y, z);
+                const double c = 0.35;  // a diamond at the source
+                Line(x - c, y, z, x, y + c, z);
+                Line(x, y + c, z, x + c, y, z);
+                Line(x + c, y, z, x, y - c, z);
+            }
+
+            lines.Flags = Enumerable.Repeat(256, lines.VerticesCount).ToArray();
+            slotLines = capi.Render.UploadMesh(lines);
+        }
+    }
+
+    /// <summary>Bright cyan (all the energy) to dark blue (a thousandth), as 0xAARRGGBB.</summary>
+    public static int EnergyColor(float energy)
+    {
+        double t = Math.Clamp(-Math.Log10(Math.Max(energy, 1e-3f)) / 3.0, 0.0, 1.0);
+        int red = (int)Math.Round(140 * (1 - t) + (30 * t));
+        int green = (int)Math.Round(255 * (1 - t) + (40 * t));
+        int blue = (int)Math.Round(255 * (1 - t) + (170 * t));
+        return unchecked((int)0xFF000000) | (red << 16) | (green << 8) | blue;
+    }
+
+    private static int EnergyAlpha(float energy) => (int)Math.Round(255 * Math.Clamp(0.25 + (0.75 * Math.Sqrt(Math.Max(energy, 0f))), 0.0, 1.0));
 
     /// <summary>Green (0 dB) through yellow (-20 dB) to red (-40 dB and below), as 0xAARRGGBB.</summary>
     public static int GainColor(float gain)
@@ -245,6 +329,44 @@ internal sealed class SceneDebugRenderer : IRenderer
         TrianglesShown = shown;
         RenderProbe(camera, program);
         RenderSources(camera, program);
+        RenderReflections(camera, program);
+    }
+
+    private void RenderReflections(Vec3d camera, IShaderProgram program)
+    {
+        if ((Overlay & SceneOverlay.Reflections) == 0 || (rayLines is null && slotLines is null))
+        {
+            return;
+        }
+
+        matrix.Identity().Set(capi.Render.CameraMatrixOrigin)
+            .Translate(rayAnchor.X - camera.X, rayAnchor.Y - camera.Y, rayAnchor.Z - camera.Z);
+        program.Use();
+        capi.Render.GlToggleBlend(blend: true);
+        program.Uniform("origin", 0f, 0f, 0f);
+        program.UniformMatrix("projectionMatrix", capi.Render.CurrentProjectionMatrix);
+        program.UniformMatrix("modelViewMatrix", matrix.Values);
+        program.Uniform("colorIn", white);
+        if (rayLines is not null)
+        {
+            // The paths stay in the space they are traced in: hidden behind its walls like the world.
+            capi.Render.GLEnableDepthTest();
+            capi.Render.GLDepthMask(on: false);
+            capi.Render.LineWidth = 1.5f;
+            capi.Render.RenderMesh(rayLines);
+            capi.Render.GLDepthMask(on: true);
+        }
+
+        if (slotLines is not null)
+        {
+            capi.Render.GLDisableDepthTest();  // voices behind walls too
+            capi.Render.LineWidth = 2.5f;
+            capi.Render.RenderMesh(slotLines);
+            capi.Render.GLEnableDepthTest();
+        }
+
+        capi.Render.LineWidth = 1.6f;
+        program.Stop();
     }
 
     private void RenderSources(Vec3d camera, IShaderProgram program)
@@ -317,6 +439,10 @@ internal sealed class SceneDebugRenderer : IRenderer
         SetProbe(null);
         sourceLines?.Dispose();
         sourceLines = null;
+        rayLines?.Dispose();
+        rayLines = null;
+        slotLines?.Dispose();
+        slotLines = null;
         box.Dispose();
     }
 

@@ -56,6 +56,43 @@ public sealed record EngineOptions
 
     /// <summary>Direct simulation updates per second. 0 = 30.</summary>
     public int DirectRateHz { get; init; }
+
+    /// <summary>Reverb simulated from the world scene (Phase 6).</summary>
+    public bool Reflections { get; init; } = true;
+
+    /// <summary>The reflection simulation's quality; zeros are the engine's defaults (Balanced).</summary>
+    public ReflectionQualitySettings ReflectionQuality { get; init; } = new();
+}
+
+/// <summary>
+/// The reflection simulation's settings (vsa_engine_config's reflection_* fields); 0 = the
+/// engine's default for each. <see cref="Config.ReflectionPresets"/> has the named presets.
+/// </summary>
+public sealed record ReflectionQualitySettings
+{
+    /// <summary>Voices with reflections of their own (the rest share the listener's reverb). 1..64.</summary>
+    public int Sources { get; init; }
+
+    /// <summary>Rays traced from the listener per simulation. 256..32768.</summary>
+    public int Rays { get; init; }
+
+    /// <summary>Bounces per ray. 1..64.</summary>
+    public int Bounces { get; init; }
+
+    /// <summary>Impulse response length, seconds. 0.25..4.</summary>
+    public float DurationSeconds { get; init; }
+
+    /// <summary>Ambisonic order of the reflections. 1..3.</summary>
+    public int Order { get; init; }
+
+    /// <summary>Simulations per second at most. 1..60.</summary>
+    public int RateHz { get; init; }
+
+    /// <summary>Worker threads for one simulation (0 = a quarter of the cores, 1..4).</summary>
+    public int Threads { get; init; }
+
+    /// <summary>Seconds of each impulse response convolved (early reflections); the rest is a parametric tail. 0.02..0.5.</summary>
+    public float TransitionSeconds { get; init; }
 }
 
 /// <summary>Where a positional voice is and how it falls off with distance.</summary>
@@ -160,7 +197,8 @@ public sealed partial class AudioEngine : IDisposable
                     LogUserData = log is null ? 0 : GCHandle.ToIntPtr(logHandle),
                     RayTracer = (uint)options.RayTracer,
                     Flags = (options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0)
-                        | (options.DirectSimulation ? 0 : VsaNative.EngineFlagNoDirectSimulation),
+                        | (options.DirectSimulation ? 0 : VsaNative.EngineFlagNoDirectSimulation)
+                        | (options.Reflections ? 0 : VsaNative.EngineFlagNoReflections),
                     SampleRate = checked((uint)options.SampleRate),
                     BlockFrames = checked((uint)options.BlockFrames),
                     MaxVoices = checked((uint)options.MaxVoices),
@@ -171,6 +209,14 @@ public sealed partial class AudioEngine : IDisposable
                     HrtfSofaPath = sofa,
                     OcclusionSamples = checked((uint)options.OcclusionSamples),
                     DirectRateHz = checked((uint)options.DirectRateHz),
+                    ReflectionSources = checked((uint)options.ReflectionQuality.Sources),
+                    ReflectionRays = checked((uint)options.ReflectionQuality.Rays),
+                    ReflectionBounces = checked((uint)options.ReflectionQuality.Bounces),
+                    ReflectionDuration = options.ReflectionQuality.DurationSeconds,
+                    ReflectionOrder = checked((uint)options.ReflectionQuality.Order),
+                    ReflectionRateHz = checked((uint)options.ReflectionQuality.RateHz),
+                    ReflectionThreads = checked((uint)options.ReflectionQuality.Threads),
+                    ReflectionTransition = options.ReflectionQuality.TransitionSeconds,
                 };
 
                 NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out engine), "vsa_engine_create");

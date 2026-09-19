@@ -17,6 +17,20 @@ struct TransmissionMaterial {
     float crossing_db[3] = {0.0f, 0.0f, 0.0f};
     /// Loss per metre inside it, dB per band.
     float bulk_db_per_metre[3] = {0.0f, 0.0f, 0.0f};
+    /// Surface properties (for the reflection-path view): energy absorbed per band, and the
+    /// fraction scattered diffusely.
+    float absorption[3] = {0.1f, 0.1f, 0.1f};
+    float scattering = 0.05f;
+};
+
+/// Where a ray first meets something (VoxelView::first_hit).
+struct VoxelHit {
+    double distance = 0.0;
+    double point[3] = {};
+    /// The face's outward normal (towards where the ray came from).
+    double normal[3] = {};
+    uint16_t material = 0;
+    bool partial = false;
 };
 
 /// A straight path's passage through the world.
@@ -65,6 +79,12 @@ public:
     /// Keeps `point` at least `radius` from the faces of solid cells next to its own (a sound on
     /// the floor would otherwise have half its occlusion volume inside the floor).
     void clearance(double point[3], double radius) const;
+
+    /// The first non-air full cell, or partial block box, a ray from `origin` along the unit
+    /// `direction` meets within `max_distance` (world block coordinates). The full cell the ray
+    /// starts in is ignored. Partial blocks' boxes count; unloaded chunks are air.
+    [[nodiscard]] bool first_hit(const double origin[3], const double direction[3], double max_distance,
+                                 VoxelHit& hit) const;
 
     /// The material of the full cell at a world block, 0 (air) if unknown or partial.
     [[nodiscard]] uint16_t material_at(int64_t x, int64_t y, int64_t z) const;

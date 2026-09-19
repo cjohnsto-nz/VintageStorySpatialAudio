@@ -6,6 +6,7 @@
 #include "world/world_scene.hpp"
 
 #include <algorithm>
+#include <shared_mutex>
 #include <string>
 
 namespace vsa::world {
@@ -31,6 +32,19 @@ IPLCoordinateSpace3 pose_at(const float origin[3]) {
 }
 
 }  // namespace
+
+void DirectSimulator::listen_from(const VoxelView& view, const ListenerPose& pose, double world[3]) {
+    const int32_t* origin = view.origin();
+    for (int k = 0; k < 3; ++k) {
+        world[k] = static_cast<double>(pose.position[k]) + origin[k];
+    }
+    // A camera inside a block (third person against a wall) listens from just outside it, towards
+    // where it looks.
+    const double ahead[3] = {world[0] + static_cast<double>(pose.forward[0]) * 2.0,
+                             world[1] + static_cast<double>(pose.forward[1]) * 2.0,
+                             world[2] + static_cast<double>(pose.forward[2]) * 2.0};
+    view.escape(world, ahead, 2);
+}
 
 DirectSimulator::DirectSimulator(const steam::SteamContext& steam, WorldScene& scene, DirectChannel& channel,
                                  uint32_t occlusion_samples, uint32_t rate_hz)
@@ -66,7 +80,7 @@ DirectSimulator::~DirectSimulator() {
         }
     }
     if (any) {
-        std::lock_guard lock(scene_.scene_lock());
+        std::shared_lock lock(scene_.scene_lock());
         iplSimulatorCommit(simulator_.get());
     }
     sources_.clear();
@@ -127,15 +141,8 @@ void DirectSimulator::tick() {
     const ListenerPose pose = listener_.read();
     const std::shared_ptr<const VoxelView> view = scene_.voxel_view();
     const int32_t* origin = view->origin();
-    double listener_world[3] = {static_cast<double>(pose.position[0]) + origin[0],
-                                static_cast<double>(pose.position[1]) + origin[1],
-                                static_cast<double>(pose.position[2]) + origin[2]};
-    // A camera inside a block (third person against a wall) listens from just outside it, towards
-    // where it looks.
-    const double ahead[3] = {listener_world[0] + static_cast<double>(pose.forward[0]) * 2.0,
-                             listener_world[1] + static_cast<double>(pose.forward[1]) * 2.0,
-                             listener_world[2] + static_cast<double>(pose.forward[2]) * 2.0};
-    view->escape(listener_world, ahead, 2);
+    double listener_world[3];
+    listen_from(*view, pose, listener_world);
     float listener_scene[3];
     for (int k = 0; k < 3; ++k) {
         listener_scene[k] = static_cast<float>(listener_world[k] - origin[k]);
@@ -214,9 +221,9 @@ void DirectSimulator::tick() {
 
     const auto occlusion_start = std::chrono::steady_clock::now();
     if (!active.empty() || membership_changed) {
-        // The world scene switches the simulator to each new top-level scene under this lock;
-        // source changes need a commit of their own.
-        std::lock_guard lock(scene_.scene_lock());
+        // The world scene commits scene changes to the simulator under this lock; source
+        // changes need a commit of their own.
+        std::shared_lock lock(scene_.scene_lock());
         if (membership_changed) {
             iplSimulatorCommit(simulator_.get());
         }

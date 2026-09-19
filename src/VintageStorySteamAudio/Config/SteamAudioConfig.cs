@@ -101,6 +101,43 @@ public sealed class SteamAudioConfig
     /// <summary>Occlusion updates per second. 0 = 30.</summary>
     public int OcclusionRateHz { get; set; }
 
+    /// <summary>
+    /// Reverb from the world itself (Phase 6): rooms, caves and halls ring as their size and
+    /// materials make them. Replaces vanilla's reverb presets.
+    /// </summary>
+    public bool Reflections { get; set; } = true;
+
+    /// <summary>Low, Medium, High or Ultra (see <see cref="ReflectionPresets"/>); the settings below override single values.</summary>
+    [JsonConverter(typeof(StringEnumConverter))]
+    public ReflectionQuality ReflectionQuality { get; set; } = ReflectionQuality.Medium;
+
+    /// <summary>Voices with reflections of their own (the rest share yours); 0 = the preset's.</summary>
+    public int ReflectionSources { get; set; }
+
+    /// <summary>Rays per simulation; 0 = the preset's.</summary>
+    public int ReflectionRays { get; set; }
+
+    /// <summary>Bounces per ray; 0 = the preset's.</summary>
+    public int ReflectionBounces { get; set; }
+
+    /// <summary>Longest reverb simulated, seconds; 0 = the preset's.</summary>
+    public float ReflectionDurationSeconds { get; set; }
+
+    /// <summary>Ambisonic order of the reflections (1..3, direction detail); 0 = the preset's.</summary>
+    public int ReflectionOrder { get; set; }
+
+    /// <summary>Simulations per second at most; 0 = the preset's.</summary>
+    public int ReflectionRateHz { get; set; }
+
+    /// <summary>Threads per simulation; 0 = the preset's (a quarter of the cores, up to 4).</summary>
+    public int ReflectionThreads { get; set; }
+
+    /// <summary>Seconds of early reflections rendered exactly (directional); 0 = the preset's.</summary>
+    public float ReflectionTransitionSeconds { get; set; }
+
+    /// <summary>Scales all reverb (1 = as simulated, 0..4; also .steamaudio reverb gain).</summary>
+    public float ReflectionGain { get; set; } = 1f;
+
     /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 
@@ -117,10 +154,25 @@ public sealed class SteamAudioConfig
         DirectSimulation = Occlusion,
         OcclusionSamples = Math.Clamp(OcclusionSamples, 0, 256),
         DirectRateHz = Math.Clamp(OcclusionRateHz, 0, 120),
+        Reflections = Reflections,
+        ReflectionQuality = ReflectionPresets.Resolve(ReflectionQuality, new ReflectionQualitySettings
+        {
+            Sources = ReflectionSources,
+            Rays = ReflectionRays,
+            Bounces = ReflectionBounces,
+            DurationSeconds = ReflectionDurationSeconds,
+            Order = ReflectionOrder,
+            RateHz = ReflectionRateHz,
+            Threads = ReflectionThreads,
+            TransitionSeconds = ReflectionTransitionSeconds,
+        }),
         HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
             : modConfigDirectory is null ? HrtfSofaFile.Trim()
             : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),
     };
+
+    /// <summary>The reflection gain, clamped to what the engine accepts.</summary>
+    public float ReflectionGainClamped() => float.IsFinite(ReflectionGain) ? Math.Clamp(ReflectionGain, 0f, 4f) : 1f;
 
     /// <summary>The trims by bus; unknown names are ignored.</summary>
     public IReadOnlyDictionary<AudioBus, float> CategoryTrimsDb()

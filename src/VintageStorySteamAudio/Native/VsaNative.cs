@@ -168,6 +168,14 @@ internal unsafe struct VsaEngineConfig
     public byte* HrtfSofaPath;
     public uint OcclusionSamples;
     public uint DirectRateHz;
+    public uint ReflectionSources;
+    public uint ReflectionRays;
+    public uint ReflectionBounces;
+    public float ReflectionDuration;
+    public uint ReflectionOrder;
+    public uint ReflectionRateHz;
+    public uint ReflectionThreads;
+    public float ReflectionTransition;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -468,6 +476,56 @@ internal struct VsaSimulationStats
     public int OriginZ;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaReflectionStats
+{
+    public uint StructSize;
+    public uint Enabled;
+    public uint Slots;
+    public uint LiveSlots;
+    public uint WaitingSlots;
+    public uint DrainingSlots;
+    public uint Rays;
+    public uint Bounces;
+    public uint Order;
+    public uint RateHz;
+    public uint Threads;
+    public float Duration;
+    public float Transition;
+    public uint Reserved;
+    public ulong Ticks;
+    public double LastTickMs;
+    public double MaxTickMs;
+    public double SimulateMs;
+    public fixed float ListenerReverbTimes[3];
+    public float OutputDb;
+    public float Gain;
+    public fixed float Listener[3];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaReflectionSource
+{
+    public uint StructSize;
+    public uint Slot;
+    public ulong Voice;
+    public fixed float Position[3];
+    public fixed float ReverbTimes[3];
+    public fixed float Eq[3];
+    public int Delay;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaRaySegment
+{
+    public uint StructSize;
+    public uint Bounce;
+    public fixed float From[3];
+    public fixed float To[3];
+    public float Energy;
+    public uint Material;
+}
+
 internal static unsafe partial class VsaNative
 {
     public const int ChunkSize = 32;
@@ -476,10 +534,11 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 7;
+    public const uint AbiVersion = 8;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;
+    public const uint EngineFlagNoReflections = 1u << 2;
     public const uint SourceEscaped = 1u << 0;
     public const uint FadeStopWhenDone = 1u << 0;
     public const uint EventFlagFadeCancelled = 1u << 0;
@@ -656,6 +715,22 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_simulation_stats")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult EngineGetSimulationStats(nint engine, ref VsaSimulationStats stats);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_reflection_stats")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineGetReflectionStats(nint engine, ref VsaReflectionStats stats);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_reflection_sources")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineGetReflectionSources(nint engine, VsaReflectionSource* sources, uint capacity, out uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_set_reflection_gain")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineSetReflectionGain(nint engine, float gain);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_trace_rays")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneTraceRays(nint engine, float* origin, uint rays, uint bounces, float maxDistance, VsaRaySegment* segments, uint capacity, out uint count);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_get_last_error")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

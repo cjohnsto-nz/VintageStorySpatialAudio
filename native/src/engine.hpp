@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/mixer.hpp"
+#include "audio/reflections.hpp"
 #include "audio/spatial.hpp"
 #include "core/latest_value.hpp"
 #include "audio/voice.hpp"
@@ -11,6 +12,9 @@
 #include "dsp/resampler.hpp"
 #include "steam/steam_context.hpp"
 #include "world/direct_sim.hpp"
+#include "world/ray_paths.hpp"
+#include "world/reflection_channel.hpp"
+#include "world/reflection_sim.hpp"
 #include "world/world_scene.hpp"
 #include "vsaudio.h"
 
@@ -72,6 +76,7 @@ public:
     void set_master_gain(float gain);
     void set_listener(const vsa_listener& listener);
     void set_render_mode(uint32_t mode);
+    void set_reflection_gain(float gain);
 
     // Output.
     [[nodiscard]] std::vector<vsa_device_info> enumerate_devices();
@@ -94,6 +99,8 @@ public:
         uint32_t occlusion_samples = 16;
         uint32_t direct_rate_hz = 30;
         bool direct_simulation = true;
+        bool reflections = true;
+        world::ReflectionSettings reflection;
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
@@ -101,6 +108,22 @@ public:
     [[nodiscard]] world::WorldScene& scene() noexcept { return *scene_; }
     /// The direct simulation (thread-safe queries); null when disabled.
     [[nodiscard]] world::DirectSimulator* direct() noexcept { return direct_sim_.get(); }
+
+    /// The reflection simulation's state, for debugging views. `enabled` false when disabled.
+    struct ReflectionReport {
+        bool enabled = false;
+        world::ReflectionStats stats;
+        uint32_t live = 0;
+        uint32_t waiting = 0;
+        uint32_t draining = 0;
+        float mean_square = 0.0f;
+        float gain = 1.0f;
+    };
+    [[nodiscard]] ReflectionReport reflection_report();
+    /// The reflection simulation; null when disabled. Replaced when the output's rate changes
+    /// (tests use it with a fixed output).
+    [[nodiscard]] world::ReflectionSimulator* reflection_simulator() noexcept { return reflection_sim_.get(); }
+    [[nodiscard]] std::vector<world::ReflectionSlotDebug> reflection_slots();
 
 private:
     enum class StateChange { None, Start, Pause, Stop };
@@ -123,6 +146,11 @@ private:
     void open_device_locked(const vsa_device_id* id, uint32_t channels);
     void close_device_locked() noexcept;  // requires output_mutex_
     void push_event_locked(const vsa_event& event);                        // requires events_mutex_
+
+    /// Everything that depends on the output's rate and layout: the reflection simulator (rebuilt
+    /// when the rate changes), the reflection renderer and the mixer. Nothing renders meanwhile.
+    void prepare_output(uint32_t sample_rate, uint32_t channels, const Speaker* speakers);
+    void set_simulations_threaded(bool threaded);
 
     static void render_callback(void* user, float* out, uint32_t frames) noexcept;
     static void prepare_callback(void* user, uint32_t sample_rate, uint32_t channels, const Speaker* speakers);
@@ -147,9 +175,15 @@ private:
     std::unique_ptr<world::WorldScene> scene_;
     std::unique_ptr<world::DirectChannel> direct_channel_;
     std::unique_ptr<world::DirectSimulator> direct_sim_;
+    std::unique_ptr<world::ReflectionChannel> reflection_channel_;
+    // Replaced (under api_mutex_, with nothing rendering) when the output's rate changes.
+    std::unique_ptr<world::ReflectionSimulator> reflection_sim_;
     double offline_seconds_ = 0.0;  // offline output time, for the synchronous simulation
     SpatialRenderer spatial_;
     LatestValue<ListenerPose> listener_;
+    ListenerPose last_pose_;  // api_mutex_: for a rebuilt reflection simulator
+    float reflection_gain_ = 1.0f;  // api_mutex_
+    ReflectionRenderer reflections_;
     Mixer mixer_;
     uint32_t stream_history_frames_;
     uint32_t stream_window_frames_;

@@ -666,7 +666,9 @@ std::shared_ptr<const VoxelView> WorldScene::voxel_view() const {
             // Surface transmission is an amplitude per crossing.
             t.crossing_db[b] = -20.0f * std::log10(std::clamp(m.transmission[b], 1e-6f, 1.0f));
             t.bulk_db_per_metre[b] = std::max(0.0f, m.attenuation_db_per_metre[b]);
+            t.absorption[b] = std::clamp(m.absorption[b], 0.0f, 1.0f);
         }
+        t.scattering = std::clamp(m.scattering, 0.0f, 1.0f);
         losses.push_back(t);
     }
     view_ = std::make_shared<const VoxelView>(std::move(chunks), std::move(losses),

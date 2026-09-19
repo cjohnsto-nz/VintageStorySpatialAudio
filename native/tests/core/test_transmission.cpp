@@ -216,3 +216,45 @@ TEST_CASE("transmission: a sound inside a partial block (an anvil) leaves it, an
     double open[3] = {6.5, 16.5, 16.5};
     CHECK(!view.escape(open, listener, 2, 0.25));
 }
+
+TEST_CASE("first hit: a wall's face, its outward normal, and a partial block's box") {
+    const VoxelView view = wall(Stone, 2);  // x 10..12
+    VoxelHit hit;
+    const double from[3] = {5.0, 16.5, 16.5};
+    const double east[3] = {1.0, 0.0, 0.0};
+    REQUIRE(view.first_hit(from, east, 100.0, hit));
+    CHECK(hit.distance == doctest::Approx(5.0));
+    CHECK(hit.point[0] == doctest::Approx(10.0));
+    CHECK(hit.normal[0] == -1.0);
+    CHECK(hit.normal[1] == 0.0);
+    CHECK(hit.material == Stone);
+    CHECK_FALSE(hit.partial);
+    // Out of reach, and away from it.
+    CHECK_FALSE(view.first_hit(from, east, 4.0, hit));
+    const double west[3] = {-1.0, 0.0, 0.0};
+    CHECK_FALSE(view.first_hit(from, west, 100.0, hit));
+    // Starting inside the wall: the cell it starts in is ignored, the next one is not.
+    const double inside[3] = {10.5, 16.5, 16.5};
+    REQUIRE(view.first_hit(inside, east, 100.0, hit));
+    CHECK(hit.point[0] == doctest::Approx(11.0));
+    const double beyond[3] = {11.5, 16.5, 16.5};
+    CHECK_FALSE(view.first_hit(beyond, east, 100.0, hit));
+
+    // A slab (lower half of the block at 20, 16, 16) is hit on its top face from above.
+    auto c = std::make_shared<ChunkVoxels>();
+    PartialBlock slab;
+    slab.cell = static_cast<uint16_t>(cell_index(20, 16, 16));
+    slab.material = Wood;
+    slab.boxes.push_back(Box{{0.0f, 0.0f, 0.0f}, {1.0f, 0.5f, 1.0f}});
+    c->partials.push_back(slab);
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView partial(std::move(chunks), materials());
+    const double above[3] = {20.5, 20.0, 16.5};
+    const double down[3] = {0.0, -1.0, 0.0};
+    REQUIRE(partial.first_hit(above, down, 100.0, hit));
+    CHECK(hit.point[1] == doctest::Approx(16.5));
+    CHECK(hit.normal[1] == 1.0);
+    CHECK(hit.material == Wood);
+    CHECK(hit.partial);
+}

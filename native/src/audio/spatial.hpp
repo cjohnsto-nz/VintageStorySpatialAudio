@@ -25,8 +25,9 @@ struct SpatialParams {
     /// 1 = fully spatialised; lower values blend towards a centred, unspatialised signal
     /// (sources at the listener's head have no meaningful direction).
     float spatial_blend = 1.0f;
-    /// Inverse-distance attenuation, 0..1.
+    /// Inverse-distance attenuation, 0..1, and the distance itself (metres).
     float distance_gain = 1.0f;
+    float distance = 0.0f;
     /// Steam Audio 3-band air absorption, 0..1 each.
     float air_absorption[3] = {1.0f, 1.0f, 1.0f};
     /// From the direct simulation (Phase 5): the visible fraction of the source, and the amplitude
@@ -98,6 +99,9 @@ public:
     /// Below full spatial_blend the directional components fade out, leaving the omnidirectional
     /// one: a source at the head is heard centred.
     void encode(int set, const SpatialParams& params, float* mono) noexcept;
+    /// Adds another world-space Ambisonic signal (Steam Audio's convention; `channels` <= 16, the
+    /// lowest orders) to this block's bus: the reflections share the binaural decode.
+    void add_ambisonic(const float* const* in, uint32_t channels) noexcept;
     /// Decodes the bus binaurally for this listener orientation into `left`/`right` (overwritten).
     /// Returns false (and writes nothing) when the bus and the decoder's tail are silent.
     bool decode(const Orientation& orientation, float* left, float* right) noexcept;
@@ -134,6 +138,10 @@ private:
     std::array<float*, kAmbisonicChannels> bus_{};
     std::vector<float> ramp_;  // (j + 1) / frames: the per-frame weight of a coefficient change
     bool bus_used_ = false;
+    // The highest order in the bus this block (voices are order 3; the reflections may be lower),
+    // and the last block's: the decoder runs at the higher of the two, so a tail rings out.
+    int bus_order_ = 0;
+    int last_order_ = 0;
     // Blocks the decoder keeps running after the bus falls silent, to let its convolution tail out.
     uint32_t tail_blocks_ = 0;
 };

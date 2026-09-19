@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -20,6 +22,8 @@ vsa_engine_config make_config(uint32_t max_voices = 0) {
     config.abi_version = VSA_ABI_VERSION;
     config.ray_tracer = VSA_RAY_TRACER_STEAM;
     config.max_voices = max_voices;
+    // Offline, the reflection simulation runs on the rendering thread; its own tests below.
+    config.flags = VSA_ENGINE_FLAG_NO_REFLECTIONS;
     return config;
 }
 
@@ -112,7 +116,7 @@ TEST_CASE("the render path never allocates") {
     // allocates (the steady state is checked below).
     vsa_engine_config config = make_config();
     config.max_binaural_voices = 1;
-    config.flags = VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION;
+    config.flags |= VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION;
     vsa::Engine engine(config);
     AssetRef mono(pcm_asset(engine, vsa_test::sine(440.0, 44100.0, 22050), 1, 44100));
     AssetRef stereo(pcm_asset(engine, vsa_test::sine(660.0, 48000.0, 9600, 0.4f, 2), 2, 48000));
@@ -257,6 +261,181 @@ TEST_CASE("256 positional voices render faster than real time, binaural and pann
         CHECK(engine.stats().real_voices == kVoices);
 #if defined(NDEBUG)
         CHECK(r.p99 < r.period_us);
+#endif
+    }
+}
+
+namespace {
+
+/// A closed 12 x 6 x 12 stone room (interior from 2, 2, 2) in the engine's scene.
+void build_room(vsa::Engine& engine) {
+    using namespace vsa::world;
+    AcousticMaterial air;
+    air.kind = MaterialKind::Air;
+    AcousticMaterial stone;
+    stone.kind = MaterialKind::Solid;
+    stone.absorption[0] = stone.absorption[1] = stone.absorption[2] = 0.15f;
+    stone.scattering = 0.3f;
+    engine.scene().set_materials({air, stone});
+    auto c = std::make_shared<ChunkVoxels>();
+    for (int y = 1; y <= 8; ++y) {
+        for (int z = 1; z <= 14; ++z) {
+            for (int x = 1; x <= 14; ++x) {
+                if (x == 1 || x == 14 || y == 1 || y == 8 || z == 1 || z == 14) {
+                    c->materials[static_cast<std::size_t>(cell_index(x, y, z))] = 1;
+                }
+            }
+        }
+    }
+    engine.scene().set_chunk({0, 0, 0}, c, 0);
+    REQUIRE(engine.scene().wait_idle(std::chrono::seconds(10)));
+}
+
+vsa_listener in_room() {
+    vsa_listener l = facing(0.0f, -1.0f);
+    l.position[0] = 8.0f;
+    l.position[1] = 3.7f;
+    l.position[2] = 8.0f;
+    return l;
+}
+
+vsa_engine_config reflection_config() {
+    vsa_engine_config config = make_config();
+    config.flags = VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION;  // reflections alone
+    return config;
+}
+
+/// Renders until every per-voice reflection slot is live (the simulation runs on its own thread).
+void settle(vsa::Engine& engine, uint32_t live) {
+    std::vector<float> out(4800 * 12);
+    for (int i = 0; i < 200 && engine.reflection_report().live < live; ++i) {
+        engine.render_offline(out.data(), 4800);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(engine.reflection_report().live == live);
+}
+
+}  // namespace
+
+TEST_CASE("the reflections' render path never allocates") {
+    // The simulation runs on its own thread (as with a device): only rendering is counted.
+    vsa_engine_config config = reflection_config();
+    config.reflection_sources = 4;
+    config.reflection_rays = 1024;
+    config.reflection_bounces = 8;
+    vsa::Engine engine(config);
+    build_room(engine);
+    engine.set_listener(in_room());
+    engine.reflection_simulator()->set_threaded(true);
+    AssetRef tone(pcm_asset(engine, vsa_test::sine(440.0, 48000.0, 48000, 0.2f), 1, 48000));
+    AssetRef blip(pcm_asset(engine, vsa_test::sine(880.0, 48000.0, 4800, 0.2f), 1, 48000));
+    std::vector<vsa_voice> voices;
+    for (int i = 0; i < 6; ++i) {
+        voices.push_back(voice(engine, tone.asset, VSA_BUS_ENTITY, 0.2f + 0.1f * static_cast<float>(i), 1.0f, true,
+                               VSA_SPATIAL_WORLD, 4.0f + static_cast<float>(i), 5.0f));
+        engine.start_voice(voices.back());
+    }
+    settle(engine, 4);
+
+    std::vector<float> out(48000 * 12);
+    std::vector<uint64_t> allocations;
+    for (int round = 0; round < 8; ++round) {
+        switch (round) {
+            case 1:  // short sounds: the listener's reverb
+                for (int i = 0; i < 4; ++i) {
+                    engine.start_voice(voice(engine, blip.asset, VSA_BUS_ENTITY, 0.5f, 1.0f, false, VSA_SPATIAL_WORLD,
+                                             6.0f, 6.0f + static_cast<float>(i)));
+                }
+                break;
+            case 2:  // slots drain and pass to the next voices
+                engine.stop_voice(voices[5]);
+                engine.stop_voice(voices[4]);
+                break;
+            case 3:
+                engine.set_reflection_gain(0.5f);
+                engine.set_voice_position(voices[0], VSA_SPATIAL_WORLD, 10.0f, 3.0f, 10.0f);
+                break;
+            case 4:
+                engine.set_render_mode(VSA_RENDER_SPEAKERS);  // the speaker decoder
+                break;
+            case 5: {
+                vsa_output_desc desc{};  // 7.1.4 (the reopen itself may allocate)
+                desc.struct_size = sizeof desc;
+                desc.kind = VSA_OUTPUT_NONE;
+                desc.channels = 12;
+                engine.open_output(desc);
+                engine.reflection_simulator()->set_threaded(true);  // closing the output stopped it
+                break;
+            }
+            case 6:
+                engine.start_voice(voices[5]);
+                engine.set_render_mode(VSA_RENDER_HEADPHONES);
+                break;
+            default: break;
+        }
+        vsa_test::AllocationScope scope;
+        engine.render_offline(out.data(), 4000);
+        allocations.push_back(scope.count());
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));  // simulation results arrive
+    }
+    for (const uint64_t count : allocations) {
+        CHECK(count == 0);
+    }
+    CHECK(engine.reflection_report().stats.ticks > 5);
+}
+
+TEST_CASE("reflections render within budget at the default (Balanced) quality") {
+    // The phase's CPU budget (PLAN section 9): the render thread under 25 % of the block period at
+    // p99 with eight voices' reflections and the listener's reverb among 32 voices; a simulation
+    // run within its 100 ms period on the default threads (which, resting as long as it runs,
+    // keeps the simulation under one core at two threads).
+    for (const vsa_render_mode mode : {VSA_RENDER_HEADPHONES, VSA_RENDER_SPEAKERS}) {
+        vsa::Engine engine(reflection_config());
+        engine.set_render_mode(mode);
+        build_room(engine);
+        engine.set_listener(in_room());
+        if (mode == VSA_RENDER_SPEAKERS) {
+            vsa_output_desc desc{};
+            desc.struct_size = sizeof desc;
+            desc.kind = VSA_OUTPUT_NONE;
+            desc.channels = 12;
+            engine.open_output(desc);
+        }
+        engine.reflection_simulator()->set_threaded(true);
+        AssetRef mono(pcm_asset(engine, vsa_test::sine(440.0, 48000.0, 48000, 0.1f), 1, 48000));
+        for (int i = 0; i < 32; ++i) {
+            const double angle = 2.0 * 3.14159265 * i / 32.0;
+            engine.start_voice(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.1f, 1.0f, true, VSA_SPATIAL_WORLD,
+                                     8.0f + 4.0f * static_cast<float>(std::cos(angle)),
+                                     8.0f + 4.0f * static_cast<float>(std::sin(angle))));
+        }
+        settle(engine, 8);
+        const uint32_t block = engine.settings().block_frames;
+        std::vector<float> out(static_cast<std::size_t>(block) * 12);
+        // The best of three 2-second windows: other processes (a parallel build, the test runner)
+        // must not decide the render thread's own cost.
+        double p50 = std::numeric_limits<double>::infinity();
+        double p99 = std::numeric_limits<double>::infinity();
+        for (int window = 0; window < 3; ++window) {
+            std::vector<double> times_us;
+            for (int i = 0; i < 2 * 48000 / static_cast<int>(block); ++i) {
+                const auto start = std::chrono::steady_clock::now();
+                engine.render_offline(out.data(), block);
+                times_us.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
+            }
+            std::sort(times_us.begin(), times_us.end());
+            p50 = std::min(p50, times_us[times_us.size() / 2]);
+            p99 = std::min(p99, times_us[times_us.size() * 99 / 100]);
+        }
+        const double period = 1e6 * block / 48000.0;
+        const vsa::Engine::ReflectionReport report = engine.reflection_report();
+        MESSAGE(std::string(mode == VSA_RENDER_HEADPHONES ? "headphones" : "7.1.4") << ", 32 voices, 8 with reflections: render p50 "
+                << p50 << " us (" << 100.0 * p50 / period << " %), p99 " << p99 << " us (" << 100.0 * p99 / period
+                << " %); simulation " << report.stats.last_tick_ms << " ms (worst " << report.stats.max_tick_ms << " ms)");
+        CHECK(report.live == 8);
+#if defined(NDEBUG)
+        CHECK(p99 < 0.25 * period);
+        CHECK(report.stats.last_tick_ms < 100.0);
 #endif
     }
 }

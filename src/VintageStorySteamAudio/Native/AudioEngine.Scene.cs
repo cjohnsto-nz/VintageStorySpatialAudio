@@ -166,6 +166,72 @@ public sealed record SimulationStats(
     (float X, float Y, float Z) Listener,
     (int X, int Y, int Z) Origin);
 
+/// <summary>The reflection simulation (Phase 6), for debugging views.</summary>
+/// <param name="Enabled">Whether reflections run.</param>
+/// <param name="Slots">Voices that can have reflections of their own.</param>
+/// <param name="LiveSlots">Voices hearing their own reflections now.</param>
+/// <param name="WaitingSlots">Voices given a slot, waiting for its first simulation.</param>
+/// <param name="DrainingSlots">Slots letting a stopped voice's tail die away.</param>
+/// <param name="Rays">Rays per simulation.</param>
+/// <param name="Bounces">Bounces per ray.</param>
+/// <param name="Order">Ambisonic order.</param>
+/// <param name="RateHz">Simulations per second at most.</param>
+/// <param name="Threads">Worker threads per simulation.</param>
+/// <param name="DurationSeconds">Impulse response length.</param>
+/// <param name="TransitionSeconds">Convolved part of each response.</param>
+/// <param name="Ticks">Simulations so far.</param>
+/// <param name="LastTickMs">The latest simulation's duration.</param>
+/// <param name="MaxTickMs">The longest so far.</param>
+/// <param name="SimulateMs">The latest simulation's Steam Audio part.</param>
+/// <param name="ListenerReverbTimes">Decay time (RT60, s) where you are: below 800 Hz, to 8 kHz, above.</param>
+/// <param name="OutputDb">Level of the reflections, dB full scale (-120 = silent).</param>
+/// <param name="Gain">The reflection gain in use.</param>
+/// <param name="Listener">Where the latest simulation listened from (scene coordinates).</param>
+public sealed record ReflectionStats(
+    bool Enabled,
+    int Slots,
+    int LiveSlots,
+    int WaitingSlots,
+    int DrainingSlots,
+    int Rays,
+    int Bounces,
+    int Order,
+    int RateHz,
+    int Threads,
+    float DurationSeconds,
+    float TransitionSeconds,
+    long Ticks,
+    double LastTickMs,
+    double MaxTickMs,
+    double SimulateMs,
+    (float Low, float Mid, float High) ListenerReverbTimes,
+    float OutputDb,
+    float Gain,
+    (float X, float Y, float Z) Listener);
+
+/// <summary>One simulated reflection source.</summary>
+/// <param name="Slot">0: the listener's reverb, which every other sound shares; otherwise a voice's own.</param>
+/// <param name="Voice">The voice (0 for the listener's reverb).</param>
+/// <param name="Position">Simulated from (scene coordinates).</param>
+/// <param name="ReverbTimes">Decay time per band, seconds.</param>
+/// <param name="Eq">The tail's starting level per band.</param>
+/// <param name="Delay">Samples before the tail starts.</param>
+public sealed record ReflectionSourceInfo(
+    int Slot,
+    ulong Voice,
+    (float X, float Y, float Z) Position,
+    (float Low, float Mid, float High) ReverbTimes,
+    (float Low, float Mid, float High) Eq,
+    int Delay);
+
+/// <summary>One leg of a traced sound path (scene coordinates).</summary>
+/// <param name="Bounce">0 for the leg leaving the origin.</param>
+/// <param name="From">Start.</param>
+/// <param name="To">End: a surface, or where the leg ran out.</param>
+/// <param name="Energy">Mid-band energy left on arrival (1 at the origin).</param>
+/// <param name="Material">The material at <paramref name="To"/>; 0 if the leg ended in the open.</param>
+public readonly record struct RaySegment(int Bounce, (float X, float Y, float Z) From, (float X, float Y, float Z) To, float Energy, ushort Material);
+
 /// <summary>A chunk's mesh as submitted to Steam Audio, in chunk-local block units.</summary>
 public sealed record ChunkMeshData(int Lod, uint Version, float[] Vertices, int[] Triangles, ushort[] Materials);
 
@@ -423,6 +489,87 @@ public sealed partial class AudioEngine
         return new SimulationStats(
             (int)s.Sources, (long)s.Ticks, s.LastTickMs, s.MaxTickMs, s.OcclusionMs, s.TransmissionMs, (int)s.RateHz, (int)s.OcclusionSamples,
             (s.ListenerX, s.ListenerY, s.ListenerZ), (s.OriginX, s.OriginY, s.OriginZ));
+    }
+
+    public unsafe ReflectionStats GetReflectionStats()
+    {
+        using Lease lease = new(handle);
+        var s = new VsaReflectionStats { StructSize = (uint)sizeof(VsaReflectionStats) };
+        NativeException.ThrowIfFailed(VsaNative.EngineGetReflectionStats(lease.Engine, ref s), "vsa_engine_get_reflection_stats");
+        return new ReflectionStats(
+            s.Enabled != 0, (int)s.Slots, (int)s.LiveSlots, (int)s.WaitingSlots, (int)s.DrainingSlots,
+            (int)s.Rays, (int)s.Bounces, (int)s.Order, (int)s.RateHz, (int)s.Threads, s.Duration, s.Transition,
+            (long)s.Ticks, s.LastTickMs, s.MaxTickMs, s.SimulateMs,
+            (s.ListenerReverbTimes[0], s.ListenerReverbTimes[1], s.ListenerReverbTimes[2]),
+            s.OutputDb, s.Gain, (s.Listener[0], s.Listener[1], s.Listener[2]));
+    }
+
+    /// <summary>The sources the reflection simulation handled in its latest run (the listener's first).</summary>
+    public unsafe IReadOnlyList<ReflectionSourceInfo> GetReflectionSources()
+    {
+        using Lease lease = new(handle);
+        var buffer = new VsaReflectionSource[65];
+        buffer[0].StructSize = (uint)sizeof(VsaReflectionSource);
+        uint count;
+        fixed (VsaReflectionSource* p = buffer)
+        {
+            NativeException.ThrowIfFailed(
+                VsaNative.EngineGetReflectionSources(lease.Engine, p, (uint)buffer.Length, out count), "vsa_engine_get_reflection_sources");
+        }
+
+        int n = (int)Math.Min(count, (uint)buffer.Length);
+        var result = new List<ReflectionSourceInfo>(n);
+        for (int i = 0; i < n; i++)
+        {
+            ref VsaReflectionSource d = ref buffer[i];
+            result.Add(new ReflectionSourceInfo(
+                (int)d.Slot,
+                d.Voice,
+                (d.Position[0], d.Position[1], d.Position[2]),
+                (d.ReverbTimes[0], d.ReverbTimes[1], d.ReverbTimes[2]),
+                (d.Eq[0], d.Eq[1], d.Eq[2]),
+                d.Delay));
+        }
+
+        return result;
+    }
+
+    /// <summary>Scales every reflection (smoothly): 1 = as simulated; 0..4.</summary>
+    public void SetReflectionGain(float gain)
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineSetReflectionGain(lease.Engine, gain), "vsa_engine_set_reflection_gain");
+    }
+
+    /// <summary>
+    /// Debugging: sound paths from <paramref name="origin"/> (scene coordinates) bouncing off the
+    /// voxel world, <paramref name="rays"/> directions and up to <paramref name="bounces"/> reflections.
+    /// </summary>
+    public unsafe IReadOnlyList<RaySegment> TraceRays((float X, float Y, float Z) origin, int rays, int bounces, float maxDistance)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rays);
+        ArgumentOutOfRangeException.ThrowIfNegative(bounces);
+        using Lease lease = new(handle);
+        var buffer = new VsaRaySegment[Math.Max(1, rays * (bounces + 1))];
+        buffer[0].StructSize = (uint)sizeof(VsaRaySegment);
+        float* o = stackalloc float[3] { origin.X, origin.Y, origin.Z };
+        uint count;
+        fixed (VsaRaySegment* p = buffer)
+        {
+            NativeException.ThrowIfFailed(
+                VsaNative.SceneTraceRays(lease.Engine, o, (uint)rays, (uint)bounces, maxDistance, p, (uint)buffer.Length, out count),
+                "vsa_scene_trace_rays");
+        }
+
+        var result = new RaySegment[count];
+        for (int i = 0; i < result.Length; i++)
+        {
+            ref VsaRaySegment s = ref buffer[i];
+            result[i] = new RaySegment(
+                (int)s.Bounce, (s.From[0], s.From[1], s.From[2]), (s.To[0], s.To[1], s.To[2]), s.Energy, (ushort)s.Material);
+        }
+
+        return result;
     }
 
     /// <summary>Writes the scene as OBJ + MTL in world block coordinates.</summary>

@@ -21,8 +21,11 @@ public sealed class NativeLayoutTests
     [Fact]
     public unsafe void EngineConfig_matches_header()
     {
-        Assert.Equal(80, sizeof(VsaEngineConfig));
+        Assert.Equal(112, sizeof(VsaEngineConfig));
         Assert.Equal(76, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.DirectRateHz)));
+        Assert.Equal(80, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.ReflectionSources)));
+        Assert.Equal(92, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.ReflectionDuration)));
+        Assert.Equal(108, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.ReflectionTransition)));
         Assert.Equal(64, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.HrtfSofaPath)));
         Assert.Equal(52, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxRealVoices)));
         Assert.Equal(56, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxBinauralVoices)));
@@ -162,5 +165,22 @@ public sealed class NativeLayoutTests
         Assert.Equal(48, (int)Marshal.OffsetOf<VsaSimulationStats>(nameof(VsaSimulationStats.RateHz)));
         Assert.Equal(48, (int)Marshal.OffsetOf<VsaRayHit>(nameof(VsaRayHit.Triangle)));
         Assert.Equal(60, (int)Marshal.OffsetOf<VsaRayHit>(nameof(VsaRayHit.Cell)));
+    }
+
+    [Fact]
+    public unsafe void Reflection_structs_match_header()
+    {
+        Assert.Equal(120, sizeof(VsaReflectionStats));
+        Assert.Equal(52, (int)Marshal.OffsetOf<VsaReflectionStats>(nameof(VsaReflectionStats.Reserved)));
+        Assert.Equal(56, (int)Marshal.OffsetOf<VsaReflectionStats>(nameof(VsaReflectionStats.Ticks)));
+        Assert.Equal(88, (int)Marshal.OffsetOf<VsaReflectionStats>("ListenerReverbTimes"));
+        Assert.Equal(100, (int)Marshal.OffsetOf<VsaReflectionStats>(nameof(VsaReflectionStats.OutputDb)));
+        Assert.Equal(108, (int)Marshal.OffsetOf<VsaReflectionStats>("Listener"));
+        Assert.Equal(56, sizeof(VsaReflectionSource));
+        Assert.Equal(8, (int)Marshal.OffsetOf<VsaReflectionSource>(nameof(VsaReflectionSource.Voice)));
+        Assert.Equal(52, (int)Marshal.OffsetOf<VsaReflectionSource>(nameof(VsaReflectionSource.Delay)));
+        Assert.Equal(40, sizeof(VsaRaySegment));
+        Assert.Equal(32, (int)Marshal.OffsetOf<VsaRaySegment>(nameof(VsaRaySegment.Energy)));
+        Assert.Equal(4u, VsaNative.EngineFlagNoReflections);
     }
 }

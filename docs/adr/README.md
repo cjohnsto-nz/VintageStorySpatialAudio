@@ -12,3 +12,4 @@ Each ADR records one decision: the context, the choice and its consequences. ADR
 | [0006](0006-session-scoped-ownership.md) | Audio ownership is per world session; the main menu stays vanilla | Accepted |
 | [0007](0007-native-chunk-meshing.md) | Chunks cross the ABI as voxel snapshots and are meshed natively, with a floating origin | Accepted |
 | [0008](0008-transmission-crossings-and-bulk.md) | Transmission is a loss per material crossing plus a loss per metre (amends 0004) | Accepted |
+| [0009](0009-reflections-rendering.md) | Reflections: a slot pool, convolved early reflections and our own diffuse tail (amends PLAN §5.4) | Accepted |

@@ -2,6 +2,7 @@
 
 #include "audio/channel_layout.hpp"
 #include "audio/listener_pose.hpp"
+#include "audio/reflections.hpp"
 #include "audio/spatial.hpp"
 #include "audio/voice.hpp"
 #include "core/latest_value.hpp"
@@ -53,14 +54,14 @@ public:
     Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
           SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
           LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget,
-          world::DirectChannel* direct = nullptr);
+          world::DirectChannel* direct = nullptr, ReflectionRenderer* reflections = nullptr);
 
     Mixer(const Mixer&) = delete;
     Mixer& operator=(const Mixer&) = delete;
 
     /// Sets the output format and resets the limiter, the spatial effects and the output FIFO.
     /// Allocates; must not run while anything renders. Voices, buses and gains are kept. Must be
-    /// called once before the first render.
+    /// called once before the first render, and after the reflection renderer is prepared.
     /// `device_speakers` (channels entries) is the device's channel order; null = the engine's own
     /// order (Steam Audio's: stereo, quad, 5.1, 7.1), as for the offline output.
     void prepare(uint32_t sample_rate, uint32_t channels, const Speaker* device_speakers = nullptr);
@@ -113,6 +114,15 @@ private:
     int acquire_effects(uint32_t slot, float level) noexcept;
     void release_effects(RenderVoice& v) noexcept;
     void update_binaural_threshold() noexcept;
+    /// Gives a reflection slot of its own to the loudest eligible voice without one (taking the
+    /// quietest one's if it is much quieter): once per block.
+    void update_reflection_slots() noexcept;
+    [[nodiscard]] bool reflection_candidate(const VoiceSlot& s) const noexcept;
+    void release_reflections(RenderVoice& v) noexcept;
+    /// Feeds a positioned voice's signal (all gains but distance applied) to its reflections.
+    void send_reflections(VoiceSlot& s, const SpatialParams& params, const float* mono) noexcept;
+    /// Renders the reflections and adds them to the output (before the world bus is decoded).
+    void mix_reflections() noexcept;
     /// Publishes a world voice's position to the direct simulation and takes (smoothed) results
     /// into `params`. Returns true while a new voice should wait for its first result.
     bool update_direct(VoiceSlot& s, SpatialParams& params) noexcept;
@@ -147,6 +157,9 @@ private:
         bool primed = false;
     };
     world::DirectChannel* direct_;
+    ReflectionRenderer* reflections_;
+    dsp::GainRamp reflection_gain_;
+    std::vector<float> reflection_gain_buf_;
     std::vector<uint32_t> set_generation_;
     std::vector<DirectState> direct_state_;
     float direct_alpha_ = 1.0f;

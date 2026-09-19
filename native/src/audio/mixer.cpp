@@ -26,6 +26,13 @@ constexpr float kCentreRadius = 0.5f;
 // Direct simulation results: smoothing time, and how long a new voice may wait for its first.
 constexpr double kDirectSmoothSeconds = 0.06;
 constexpr double kDirectMaxHoldSeconds = 0.08;
+// Reflections of their own go to sounds at least this long (or looping or streamed): shorter
+// ones would be over before their first simulation result, and share the listener's reverb.
+constexpr double kReflectionMinSeconds = 0.75;
+// A voice takes another's reflection slot only if it is this much louder (+6 dB).
+constexpr float kReflectionSteal = 2.0f;
+// A voice's reverb moves to its own slot over this many blocks.
+constexpr float kReverbSwitchBlocks = 8.0f;
 
 template <typename T>
 void store_max(std::atomic<T>& target, T value) noexcept {
@@ -46,7 +53,7 @@ void store_min(std::atomic<T>& target, T value) noexcept {
 Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
              SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
              LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget,
-             world::DirectChannel* direct)
+             world::DirectChannel* direct, ReflectionRenderer* reflections)
     : kernel_(kernel),
       slots_(slots),
       slot_count_(slot_count),
@@ -58,7 +65,9 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
       listener_(listener),
       block_frames_(block_frames),
       binaural_budget_(binaural_budget),
-      direct_(direct) {
+      direct_(direct),
+      reflections_(reflections) {
+    reflection_gain_buf_.resize(block_frames);
     ranking_.resize(spatial.pool_size());
     set_generation_.assign(spatial.pool_size(), 0);
     direct_state_.resize(spatial.pool_size());
@@ -115,6 +124,8 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
         RenderVoice& v = slots_[active_[i]].render;
         v.effect_set = -1;
         v.is_virtual = false;
+        v.reflection_slot = -1;  // the reflection renderer was prepared afresh
+        v.reverb_own = 0.0f;
     }
 }
 
@@ -147,11 +158,15 @@ void Mixer::render_block() noexcept {
     }
     pose_ = listener_.read();
     update_binaural_threshold();
+    update_reflection_slots();
 
     for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
         bus_gain_[b].render(bus_gains_[b], frames);
     }
     spatial_.begin_block();
+    if (reflections_ != nullptr) {
+        reflections_->begin_block();
+    }
     bus_used_.fill(false);
     for (uint32_t i = 0; i < active_count_;) {
         if (!render_voice(active_[i])) {
@@ -179,6 +194,7 @@ void Mixer::render_block() noexcept {
             }
         }
     }
+    mix_reflections();
     // The world ambisonic bus (bus gains already applied), decoded for the listener's head.
     const Orientation orientation{
         {pose_.right[0], pose_.right[1], pose_.right[2]},
@@ -247,6 +263,7 @@ void Mixer::apply(const Command& c) noexcept {
             }
             return;
         case Op::SetMasterGain: master_gain_.linear(c.value, smooth_frames_); return;
+        case Op::SetReflectionGain: reflection_gain_.linear(c.value, smooth_frames_); return;
         case Op::SetRenderMode:
             render_mode_ = c.flags == VSA_RENDER_SPEAKERS ? VSA_RENDER_SPEAKERS : VSA_RENDER_HEADPHONES;
             spatial_.reset_all();  // the other effect kind's state is stale
@@ -539,6 +556,7 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
     // ranks low. Virtualisation does not: an occluded voice stays real, so it keeps being
     // simulated and is heard again the moment a door opens.
     v.level = level;
+    v.open_level = level;
     if (spatial && v.effect_set >= 0 && direct_state_[static_cast<std::size_t>(v.effect_set)].primed) {
         const DirectState& d = direct_state_[static_cast<std::size_t>(v.effect_set)];
         v.level = level * (d.occlusion + (1.0f - d.occlusion) * d.transmission[1]);
@@ -569,6 +587,9 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
         if (update_direct(s, params)) {
             publish_position(s);  // held until its first simulation result
             return false;
+        }
+        if (v.reflection_slot > 0) {
+            reflections_->set_position(v.reflection_slot, v.position);
         }
     }
 
@@ -657,6 +678,7 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         if (v.shelf.active()) {
             v.shelf.process(left, frames, 0);
         }
+        send_reflections(s, params, left);
         if (v.tier == SpatialTier::Ambisonic) {
             // The shared bus is decoded after every bus gain, so this voice's is applied now.
             const float* bus_gain = bus_gains_[b];
@@ -720,6 +742,7 @@ SpatialParams Mixer::spatial_params(const RenderVoice& v) const noexcept {
     const float distance = std::sqrt(dot(local, local));
 
     SpatialParams p;
+    p.distance = distance;
     p.distance_gain = std::min(1.0f, v.min_distance / std::max(distance, 1e-6f));
     for (std::size_t band = 0; band < 3; ++band) {
         p.air_absorption[band] = std::exp(-kAirAbsorption[band] * distance);
@@ -842,12 +865,126 @@ void Mixer::update_binaural_threshold() noexcept {
 }
 
 void Mixer::release_effects(RenderVoice& v) noexcept {
+    release_reflections(v);
     if (v.effect_set >= 0) {
         if (direct_ != nullptr) {
             direct_->input(static_cast<uint32_t>(v.effect_set)).generation.store(0, std::memory_order_release);
         }
         spatial_.release(v.effect_set);
         v.effect_set = -1;
+    }
+}
+
+bool Mixer::reflection_candidate(const VoiceSlot& s) const noexcept {
+    const RenderVoice& v = s.render;
+    if (v.spatial != VSA_SPATIAL_WORLD || v.effect_set < 0 || v.is_virtual || v.state != VSA_VOICE_PLAYING ||
+        s.asset == nullptr) {
+        return false;
+    }
+    return v.looping || s.stream != nullptr ||
+           static_cast<double>(s.asset->frames()) / s.asset->sample_rate() >= kReflectionMinSeconds;
+}
+
+void Mixer::release_reflections(RenderVoice& v) noexcept {
+    if (v.reflection_slot > 0 && reflections_ != nullptr) {
+        reflections_->release(v.reflection_slot);
+    }
+    v.reflection_slot = -1;
+    v.reverb_own = 0.0f;
+}
+
+void Mixer::update_reflection_slots() noexcept {
+    if (reflections_ == nullptr || !reflections_->enabled()) {
+        return;
+    }
+    // Ranked by level without walls: reflections carry sound around them, so a voice behind a
+    // wall is exactly one that needs its own.
+    uint32_t best = slot_count_;
+    float best_level = kVirtualBelow;
+    uint32_t worst = slot_count_;
+    float worst_level = std::numeric_limits<float>::infinity();
+    for (uint32_t i = 0; i < active_count_; ++i) {
+        const uint32_t index = active_[i];
+        VoiceSlot& s = slots_[index];
+        RenderVoice& v = s.render;
+        const bool candidate = reflection_candidate(s);
+        if (v.reflection_slot > 0) {
+            if (!candidate) {
+                release_reflections(v);
+            } else if (v.open_level < worst_level) {
+                worst_level = v.open_level;
+                worst = index;
+            }
+        } else if (candidate && v.open_level > best_level) {
+            best_level = v.open_level;
+            best = index;
+        }
+    }
+    if (best == slot_count_) {
+        return;
+    }
+    if (reflections_->free_slots() == 0) {
+        if (worst != slot_count_ && best_level > kReflectionSteal * worst_level) {
+            release_reflections(slots_[worst].render);  // its slot drains, then goes to the louder one
+        }
+        return;
+    }
+    VoiceSlot& s = slots_[best];
+    const int slot = reflections_->acquire(s.handle);
+    if (slot > 0) {
+        s.render.reflection_slot = slot;
+        s.render.reverb_own = 0.0f;
+        reflections_->set_position(slot, s.render.position);
+    }
+}
+
+void Mixer::send_reflections(VoiceSlot& s, const SpatialParams& params, const float* mono) noexcept {
+    if (reflections_ == nullptr || !reflections_->enabled()) {
+        return;
+    }
+    RenderVoice& v = s.render;
+    const uint32_t frames = block_frames_;
+    const float* bus_gain = bus_gains_[s.bus];
+    // Steam Audio simulates a source that is 1 m loud at 1 m; ours is at `min_distance`.
+    const float loudness = std::max(v.min_distance, 0.0f);
+    const bool own = v.reflection_slot > 0 && reflections_->ready(v.reflection_slot);
+    const float from = v.reverb_own;
+    const float to = own ? std::min(1.0f, from + 1.0f / kReverbSwitchBlocks) : 0.0f;
+    v.reverb_own = to;
+    const float step = (to - from) / static_cast<float>(frames);
+
+    if (from < 1.0f || to < 1.0f) {
+        // The listener's reverb stands in: a diffuse field hardly falls with distance inside a
+        // room, while a far sound elsewhere should hardly excite it; halfway, -3 dB per doubling.
+        const float shared = loudness / std::sqrt(std::max(1.0f, params.distance));
+        float* send = reflections_->send(0);
+        for (uint32_t j = 0; j < frames; ++j) {
+            const float w = from + step * static_cast<float>(j + 1);
+            send[j] += mono[j] * bus_gain[j] * shared * (1.0f - w);
+        }
+    }
+    if (own && (from > 0.0f || to > 0.0f)) {
+        float* send = reflections_->send(v.reflection_slot);
+        for (uint32_t j = 0; j < frames; ++j) {
+            const float w = from + step * static_cast<float>(j + 1);
+            send[j] += mono[j] * bus_gain[j] * loudness * w;
+        }
+    }
+}
+
+void Mixer::mix_reflections() noexcept {
+    if (reflections_ == nullptr || !reflections_->enabled()) {
+        return;
+    }
+    float* gain = reflection_gain_buf_.data();
+    reflection_gain_.render(gain, block_frames_);
+    if (!reflections_->render(gain)) {
+        return;
+    }
+    if (render_mode_ == VSA_RENDER_HEADPHONES) {
+        spatial_.add_ambisonic(reflections_->bus(), reflections_->bus_channels());
+    } else {
+        reflections_->decode_speakers(pose_.right, pose_.up, pose_.forward, master_.data());
     }
 }
 

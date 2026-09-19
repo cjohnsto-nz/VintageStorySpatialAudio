@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <new>
 #include <type_traits>
@@ -25,8 +26,15 @@
 static_assert(sizeof(vsa_result) == 4 && sizeof(vsa_log_level) == 4, "vsaudio enums must be 32-bit");
 static_assert(std::is_standard_layout_v<vsa_engine_config> && std::is_standard_layout_v<vsa_self_test_report>);
 // Layouts the managed bindings mirror (tests/.../NativeLayoutTests.cs). 64-bit targets only.
-static_assert(sizeof(vsa_engine_config) == 80 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
-              offsetof(vsa_engine_config, hrtf_sofa_path) == 64 && offsetof(vsa_engine_config, direct_rate_hz) == 76);
+static_assert(sizeof(vsa_engine_config) == 112 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
+              offsetof(vsa_engine_config, hrtf_sofa_path) == 64 && offsetof(vsa_engine_config, direct_rate_hz) == 76 &&
+              offsetof(vsa_engine_config, reflection_sources) == 80 &&
+              offsetof(vsa_engine_config, reflection_transition) == 108);
+static_assert(sizeof(vsa_reflection_stats) == 120 && offsetof(vsa_reflection_stats, ticks) == 56 &&
+              offsetof(vsa_reflection_stats, listener_reverb_times) == 88 && offsetof(vsa_reflection_stats, listener) == 108);
+static_assert(sizeof(vsa_reflection_source) == 56 && offsetof(vsa_reflection_source, voice) == 8 &&
+              offsetof(vsa_reflection_source, delay) == 52);
+static_assert(sizeof(vsa_ray_segment) == 40 && offsetof(vsa_ray_segment, energy) == 32);
 static_assert(sizeof(vsa_source_debug) == 64 && offsetof(vsa_source_debug, position) == 16 &&
               offsetof(vsa_source_debug, crossings) == 60);
 static_assert(sizeof(vsa_simulation_stats) == 80 && offsetof(vsa_simulation_stats, rate_hz) == 48 &&
@@ -694,6 +702,104 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, 
         std::copy_n(s.listener, 3, stats.listener);
         std::copy_n(s.origin, 3, stats.origin);
         *out = stats;
+        return VSA_OK;
+    });
+}
+
+// ---- Reflections ----
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_reflection_stats(vsa_engine* engine, vsa_reflection_stats* out) {
+    return guarded([&] {
+        check_out_struct(out, "vsa_reflection_stats");
+        const vsa::Engine::ReflectionReport r = engine_of(engine).reflection_report();
+        vsa_reflection_stats stats{};
+        stats.struct_size = sizeof stats;
+        stats.enabled = r.enabled ? 1u : 0u;
+        stats.slots = r.stats.slots;
+        stats.live_slots = r.live;
+        stats.waiting_slots = r.waiting;
+        stats.draining_slots = r.draining;
+        const vsa::world::ReflectionSettings& settings = r.stats.settings;
+        stats.rays = settings.rays;
+        stats.bounces = settings.bounces;
+        stats.order = settings.order;
+        stats.rate_hz = settings.rate_hz;
+        stats.threads = settings.threads;
+        stats.duration = settings.duration;
+        stats.transition = settings.transition;
+        stats.ticks = r.stats.ticks;
+        stats.last_tick_ms = r.stats.last_tick_ms;
+        stats.max_tick_ms = r.stats.max_tick_ms;
+        stats.simulate_ms = r.stats.simulate_ms;
+        std::copy_n(r.stats.listener_reverb_times, 3, stats.listener_reverb_times);
+        stats.output_db = r.mean_square > 1e-12f ? 10.0f * std::log10(r.mean_square) : -120.0f;
+        stats.gain = r.gain;
+        std::copy_n(r.stats.listener, 3, stats.listener);
+        *out = stats;
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_reflection_sources(vsa_engine* engine, vsa_reflection_source* out,
+                                                              uint32_t capacity, uint32_t* out_count) {
+    return guarded([&] {
+        if (out_count == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "out_count must not be null");
+        }
+        *out_count = 0;
+        check_out_array(out, capacity, "vsa_reflection_source");
+        const std::vector<vsa::world::ReflectionSlotDebug> slots = engine_of(engine).reflection_slots();
+        *out_count = static_cast<uint32_t>(slots.size());
+        for (std::size_t i = 0; i < capacity && i < slots.size(); ++i) {
+            const vsa::world::ReflectionSlotDebug& s = slots[i];
+            vsa_reflection_source d{};
+            d.struct_size = sizeof d;
+            d.slot = s.slot;
+            d.voice = s.voice;
+            std::copy_n(s.position, 3, d.position);
+            std::copy_n(s.reverb_times, 3, d.reverb_times);
+            std::copy_n(s.eq, 3, d.eq);
+            d.delay = s.delay;
+            out[i] = d;
+        }
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_gain(vsa_engine* engine, float gain) {
+    return guarded([&] {
+        engine_of(engine).set_reflection_gain(gain);
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_trace_rays(vsa_engine* engine, const float origin[3], uint32_t rays,
+                                                 uint32_t bounces, float max_distance, vsa_ray_segment* out,
+                                                 uint32_t capacity, uint32_t* out_count) {
+    return guarded([&] {
+        if (out_count == nullptr || origin == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "origin and out_count must not be null");
+        }
+        *out_count = 0;
+        check_out_array(out, capacity, "vsa_ray_segment");
+        if (rays > 4096 || bounces > 64 || !(max_distance > 0.0f) || !std::isfinite(max_distance)) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "rays must be at most 4096, bounces at most 64, and max_distance positive");
+        }
+        const auto view = engine_of(engine).scene().voxel_view();
+        const std::vector<vsa::world::RaySegment> segments =
+            vsa::world::trace_paths(*view, origin, rays, bounces, max_distance, capacity);
+        for (std::size_t i = 0; i < segments.size(); ++i) {
+            const vsa::world::RaySegment& s = segments[i];
+            vsa_ray_segment d{};
+            d.struct_size = sizeof d;
+            d.bounce = s.bounce;
+            std::copy_n(s.from, 3, d.from);
+            std::copy_n(s.to, 3, d.to);
+            d.energy = s.energy;
+            d.material = s.material;
+            out[i] = d;
+        }
+        *out_count = static_cast<uint32_t>(segments.size());
         return VSA_OK;
     });
 }

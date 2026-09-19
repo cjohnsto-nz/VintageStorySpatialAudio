@@ -37,6 +37,7 @@ add_executable(vsaudio_tests
     test_direct.cpp
     test_header_c.c
     test_output.cpp
+    test_reflections.cpp
     test_scene.cpp
     test_self_test.cpp
     test_spatial.cpp
@@ -66,11 +67,14 @@ add_executable(vsaudio_core_tests
     core/alloc_counter.hpp
     core/test_channel_layout.cpp
     core/test_gain_ramp.cpp
+    core/test_late_reverb.cpp
     core/test_limiter.cpp
     core/test_mesher.cpp
     core/test_render_budget.cpp
     core/test_resampler.cpp
+    core/test_speaker_decoder.cpp
     core/test_spherical_harmonics.cpp
+    core/test_reflection_calibration.cpp
     core/test_spsc_ring.cpp
     core/test_transmission.cpp
     core/test_embree_scene_edits.cpp
