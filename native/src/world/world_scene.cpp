@@ -299,7 +299,7 @@ void WorldScene::worker_main() {
         std::shared_ptr<const ChunkVoxels> voxels;
         std::array<std::shared_ptr<const ChunkVoxels>, 6> neighbours;
         int lod = 0;
-        std::unique_ptr<Built> built;  // the result; null when the chunk is empty or removed
+        std::shared_ptr<Built> built;  // the result; null when the chunk is empty or removed
         double ms = 0.0;
     };
 
@@ -351,7 +351,7 @@ void WorldScene::worker_main() {
             auto mesh = std::make_shared<ChunkMesh>(mesher->mesh(*job.voxels, neighbours, job.lod));
             if (mesh->triangle_count() > 0 && !materials.empty()) {
                 try {
-                    auto built = std::make_unique<Built>();
+                    auto built = std::make_shared<Built>();
                     built->mesh = mesh;
                     built->lod = job.lod;
                     IPLSceneSettings settings = steam_.scene_settings();
@@ -383,7 +383,7 @@ void WorldScene::worker_main() {
         // comment for why nothing removed is released until the scene is compacted.
         struct Change {
             ChunkKey key;
-            std::unique_ptr<Built> old;
+            std::shared_ptr<Built> old;
             IPLScene sub = nullptr;
             IPLMatrix4x4 transform{};
         };
@@ -643,6 +643,41 @@ bool WorldScene::raycast(const float origin[3], const float direction[3], float 
         }
     }
     return found;
+}
+
+IPLScene WorldScene::Snapshot::scene() const noexcept { return top_ ? top_->scene.get() : nullptr; }
+
+WorldScene::Snapshot::~Snapshot() {
+    WorldScene::retire(top_);  // its instances first, then the builds they reference
+    builds_.clear();
+}
+
+std::unique_ptr<WorldScene::Snapshot> WorldScene::snapshot(const std::vector<ChunkKey>& keys) const {
+    std::unique_ptr<Snapshot> snapshot(new Snapshot());
+    Instances instances;
+    {
+        std::lock_guard lock(mutex_);
+        for (const ChunkKey key : keys) {
+            const auto it = chunks_.find(key);
+            if (it != chunks_.end() && it->second.built) {
+                instances.emplace_back(key, it->second.built->sub.get(), transform_locked(key));
+                snapshot->builds_.push_back(it->second.built);
+            }
+        }
+    }
+    snapshot->top_ = build_top(instances);
+    return snapshot;
+}
+
+std::vector<uint64_t> WorldScene::chunk_versions(const std::vector<ChunkKey>& keys) const {
+    std::vector<uint64_t> versions;
+    versions.reserve(keys.size());
+    std::lock_guard lock(mutex_);
+    for (const ChunkKey key : keys) {
+        const auto it = chunks_.find(key);
+        versions.push_back(it != chunks_.end() && it->second.voxels ? it->second.version : 0);
+    }
+    return versions;
 }
 
 std::shared_ptr<const VoxelView> WorldScene::voxel_view() const {

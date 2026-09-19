@@ -48,6 +48,22 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Multichannel beds (ADR 0015): on branch `multichannel-beds`, to check in game
+
+For Chris's separate weather mod: its 5.1 rain, wind, hail, rumble and thunder tracks now play through this engine as intended.
+- **Decoding:** assets of up to 8 channels decode and stream. Each records which speaker every channel is for: Vorbis order, WAV's speaker mask or default order, and a lone surround pair at 110°.
+- **Beds:** an unpositioned sound of more than two channels is a bed.
+  - **Speakers:** each channel plays from its speaker via `BedPanner` (VBAP over the real layout). 5.1 on 5.1 is copied through. On 7.1.4, 5.1 surrounds fall between the sides and backs.
+  - **Stereo:** a fold-down, with surrounds −3 dB on their side.
+  - **LFE:** to the LFE channel, or to the front pair.
+  - **Headphones:** a head-locked order-3 Ambisonic bus with its own binaural decoder.
+- **Positioned sounds** downmix any asset to mono.
+- **Tests:** `core/test_bed_panner.cpp` and `test_beds.cpp`. Beds were added to the render path's no-allocation test. A managed test plays a vanilla-style weather bed.
+- **Not tested:** no manual listening test yet (in game or in SceneLab).
+- **The weather mod:** `C:\Projects\VintageStorySurroundWeather`, branch `weather-only` of the Surround repo, modid `surroundweather`.
+  - It patches only vanilla's OpenAL classes (`AudioOpenAl.GetSoundFormat`, `LoadedSoundNative.createSoundSource`). Those are inert under this mod and pass its foreign-patch check.
+  - Its modid isn't in `IncompatibleMods`.
+
 ## Entity sound tracking (from PLAN Phase 8, done early; managed only, uncommitted)
 
 Sounds played at a creature or player follow it while they play; vanilla leaves them where they started. No Doppler (Chris doesn't want it). Ported in spirit from VintageStorySurroundSound, with the problems found in its review fixed.
@@ -71,7 +87,43 @@ Sounds played at a creature or player follow it while they play; vanilla leaves 
 - **Verification:** VsaDoctor 38/38 against 1.22.7. `EntitySoundTrackerTests` cover announcement, expiry, cancel, context nesting, inference (tall creatures, lag, ambiguity) and following/letting go against the engine. All 111 managed tests passed on a worktree of `f62e42a` plus these changes (the working tree's native code was mid-ABI-9 change).
 - **To check in game:** walk past running wolves or chickens, and chase a bear. Calls should come from the animal, not from where it was. Watch the stats line for "matched by position" counts.
 
-## Phase 6 (reflections and reverb): in progress on `phase6-reflections`
+## Phase 7 (pathing): done on `phase7-pathing`, to check in game
+
+Phase 6 is merged into `main` (not pushed).
+
+- **The gate (ADR 0013):** a 64³ region of terrain, two buildings and a cave bakes in 0.52 s on one thread with one visibility sample per probe (2.1 s with four): 794 probes, 2.6 MB. Baked pathing ships. `core/test_pathing_bake.cpp` keeps the budget.
+- **Two Steam Audio 4.8.1 gotchas found:** `iplPathBakerBake` crashes without a progress callback (pass a no-op), and the probe generation box is centred on the transform's translation (its unit cube is −0.5..0.5).
+- **One rolling probe batch (ADR 0014), not per-region batches:** Steam Audio finds paths within one batch only, so a region set would have had silent doorways on region borders. The batch is a 96 × 64 × 96 box round the listener (`pathing_range`, `pathing_height`), snapped to 8 blocks, baked on the baker's thread from a `WorldScene::Snapshot`, and baked again when the listener leaves the middle third, the origin moves, or a chunk in it has changed and 3 s have passed without another change.
+- **Third gotcha:** the simulator's `maxOrder` sizes the pathing coefficients and a run writes `pathingOrder`'s worth regardless; with `maxOrder` 0 the paths came out omnidirectional. `PathSimulator` sets `maxOrder` 1.
+- **Fourth gotcha (Chris heard villagers underground 80 blocks away as if beside him):** a Steam Audio source that finds no path (no probe in reach of the source or the listener) keeps its last coefficients, and they come out as the run's result. A far sound taking over an effect set played through the path of the sound before it. `PathSimulator` now creates a fresh source every run (ADR 0014 has the detail); `test_pathing.cpp` keeps the case (a sealed sound 60 blocks away: -217 dB, was the doorway sound's level).
+- **Stutter (Chris heard fluttering after pathing went in):** two causes. `deploy.ps1` built **Debug** by default, and the Debug engine renders the reflections alone at 60 % p50 / 100 % p99 of the block on 7.1.4 (Release: 10 % / 14 %); pathing's share on top made it underrun. The deploy now builds Release (`-Configuration Debug` for asserts). And the path was a hard gate at occlusion 0.9 on a noisy estimate, so a partly seen sound flapped between direct and direct + path (Steam Audio answers a clear centre ray with the direct path itself, which doubles a seen sound); the path is now weighted by how blocked the sound is, full at 0 and nothing at 0.9.
+- **Volume dropping in doorways (Chris):** `VoxelView::escape` moved a point out of any cell holding a partial block, so the listener walking through an open door (the leaf is a partial block beside the head) was thrown a metre to the far face of the door cell, towards wherever they looked, and the wall came between them and the sounds on the side they came from. The listener now escapes only what encloses the head (`Escaping::Enclosures`: a solid cell, or a partial block's box the point is inside, leaving the box rather than the cell). Sounds keep the wide rule (`Escaping::Blocks`): a door's own sound sits at the door block's centre, which is not inside the leaf, and narrowing the rule for sounds too put the leaf between the door and the player opening it (Chris heard doors from behind their leaf). `test_transmission.cpp` (the listener beside the leaf stays, inside it comes out of the leaf; the door's sound leaves the cell past the leaf) and `test_pathing.cpp` (walking in through a door: nothing drops, the listener stays put) keep it.
+- **Config migration:** the file is rewritten with every default, so Chris's held `ReflectionGain: 1.0` from before the default became 0.1. `SteamAudioConfig.ConfigVersion` (stamped on load) and `Migrate()` replace a changed default where the file still holds the old one; a chosen value is kept. Add a step there when a default changes again.
+
+### Native (ABI v11)
+
+- `world/path_baker.*` (`PathBaker`): probes (`UNIFORMFLOOR`, 2.5 m, 1.6 m high), the bake (radius 1 m, threshold 0.1, visibility range a third of the range, path range the range, one visibility sample), `current()` the latest batch, `stats()`.
+- `world/path_sim.*` (`PathSimulator`): its own simulator (PATHING, `maxOrder` 1) at `pathing_rate_hz` (10); swaps the baker's batch in with a commit and releases the old one after; the `pathing_sources` (16) loudest sounds that want a path (occlusion below 0.9, or no direct simulation); `enableValidation` and `findAlternatePaths`; order-1 coefficients and EQ out through `world/path_channel.hpp`; the legs Steam Audio considered, from its visualisation callback, for the overlay.
+- **Mixer:** `PathState` per effect set, one `IPLPathEffect` each (order 1, not spatialised) into an order-1 world-space Ambisonic path bus; on headphones it joins the world bus's binaural decode, on speakers its own `SpeakerDecoder`. The effect is primed muted until the first result; a sound that stops wanting a path fades out over the direct smoothing.
+- **API:** `vsa_engine_get_pathing_stats`, `vsa_engine_get_path_segments`; config `pathing_range` (32..256), `pathing_height` (16..128), `pathing_probe_spacing`, `pathing_vis_samples`, `pathing_rate_hz`, `pathing_sources`; flag `VSA_ENGINE_FLAG_NO_PATHING`. Test fixtures default to `NO_REFLECTIONS | NO_PATHING`; the pathing tests turn it on.
+- **Tests:** `test_pathing.cpp` (the box bakes and re-bakes; goat and doorway: energy leans 0.60 ahead and 0.00 sideways with paths against 0.30 left without, 79 dB louder; a sealed room has no path, a sound in the open wants none); `core/test_render_budget.cpp` (the pathing render path never allocates through moves, stops, decoder and output changes and a re-bake; 32 blocked voices with 16 paths render at p99 7 % headphones / 5 % 7.1.4 in Release, simulation 0.1 ms); `core/test_pathing_bake.cpp` keeps the bake budget.
+
+### Managed
+
+- Config: `Pathing` (on), `PathingRangeBlocks`, `PathingHeightBlocks`, `PathingProbeSpacing`, `PathingVisibilitySamples`, `PathingRateHz`, `PathingSources` (0 = the engine's defaults).
+- `.steamaudio scene paths` (also in the overlay cycle) draws the legs Steam Audio considered in the last run: occluded legs in red. The HUD has a pathing line (batch, probes, bake time, wanted / simulated / found, tick time).
+- Reverb: `ReflectionGain` now defaults to 0.1, with `ReflectionEarlyGain` and `ReflectionTailGain` (`.steamaudio reverb early N` / `tail N`) to weigh the convolved early part against the diffuse tail.
+- `PathingTests.cs`: config clamping; a room with a doorway bakes and a blocked sound finds its way out through the real engine.
+
+### To check in game (Chris)
+
+- **Goat and doorway:** stand outside a closed room with a sound inside (an anvil, an animal), off to one side of the doorway. The sound should come from the doorway, not through the wall from the sound's true direction; walk round the room and it should follow the doorway. Then close the doorway: it should go back to a muffled sound through the wall.
+- **Caves:** sounds round a bend should come from the bend.
+- **Overlay:** `.steamaudio scene paths` while a sound is blocked; the HUD's pathing line should show a bake within a second of arriving somewhere new, and `found` counting the blocked sounds.
+- **Cost:** the HUD's bake time when walking (the box re-bakes every ~32 blocks) and `.steamaudio stats` render time with many blocked sounds.
+- **Not yet:** a memory cap and a cancellable bake (the default box is small; deferred until they matter).
+
+## Phase 6 (reflections and reverb): done, merged
 
 Phase 5 is merged into `main` (not pushed). The design, and why it differs from PLAN §5.4, is ADR 0009.
 

@@ -26,10 +26,15 @@
 static_assert(sizeof(vsa_result) == 4 && sizeof(vsa_log_level) == 4, "vsaudio enums must be 32-bit");
 static_assert(std::is_standard_layout_v<vsa_engine_config> && std::is_standard_layout_v<vsa_self_test_report>);
 // Layouts the managed bindings mirror (tests/.../NativeLayoutTests.cs). 64-bit targets only.
-static_assert(sizeof(vsa_engine_config) == 112 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
+static_assert(sizeof(vsa_engine_config) == 136 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
               offsetof(vsa_engine_config, hrtf_sofa_path) == 64 && offsetof(vsa_engine_config, direct_rate_hz) == 76 &&
               offsetof(vsa_engine_config, reflection_sources) == 80 &&
-              offsetof(vsa_engine_config, reflection_transition) == 108);
+              offsetof(vsa_engine_config, reflection_transition) == 108 &&
+              offsetof(vsa_engine_config, pathing_range) == 112 && offsetof(vsa_engine_config, pathing_sources) == 132);
+static_assert(sizeof(vsa_pathing_stats) == 128 && offsetof(vsa_pathing_stats, bakes) == 16 &&
+              offsetof(vsa_pathing_stats, box_centre) == 48 && offsetof(vsa_pathing_stats, ticks) == 72 &&
+              offsetof(vsa_pathing_stats, listener) == 112);
+static_assert(sizeof(vsa_path_segment) == 32 && offsetof(vsa_path_segment, to) == 20);
 static_assert(sizeof(vsa_reflection_stats) == 120 && offsetof(vsa_reflection_stats, ticks) == 56 &&
               offsetof(vsa_reflection_stats, listener_reverb_times) == 88 && offsetof(vsa_reflection_stats, listener) == 108);
 static_assert(sizeof(vsa_reflection_source) == 56 && offsetof(vsa_reflection_source, voice) == 8 &&
@@ -776,6 +781,63 @@ VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_gain(vsa_engine* engine, f
 VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_mix(vsa_engine* engine, float early_gain, float tail_gain) {
     return guarded([&] {
         engine_of(engine).set_reflection_mix(early_gain, tail_gain);
+        return VSA_OK;
+    });
+}
+
+// ---- Pathing ----
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_pathing_stats(vsa_engine* engine, vsa_pathing_stats* out) {
+    return guarded([&] {
+        check_out_struct(out, "vsa_pathing_stats");
+        vsa::Engine& e = engine_of(engine);
+        vsa_pathing_stats stats{};
+        stats.struct_size = sizeof stats;
+        if (vsa::world::PathSimulator* sim = e.paths(); sim != nullptr) {
+            const vsa::world::PathBakeStats b = e.path_baker()->stats();
+            const vsa::world::PathSimStats s = sim->stats();
+            stats.enabled = 1;
+            stats.baking = b.baking ? 1u : 0u;
+            stats.bake_due = b.dirty ? 1u : 0u;
+            stats.bakes = b.bakes;
+            stats.last_bake_ms = b.last_bake_ms;
+            stats.max_bake_ms = b.max_bake_ms;
+            stats.probes = b.probes;
+            std::copy_n(b.centre, 3, stats.box_centre);
+            stats.ticks = s.ticks;
+            stats.last_tick_ms = s.last_tick_ms;
+            stats.max_tick_ms = s.max_tick_ms;
+            stats.wanted = s.wanted;
+            stats.simulated = s.simulated;
+            stats.found = s.found;
+            stats.rate_hz = e.settings().path_sim.rate_hz;
+            std::copy_n(s.listener, 3, stats.listener);
+        }
+        *out = stats;
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_path_segments(vsa_engine* engine, vsa_path_segment* out, uint32_t capacity,
+                                                         uint32_t* out_count) {
+    return guarded([&] {
+        if (out_count == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "out_count must not be null");
+        }
+        *out_count = 0;
+        check_out_array(out, capacity, "vsa_path_segment");
+        vsa::world::PathSimulator* sim = engine_of(engine).paths();
+        const std::vector<vsa::world::PathSegment> segments = sim != nullptr ? sim->segments() : std::vector<vsa::world::PathSegment>{};
+        *out_count = static_cast<uint32_t>(segments.size());
+        for (std::size_t i = 0; i < capacity && i < segments.size(); ++i) {
+            const vsa::world::PathSegment& s = segments[i];
+            vsa_path_segment d{};
+            d.struct_size = sizeof d;
+            d.occluded = s.occluded ? 1u : 0u;
+            std::copy_n(s.from, 3, d.from);
+            std::copy_n(s.to, 3, d.to);
+            out[i] = d;
+        }
         return VSA_OK;
     });
 }

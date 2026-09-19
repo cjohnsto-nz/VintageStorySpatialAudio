@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/source_layout.hpp"
 #include "vsaudio.h"
 
 #include <atomic>
@@ -32,6 +33,8 @@ public:
     [[nodiscard]] uint64_t frames() const noexcept { return frames_; }
     [[nodiscard]] bool streamed() const noexcept { return streamed_; }
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    /// Which speaker each channel is for (beds: unpositioned sounds of more than two channels).
+    [[nodiscard]] const SourceLayout& layout() const noexcept { return layout_; }
 
     /// Decoded storage: interleaved int16 at the source rate. Empty when streamed.
     [[nodiscard]] const int16_t* pcm() const noexcept { return pcm_.data(); }
@@ -49,6 +52,7 @@ private:
     uint32_t sample_rate_ = 0;
     uint64_t frames_ = 0;
     bool streamed_ = false;
+    SourceLayout layout_{};
     std::vector<int16_t> pcm_;
     std::vector<uint8_t> encoded_;
     std::string name_;

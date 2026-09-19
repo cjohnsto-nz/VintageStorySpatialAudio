@@ -16,3 +16,6 @@ Each ADR records one decision: the context, the choice and its consequences. ADR
 | [0010](0010-reverb-follows-what-reaches-you.md) | Reverb follows what reaches the listener; short sounds share spots (amends 0009) | Superseded by 0011 |
 | [0011](0011-one-listener-reverb.md) | One listener reverb that every sound feeds by what reaches the listener (supersedes 0010) | Superseded by 0012 |
 | [0012](0012-every-sound-simulated-from-its-place.md) | Every sound is simulated from its place; no other path (supersedes 0010 and 0011) | Accepted |
+| [0013](0013-baked-pathing.md) | Pathing is baked: the ADR 0005 gate, measured (0.5 s per 64³ region) | Accepted |
+| [0014](0014-one-rolling-probe-batch.md) | Pathing runs in one probe batch that rolls with the listener (amends PLAN §5.5 and 0013) | Accepted |
+| [0015](0015-multichannel-beds.md) | Multichannel beds (5.1 weather) play from their speakers; binaurally through a head-locked bus | Accepted |

@@ -21,7 +21,9 @@ public sealed class NativeLayoutTests
     [Fact]
     public unsafe void EngineConfig_matches_header()
     {
-        Assert.Equal(112, sizeof(VsaEngineConfig));
+        Assert.Equal(136, sizeof(VsaEngineConfig));
+        Assert.Equal(112, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.PathingRange)));
+        Assert.Equal(132, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.PathingSources)));
         Assert.Equal(76, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.DirectRateHz)));
         Assert.Equal(80, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.ReflectionSources)));
         Assert.Equal(92, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.ReflectionDuration)));
@@ -182,5 +184,13 @@ public sealed class NativeLayoutTests
         Assert.Equal(40, sizeof(VsaRaySegment));
         Assert.Equal(32, (int)Marshal.OffsetOf<VsaRaySegment>(nameof(VsaRaySegment.Energy)));
         Assert.Equal(4u, VsaNative.EngineFlagNoReflections);
+        Assert.Equal(8u, VsaNative.EngineFlagNoPathing);
+        Assert.Equal(128, sizeof(VsaPathingStats));
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaPathingStats>(nameof(VsaPathingStats.Bakes)));
+        Assert.Equal(48, (int)Marshal.OffsetOf<VsaPathingStats>("BoxCentre"));
+        Assert.Equal(72, (int)Marshal.OffsetOf<VsaPathingStats>(nameof(VsaPathingStats.Ticks)));
+        Assert.Equal(112, (int)Marshal.OffsetOf<VsaPathingStats>("Listener"));
+        Assert.Equal(32, sizeof(VsaPathSegment));
+        Assert.Equal(20, (int)Marshal.OffsetOf<VsaPathSegment>("To"));
     }
 }

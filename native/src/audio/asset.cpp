@@ -48,7 +48,8 @@ Asset* Asset::create(const vsa_asset_desc& desc, uint32_t stream_threshold_ms) {
             case VSA_ASSET_FORMAT_PCM_S16: {
                 if (desc.pcm_channels < 1 || desc.pcm_channels > decode::kMaxChannels) {
                     throw Error(VSA_ERROR_UNSUPPORTED,
-                                "PCM asset has " + std::to_string(desc.pcm_channels) + " channels (1 or 2 supported)");
+                                "PCM asset has " + std::to_string(desc.pcm_channels) + " channels (1 to " +
+                                    std::to_string(decode::kMaxChannels) + " supported)");
                 }
                 if (desc.pcm_sample_rate == 0) {
                     throw Error(VSA_ERROR_INVALID_ARGUMENT, "PCM asset needs pcm_sample_rate");
@@ -75,6 +76,7 @@ Asset* Asset::create(const vsa_asset_desc& desc, uint32_t stream_threshold_ms) {
                     asset->sample_rate_ = probe.sample_rate();
                     asset->frames_ = probe.frames();
                     asset->streamed_ = true;
+                    asset->layout_ = vorbis_layout(probe.channels());
                     asset->encoded_.assign(bytes, bytes + size);
                 } else {
                     decoded = decode::decode_ogg(bytes, size);
@@ -84,6 +86,8 @@ Asset* Asset::create(const vsa_asset_desc& desc, uint32_t stream_threshold_ms) {
         }
 
         if (!asset->streamed_) {
+            asset->layout_ = format == VSA_ASSET_FORMAT_OGG_VORBIS ? vorbis_layout(decoded.channels)
+                                                                   : wave_layout(decoded.channels, decoded.channel_mask);
             asset->channels_ = decoded.channels;
             asset->sample_rate_ = decoded.sample_rate;
             asset->frames_ = decoded.frames();

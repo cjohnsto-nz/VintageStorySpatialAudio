@@ -584,10 +584,12 @@ TEST_CASE("reflections: on speakers, a sound's early reflections come from its s
         double r = 0.0;
         for (std::size_t i = static_cast<std::size_t>(0.022 * kRate); i < static_cast<std::size_t>(0.06 * kRate); ++i) {
             for (const int c : left) {
-                l += static_cast<double>(out[i * 12 + static_cast<std::size_t>(c)]) * out[i * 12 + static_cast<std::size_t>(c)];
+                const auto x = static_cast<double>(out[i * 12 + static_cast<std::size_t>(c)]);
+                l += x * x;
             }
             for (const int c : right) {
-                r += static_cast<double>(out[i * 12 + static_cast<std::size_t>(c)]) * out[i * 12 + static_cast<std::size_t>(c)];
+                const auto x = static_cast<double>(out[i * 12 + static_cast<std::size_t>(c)]);
+                r += x * x;
             }
         }
         lean_db[side] = 10.0 * std::log10(l / r);

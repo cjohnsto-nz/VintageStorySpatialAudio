@@ -22,8 +22,9 @@ vsa_engine_config make_config(uint32_t max_voices = 0) {
     config.abi_version = VSA_ABI_VERSION;
     config.ray_tracer = VSA_RAY_TRACER_STEAM;
     config.max_voices = max_voices;
-    // Offline, the reflection simulation runs on the rendering thread; its own tests below.
-    config.flags = VSA_ENGINE_FLAG_NO_REFLECTIONS;
+    // Offline, the reflection and pathing simulations run on the rendering thread; their own
+    // tests below.
+    config.flags = VSA_ENGINE_FLAG_NO_REFLECTIONS | VSA_ENGINE_FLAG_NO_PATHING;
     return config;
 }
 
@@ -63,7 +64,7 @@ vsa::Asset* ogg_asset(vsa::Engine& engine, const std::vector<uint8_t>& ogg, uint
 }
 
 vsa_voice voice(vsa::Engine& engine, vsa::Asset* asset, uint32_t bus, float gain, float pitch, bool looping,
-                uint32_t spatial = VSA_SPATIAL_NONE, float x = 0.0f, float z = 0.0f) {
+                uint32_t spatial = VSA_SPATIAL_NONE, float x = 0.0f, float z = 0.0f, float y = 3.0f) {
     vsa_voice_desc desc{};
     desc.struct_size = sizeof desc;
     desc.asset = reinterpret_cast<vsa_asset*>(asset);
@@ -73,6 +74,7 @@ vsa_voice voice(vsa::Engine& engine, vsa::Asset* asset, uint32_t bus, float gain
     desc.looping = looping ? 1u : 0u;
     desc.spatial = spatial;
     desc.position[0] = x;
+    desc.position[1] = y;  // in the rooms below, standing on their floor
     desc.position[2] = z;
     return engine.create_voice(desc);
 }
@@ -122,6 +124,10 @@ TEST_CASE("the render path never allocates") {
     AssetRef stereo(pcm_asset(engine, vsa_test::sine(660.0, 48000.0, 9600, 0.4f, 2), 2, 48000));
     const auto ogg = vsa_test::ogg_file(vsa_test::sine(330.0, 44100.0, 88200, 0.4f, 2), 2, 44100);
     AssetRef streamed(ogg_asset(engine, ogg, VSA_ASSET_STORAGE_STREAMED));
+    // Beds (5.1): through the head bus on headphones, from the speakers once they are on.
+    AssetRef bed(pcm_asset(engine, vsa_test::sine(220.0, 48000.0, 9600, 0.3f, 6), 6, 48000));
+    const auto bed_ogg = vsa_test::ogg_file(vsa_test::sine(250.0, 44100.0, 88200, 0.3f, 6), 6, 44100);
+    AssetRef streamed_bed(ogg_asset(engine, bed_ogg, VSA_ASSET_STORAGE_STREAMED));
 
     std::vector<vsa_voice> voices;
     voices.push_back(voice(engine, mono.asset, VSA_BUS_SOUND, 0.5f, 1.0f, true));
@@ -130,6 +136,8 @@ TEST_CASE("the render path never allocates") {
     voices.push_back(voice(engine, streamed.asset, VSA_BUS_MUSIC, 0.8f, 1.0f, true));
     voices.push_back(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.7f, 1.1f, true, VSA_SPATIAL_WORLD, 3.0f, -2.0f));
     voices.push_back(voice(engine, stereo.asset, VSA_BUS_WEATHER, 0.7f, 0.9f, true, VSA_SPATIAL_LISTENER, -1.0f, 0.0f));
+    voices.push_back(voice(engine, bed.asset, VSA_BUS_WEATHER, 0.6f, 1.0f, true));
+    voices.push_back(voice(engine, streamed_bed.asset, VSA_BUS_AMBIENT, 0.5f, 1.0f, true));
     for (const vsa_voice v : voices) {
         engine.start_voice(v);
     }
@@ -162,6 +170,7 @@ TEST_CASE("the render path never allocates") {
                 engine.set_listener(facing(1.0f, 0.0f));
                 engine.set_voice_position(voices[4], VSA_SPATIAL_WORLD, -5.0f, 1.0f, 2.0f);
                 engine.set_voice_lowpass(voices[5], 0.06f);
+                engine.set_voice_lowpass(voices[6], 0.2f);
                 engine.set_render_mode(VSA_RENDER_SPEAKERS);
                 break;
             case 6: {
@@ -267,8 +276,9 @@ TEST_CASE("256 positional voices render faster than real time, binaural and pann
 
 namespace {
 
-/// A closed 12 x 6 x 12 stone room (interior from 2, 2, 2) in the engine's scene.
-void build_room(vsa::Engine& engine) {
+/// A 12 x 6 x 12 stone room (interior from 2, 2, 2) on a ground at y 1 in the engine's scene,
+/// closed or with a two-block doorway in its south wall (z 14) at x 7..8.
+void build_room(vsa::Engine& engine, bool doorway = false) {
     using namespace vsa::world;
     AcousticMaterial air;
     air.kind = MaterialKind::Air;
@@ -276,12 +286,20 @@ void build_room(vsa::Engine& engine) {
     stone.kind = MaterialKind::Solid;
     stone.absorption[0] = stone.absorption[1] = stone.absorption[2] = 0.15f;
     stone.scattering = 0.3f;
+    stone.transmission[0] = stone.transmission[1] = stone.transmission[2] = 0.001f;
     engine.scene().set_materials({air, stone});
     auto c = std::make_shared<ChunkVoxels>();
+    for (int z = 0; z < 32; ++z) {
+        for (int x = 0; x < 32; ++x) {
+            c->materials[static_cast<std::size_t>(cell_index(x, 1, z))] = 1;
+        }
+    }
     for (int y = 1; y <= 8; ++y) {
         for (int z = 1; z <= 14; ++z) {
             for (int x = 1; x <= 14; ++x) {
-                if (x == 1 || x == 14 || y == 1 || y == 8 || z == 1 || z == 14) {
+                const bool shell = x == 1 || x == 14 || y == 1 || y == 8 || z == 1 || z == 14;
+                const bool door = doorway && z == 14 && (x == 7 || x == 8) && (y == 2 || y == 3);
+                if (shell && !door) {
                     c->materials[static_cast<std::size_t>(cell_index(x, y, z))] = 1;
                 }
             }
@@ -301,7 +319,7 @@ vsa_listener in_room() {
 
 vsa_engine_config reflection_config() {
     vsa_engine_config config = make_config();
-    config.flags = VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION;  // reflections alone
+    config.flags = VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION | VSA_ENGINE_FLAG_NO_PATHING;  // reflections alone
     return config;
 }
 
@@ -443,6 +461,169 @@ TEST_CASE("reflections render within budget at the Medium quality, every place i
 #if defined(NDEBUG)
         CHECK(p99 < 0.25 * period);
         CHECK(report.stats.last_tick_ms < 100.0);
+#endif
+    }
+}
+
+namespace {
+
+vsa_engine_config pathing_config() {
+    vsa_engine_config config = make_config();
+    config.flags = VSA_ENGINE_FLAG_NO_REFLECTIONS;  // pathing, and the direct simulation that asks for it
+    config.pathing_range = 32;
+    config.pathing_height = 16;
+    return config;
+}
+
+/// Outside the room's south wall, 4 m from the doorway, looking at it.
+vsa_listener at_doorway() {
+    vsa_listener l = facing(0.0f, -1.0f);
+    l.position[0] = 8.0f;
+    l.position[1] = 3.7f;
+    l.position[2] = 18.0f;
+    return l;
+}
+
+/// Renders until `found` blocked sounds have a path (the baker and the simulation run on their
+/// own threads).
+void settle_paths(vsa::Engine& engine, uint32_t found) {
+    std::vector<float> out(4800 * 12);
+    for (int i = 0; i < 300 && engine.paths()->stats().found < found; ++i) {
+        engine.render_offline(out.data(), 4800);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    const vsa::world::PathSimStats s = engine.paths()->stats();
+    const vsa::world::PathBakeStats b = engine.path_baker()->stats();
+    MESSAGE("paths: ticks " << s.ticks << " wanted " << s.wanted << " simulated " << s.simulated << " found " << s.found << " batch " << s.batch_id
+            << "; bakes " << b.bakes << " baking " << b.baking << " probes " << b.probes << " listener " << s.listener[0] << "," << s.listener[1] << "," << s.listener[2]);
+    REQUIRE(s.found == found);
+}
+
+}  // namespace
+
+TEST_CASE("the pathing render path never allocates") {
+    // The bake and the simulation run on their own threads (as with a device): only rendering is
+    // counted. Sounds in a room with a doorway, the listener outside: every one wants a path.
+    vsa_engine_config config = pathing_config();
+    config.pathing_sources = 4;
+    vsa::Engine engine(config);
+    build_room(engine, true);
+    engine.set_listener(at_doorway());
+    engine.path_baker()->set_threaded(true);
+    engine.paths()->set_threaded(true);
+    AssetRef tone(pcm_asset(engine, vsa_test::sine(440.0, 48000.0, 48000, 0.2f), 1, 48000));
+    // Six blocked sounds with four path slots: the louder get theirs.
+    std::vector<vsa_voice> voices;
+    for (int i = 0; i < 6; ++i) {
+        voices.push_back(voice(engine, tone.asset, VSA_BUS_ENTITY, 0.2f + 0.1f * static_cast<float>(i), 1.0f, true,
+                               VSA_SPATIAL_WORLD, 3.0f + 4.0f * static_cast<float>(i % 3), i < 3 ? 5.0f : 10.0f));
+        engine.start_voice(voices.back());
+    }
+    settle_paths(engine, 4);
+
+    std::vector<float> out(48000 * 12);
+    std::vector<uint64_t> allocations;
+    for (int round = 0; round < 8; ++round) {
+        switch (round) {
+            case 1:  // a sound moves, another stops: paths pass on
+                engine.set_voice_position(voices[5], VSA_SPATIAL_WORLD, 10.0f, 3.0f, 12.0f);
+                engine.stop_voice(voices[4]);
+                break;
+            case 2:  // out through the doorway: no path wanted, the direct sound takes over
+                engine.set_voice_position(voices[3], VSA_SPATIAL_WORLD, 8.0f, 3.0f, 16.0f);
+                break;
+            case 3:
+                engine.set_render_mode(VSA_RENDER_SPEAKERS);  // the path decoder
+                break;
+            case 4: {
+                vsa_output_desc desc{};  // 7.1.4 (the reopen itself may allocate)
+                desc.struct_size = sizeof desc;
+                desc.kind = VSA_OUTPUT_NONE;
+                desc.channels = 12;
+                engine.open_output(desc);
+                engine.path_baker()->set_threaded(true);  // closing the output stopped them
+                engine.paths()->set_threaded(true);
+                break;
+            }
+            case 5:  // the listener walks on: a new box is baked and swapped in
+                engine.set_listener([] {
+                    vsa_listener l = at_doorway();
+                    l.position[2] = 30.0f;
+                    return l;
+                }());
+                break;
+            case 6:
+                engine.start_voice(voices[4]);
+                engine.set_render_mode(VSA_RENDER_HEADPHONES);
+                break;
+            default: break;
+        }
+        vsa_test::AllocationScope scope;
+        engine.render_offline(out.data(), 4000);
+        allocations.push_back(scope.count());
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));  // simulation results arrive
+    }
+    for (const uint64_t count : allocations) {
+        CHECK(count == 0);
+    }
+    CHECK(engine.paths()->stats().ticks > 5);
+    CHECK(engine.path_baker()->stats().bakes >= 2);
+}
+
+TEST_CASE("pathing renders within budget at the default quality, every path slot in use") {
+    // PLAN section 9's budget for the phase: the render thread under 25 % of the block period at
+    // p99 with 32 blocked voices, 16 of them (the default) rendered through path effects; a
+    // simulation run within its 100 ms period.
+    for (const vsa_render_mode mode : {VSA_RENDER_HEADPHONES, VSA_RENDER_SPEAKERS}) {
+        vsa::Engine engine(pathing_config());
+        engine.set_render_mode(mode);
+        build_room(engine, true);
+        engine.set_listener(at_doorway());
+        if (mode == VSA_RENDER_SPEAKERS) {
+            vsa_output_desc desc{};
+            desc.struct_size = sizeof desc;
+            desc.kind = VSA_OUTPUT_NONE;
+            desc.channels = 12;
+            engine.open_output(desc);
+        }
+        engine.path_baker()->set_threaded(true);
+        engine.paths()->set_threaded(true);
+        AssetRef mono(pcm_asset(engine, vsa_test::sine(440.0, 48000.0, 48000, 0.1f), 1, 48000));
+        for (int i = 0; i < 32; ++i) {
+            const float x = 3.0f + static_cast<float>(i % 8) * 1.4f;
+            const float z = 3.0f + static_cast<float>(i / 8) * 2.5f;
+            engine.start_voice(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.1f, 1.0f, true, VSA_SPATIAL_WORLD, x, z));
+        }
+        settle_paths(engine, 16);
+        const uint32_t block = engine.settings().block_frames;
+        std::vector<float> out(static_cast<std::size_t>(block) * 12);
+        double p50 = std::numeric_limits<double>::infinity();
+        double p99 = std::numeric_limits<double>::infinity();
+        for (int window = 0; window < 5; ++window) {
+            if (window > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
+            std::vector<double> times_us;
+            for (int i = 0; i < 2 * 48000 / static_cast<int>(block); ++i) {
+                const auto start = std::chrono::steady_clock::now();
+                engine.render_offline(out.data(), block);
+                times_us.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
+            }
+            std::sort(times_us.begin(), times_us.end());
+            p50 = std::min(p50, times_us[times_us.size() / 2]);
+            p99 = std::min(p99, times_us[times_us.size() * 99 / 100]);
+        }
+        const double period = 1e6 * block / 48000.0;
+        const vsa::world::PathSimStats stats = engine.paths()->stats();
+        MESSAGE(std::string(mode == VSA_RENDER_HEADPHONES ? "headphones" : "7.1.4") << ", 32 blocked voices, 16 paths: render p50 "
+                << p50 << " us (" << 100.0 * p50 / period << " %), p99 " << p99 << " us (" << 100.0 * p99 / period
+                << " %); simulation " << stats.last_tick_ms << " ms (worst " << stats.max_tick_ms << " ms), " << stats.wanted
+                << " wanted");
+        CHECK(stats.wanted > 16);  // the rest see the listener through the doorway
+        CHECK(stats.found == 16);
+#if defined(NDEBUG)
+        CHECK(p99 < 0.25 * period);
+        CHECK(stats.last_tick_ms < 100.0);
 #endif
     }
 }

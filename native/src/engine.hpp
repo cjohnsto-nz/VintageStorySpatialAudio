@@ -12,6 +12,9 @@
 #include "dsp/resampler.hpp"
 #include "steam/steam_context.hpp"
 #include "world/direct_sim.hpp"
+#include "world/path_baker.hpp"
+#include "world/path_channel.hpp"
+#include "world/path_sim.hpp"
 #include "world/ray_paths.hpp"
 #include "world/reflection_channel.hpp"
 #include "world/reflection_sim.hpp"
@@ -102,6 +105,9 @@ public:
         bool direct_simulation = true;
         bool reflections = true;
         world::ReflectionSettings reflection;
+        bool pathing = true;
+        world::PathBakeSettings path_bake;
+        world::PathSimSettings path_sim;
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
@@ -125,6 +131,10 @@ public:
     /// (tests use it with a fixed output).
     [[nodiscard]] world::ReflectionSimulator* reflection_simulator() noexcept { return reflection_sim_.get(); }
     [[nodiscard]] std::vector<world::ReflectionSlotDebug> reflection_slots();
+
+    /// The pathing simulation and its baker (thread-safe queries); null when disabled.
+    [[nodiscard]] world::PathSimulator* paths() noexcept { return path_sim_.get(); }
+    [[nodiscard]] world::PathBaker* path_baker() noexcept { return path_baker_.get(); }
 
 private:
     enum class StateChange { None, Start, Pause, Stop };
@@ -176,6 +186,9 @@ private:
     std::unique_ptr<world::WorldScene> scene_;
     std::unique_ptr<world::DirectChannel> direct_channel_;
     std::unique_ptr<world::DirectSimulator> direct_sim_;
+    std::unique_ptr<world::PathChannel> path_channel_;
+    std::unique_ptr<world::PathBaker> path_baker_;
+    std::unique_ptr<world::PathSimulator> path_sim_;  // after the baker: it lets go of the batch first
     std::unique_ptr<world::ReflectionChannel> reflection_channel_;
     // Replaced (under api_mutex_, with nothing rendering) when the output's rate changes.
     std::unique_ptr<world::ReflectionSimulator> reflection_sim_;

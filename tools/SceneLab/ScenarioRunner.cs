@@ -46,6 +46,7 @@ public static class ScenarioRunner
                 // No geometry to reflect off; and offline, the reflection simulation would run on
                 // the rendering thread and count in the block load.
                 Reflections = false,
+                Pathing = false,
             },
             log);
         engine.SetRenderMode(scenario.RenderMode);

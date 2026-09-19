@@ -60,6 +60,9 @@ using InstancedMesh = IplHandle<IPLInstancedMesh, iplInstancedMeshRelease>;
 using AmbisonicsEncodeEffect = IplHandle<IPLAmbisonicsEncodeEffect, iplAmbisonicsEncodeEffectRelease>;
 using AmbisonicsDecodeEffect = IplHandle<IPLAmbisonicsDecodeEffect, iplAmbisonicsDecodeEffectRelease>;
 using ReflectionEffect = IplHandle<IPLReflectionEffect, iplReflectionEffectRelease>;
+using ProbeArray = IplHandle<IPLProbeArray, iplProbeArrayRelease>;
+using ProbeBatch = IplHandle<IPLProbeBatch, iplProbeBatchRelease>;
+using PathEffect = IplHandle<IPLPathEffect, iplPathEffectRelease>;
 
 /// Human-readable name for an IPLerror.
 [[nodiscard]] const char* error_name(IPLerror error) noexcept;

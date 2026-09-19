@@ -39,12 +39,15 @@ add_library(vsaudio_core STATIC
     src/engine.hpp
     src/audio/asset.cpp
     src/audio/asset.hpp
+    src/audio/bed_panner.cpp
+    src/audio/bed_panner.hpp
     src/audio/channel_layout.hpp
     src/audio/listener_pose.hpp
     src/audio/mixer.cpp
     src/audio/mixer.hpp
     src/audio/reflections.cpp
     src/audio/reflections.hpp
+    src/audio/source_layout.hpp
     src/audio/speaker_decoder.cpp
     src/audio/speaker_decoder.hpp
     src/audio/spatial.cpp
@@ -88,6 +91,11 @@ add_library(vsaudio_core STATIC
     src/world/direct_sim.hpp
     src/world/mesher.cpp
     src/world/mesher.hpp
+    src/world/path_baker.cpp
+    src/world/path_baker.hpp
+    src/world/path_channel.hpp
+    src/world/path_sim.cpp
+    src/world/path_sim.hpp
     src/world/ray_paths.cpp
     src/world/ray_paths.hpp
     src/world/reflection_channel.hpp

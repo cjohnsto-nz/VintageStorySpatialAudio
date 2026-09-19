@@ -114,7 +114,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
             .EndSubCommand()
             .BeginSubCommand("scene")
-                .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|rays|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
+                .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|rays|paths|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
                 .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
                 .HandleWith(args => WithEngine(() => sceneTools is null
                     ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + ")."
@@ -339,9 +339,11 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         try
         {
             SteamAudioConfig? config = api.LoadModConfig<SteamAudioConfig>(SteamAudioConfig.FileName);
-            if (config is null)
+            bool fresh = config is null;
+            config ??= new SteamAudioConfig();
+            if (config.Migrate() && !fresh)
             {
-                config = new SteamAudioConfig();
+                Mod.Logger.Notification("{0} was written by an earlier version; defaults that changed since were updated.", SteamAudioConfig.FileName);
             }
 
             // Rewritten every time so new options appear in the file with their defaults.

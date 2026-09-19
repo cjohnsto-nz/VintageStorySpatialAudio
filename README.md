@@ -21,7 +21,7 @@ A client mod that replaces Vintage Story's audio engine with a native engine bui
 ```powershell
 # Windows, PowerShell 7. Needs VS 2022 C++ tools, CMake >= 3.25, .NET 10 SDK and the game installed.
 ./scripts/build.ps1          # deps -> native build + tests -> managed build + tests -> VsaDoctor -> zip
-./deploy.ps1 -LaunchGame     # build (Debug) and install into VintagestoryData/Mods
+./deploy.ps1 -LaunchGame     # build (Release) and install into VintagestoryData/Mods
 ```
 
 In game, type `.steamaudio status` or `.steamaudio targets`.

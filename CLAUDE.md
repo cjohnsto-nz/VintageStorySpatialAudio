@@ -7,7 +7,7 @@ Guidance for Claude Code in this repo. The current state and next steps are in [
 A Vintage Story client mod that replaces the game's audio engine with a native engine built on Steam Audio 4.8.1.
 
 - The plan is in `docs/PLAN.md`.
-- The decisions are in `docs/adr/` (ADRs 0001–0012).
+- The decisions are in `docs/adr/` (ADRs 0001–0014).
 - The evidence behind them is in `docs/investigations/phase0.md`.
 
 ## Build and test (Windows, PowerShell 7)
@@ -17,7 +17,7 @@ Always use `pwsh`. Windows PowerShell 5.1 can't run the scripts (they carry `#Re
 ```powershell
 pwsh ./scripts/build.ps1                      # deps -> native build+tests -> managed build+tests -> VsaDoctor -> zip
 pwsh ./scripts/build.ps1 -SkipTests           # faster; skips the test project entirely
-pwsh ./deploy.ps1 -StopGame                   # Debug build + install zip into %APPDATA%\VintagestoryData\Mods
+pwsh ./deploy.ps1 -StopGame                   # Release build + install zip into %APPDATA%\VintagestoryData\Mods (-Configuration Debug for asserts)
 cd native; cmake --preset win-x64; cmake --build --preset win-x64-debug; ctest --preset win-x64-debug
 dotnet tools/VsaDoctor/bin/Release/net10.0/VsaDoctor.dll --native artifacts/native/win-x64
 ```

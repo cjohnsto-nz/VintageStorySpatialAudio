@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 10u
+#define VSA_ABI_VERSION 11u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -108,7 +108,9 @@ enum {
     /** Disables the direct simulation: no occlusion or transmission by the world scene. */
     VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION = 1u << 1,
     /** Disables the reflections: no reverb from the world scene. */
-    VSA_ENGINE_FLAG_NO_REFLECTIONS = 1u << 2
+    VSA_ENGINE_FLAG_NO_REFLECTIONS = 1u << 2,
+    /** Disables pathing: no sound round corners and through doorways beyond what reflects. */
+    VSA_ENGINE_FLAG_NO_PATHING = 1u << 3
 };
 
 /** Resampler quality: zero crossings per side of the bandlimited-interpolation kernel. */
@@ -198,6 +200,22 @@ typedef struct vsa_engine_config {
      * reflection_duration.
      */
     float reflection_transition;
+    /*
+     * Pathing (Phase 7, ADR 0014): sound round corners and through doorways, from Steam Audio's
+     * baked probe paths. A box round the listener is baked in the background and baked again
+     * when the listener leaves its middle or blocks in it change. 0 = the default for each.
+     */
+    /** The box: blocks across (x and z), 0 = 96; 32..256; and high, 0 = 64; 16..128. */
+    uint32_t pathing_range;
+    uint32_t pathing_height;
+    /** Metres between probes, 0 = 2.5; 1..8. */
+    float pathing_probe_spacing;
+    /** Point samples per probe when testing whether two probes see each other, 0 = 1; 1..8. */
+    uint32_t pathing_vis_samples;
+    /** Pathing simulations per second while a device plays, 0 = 10; 1..60. */
+    uint32_t pathing_rate_hz;
+    /** Sounds given paths per simulation at most (the loudest blocked ones), 0 = 16; 1..256. */
+    uint32_t pathing_sources;
 } vsa_engine_config;
 
 typedef struct vsa_engine_info {
@@ -278,7 +296,10 @@ typedef struct vsa_asset_desc {
     const char* name;
     /** A vsa_asset_storage value. */
     uint32_t storage;
-    /** VSA_ASSET_FORMAT_PCM_S16 only: 1 or 2. */
+    /**
+     * VSA_ASSET_FORMAT_PCM_S16 only: 1 to 8, interleaved in WAV's default order for the count
+     * (FL FR FC LFE BL BR SL SR; see VSA_SPATIAL_NONE for beds).
+     */
     uint32_t pcm_channels;
     /** VSA_ASSET_FORMAT_PCM_S16 only. */
     uint32_t pcm_sample_rate;
@@ -286,7 +307,7 @@ typedef struct vsa_asset_desc {
 
 typedef struct vsa_asset_info {
     uint32_t struct_size;
-    /** 1 or 2. */
+    /** 1 to 8. */
     uint32_t channels;
     uint32_t sample_rate;
     /** The storage actually used (DECODED or STREAMED). */
@@ -337,7 +358,14 @@ typedef uint64_t vsa_voice;
 
 /** How a voice is positioned. */
 typedef enum vsa_spatial_mode {
-    /** Not positioned: straight to its bus (music, UI). Mono is centred at -3 dB per side. */
+    /**
+     * Not positioned: straight to its bus (music, UI). Mono is centred at -3 dB per side, stereo
+     * plays on the front pair. More channels are a bed (a weather mod's 5.1 rain): each channel
+     * plays from its speaker, head-locked (Ogg Vorbis channel order; WAV's speaker mask or default
+     * order; a lone surround pair at 110 degrees), panned between speakers where the output lacks
+     * one, and binaurally on headphones. The LFE goes to the LFE, or to the front pair.
+     * Positioned voices hear every asset as mono: stereo and beds are downmixed.
+     */
     VSA_SPATIAL_NONE = 0,
     /** Position in world coordinates, rendered relative to the listener. */
     VSA_SPATIAL_WORLD = 1,
@@ -928,6 +956,63 @@ VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_gain(vsa_engine* engine, f
  * 0..4.
  */
 VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_mix(vsa_engine* engine, float early_gain, float tail_gain);
+
+/* =============================================================================================
+ * Pathing (Phase 7, ADR 0014): sound round corners and through doorways.
+ *
+ * Steam Audio's baked pathing: probes 1.6 m above every floor of a box round the listener, the
+ * shortest paths between them baked in the background (about half a second per 64^3 of world on
+ * one thread), and, for each sound whose straight path is blocked, the path from it to the
+ * listener looked up and validated against the live scene several times a second. Its sound is
+ * then also heard arriving from the way round, at the attenuation of that way's length, through
+ * an order-1 Ambisonic path effect decoded with the reflections.
+ * ============================================================================================= */
+
+typedef struct vsa_pathing_stats {
+    uint32_t struct_size;
+    /** Non-zero if pathing runs. */
+    uint32_t enabled;
+    /** The baker: whether a bake runs now, whether one is due, bakes so far, timings, and the
+     *  current batch's probes and box centre (world block coordinates). */
+    uint32_t baking;
+    uint32_t bake_due;
+    uint64_t bakes;
+    double last_bake_ms;
+    double max_bake_ms;
+    uint32_t probes;
+    uint32_t reserved;
+    double box_centre[3];
+    /** The simulation: runs, timings, and in the latest run how many sounds wanted a path, how
+     *  many were simulated and how many have one. */
+    uint64_t ticks;
+    double last_tick_ms;
+    double max_tick_ms;
+    uint32_t wanted;
+    uint32_t simulated;
+    uint32_t found;
+    uint32_t rate_hz;
+    /** Where the latest run listened from (scene coordinates). */
+    float listener[3];
+    uint32_t reserved2;
+} vsa_pathing_stats;
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_pathing_stats(vsa_engine* engine, vsa_pathing_stats* out);
+
+/** One leg of a path the pathing simulation considered in its latest run (scene coordinates). */
+typedef struct vsa_path_segment {
+    uint32_t struct_size;
+    /** Non-zero: the leg is blocked in the live scene. */
+    uint32_t occluded;
+    float from[3];
+    float to[3];
+} vsa_path_segment;
+
+/**
+ * The path legs of the latest pathing run: fills up to `capacity` (out[0].struct_size set) and
+ * sets *out_count to the total.
+ */
+VSA_API vsa_result VSA_CALL vsa_engine_get_path_segments(vsa_engine* engine, vsa_path_segment* out, uint32_t capacity,
+                                                         uint32_t* out_count);
 
 /** One leg of a traced sound path (vsa_scene_trace_rays). */
 typedef struct vsa_ray_segment {

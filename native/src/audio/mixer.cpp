@@ -11,6 +11,9 @@
 #include <limits>
 
 namespace vsa {
+
+static_assert(dsp::HighShelf::kMaxChannels >= decode::kMaxChannels, "every channel of a bed needs its own filter state");
+
 namespace {
 
 constexpr float kMonoPan = 0.70710678f;  // equal power, -3 dB per side
@@ -32,6 +35,10 @@ constexpr double kDirectMaxHoldSeconds = 0.08;
 constexpr float kPlaceRadius = 3.0f;
 constexpr float kPlaceSteal = 2.0f;
 constexpr double kPlaceIdleSeconds = 30.0;
+// A voice asks for a path round what blocks it when less than this much of it is visible.
+constexpr float kPathWanted = 0.9f;
+// Path coefficients below this (amplitude) count as no path.
+constexpr float kPathSilence = 1e-5f;
 
 template <typename T>
 void store_max(std::atomic<T>& target, T value) noexcept {
@@ -52,7 +59,7 @@ void store_min(std::atomic<T>& target, T value) noexcept {
 Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
              SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
              LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget,
-             world::DirectChannel* direct, ReflectionRenderer* reflections)
+             world::DirectChannel* direct, ReflectionRenderer* reflections, world::PathChannel* paths)
     : kernel_(kernel),
       slots_(slots),
       slot_count_(slot_count),
@@ -65,7 +72,16 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
       block_frames_(block_frames),
       binaural_budget_(binaural_budget),
       direct_(direct),
-      reflections_(reflections) {
+      reflections_(reflections),
+      paths_(paths) {
+    path_state_.resize(spatial.pool_size());
+    path_in_.resize(block_frames);
+    path_out_storage_.resize(static_cast<std::size_t>(block_frames) * 4);
+    path_bus_storage_.resize(static_cast<std::size_t>(block_frames) * 4);
+    for (std::size_t c = 0; c < 4; ++c) {
+        path_out_[c] = path_out_storage_.data() + c * block_frames;
+        path_bus_[c] = path_bus_storage_.data() + c * block_frames;
+    }
     reflection_gain_buf_.resize(block_frames);
     ranking_.resize(spatial.pool_size());
     set_generation_.assign(spatial.pool_size(), 0);
@@ -74,13 +90,12 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
     coef_.resize(kernel.scratch_floats());
 
     window_capacity_ = kernel.max_span_frames(block_frames);
-    window_storage_.resize(static_cast<std::size_t>(window_capacity_) * 2);
-    window_[0] = window_storage_.data();
-    window_[1] = window_storage_.data() + window_capacity_;
-
-    voice_storage_.resize(static_cast<std::size_t>(block_frames) * 2);
-    voice_out_[0] = voice_storage_.data();
-    voice_out_[1] = voice_storage_.data() + block_frames;
+    window_storage_.resize(static_cast<std::size_t>(window_capacity_) * decode::kMaxChannels);
+    voice_storage_.resize(static_cast<std::size_t>(block_frames) * decode::kMaxChannels);
+    for (std::size_t c = 0; c < decode::kMaxChannels; ++c) {
+        window_[c] = window_storage_.data() + c * window_capacity_;
+        voice_out_[c] = voice_storage_.data() + c * block_frames;
+    }
     gain_buf_.resize(block_frames);
     bus_gain_storage_.resize(static_cast<std::size_t>(block_frames) * VSA_BUS_COUNT);
     for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
@@ -121,6 +136,9 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
 
     // New effect sets for the new rate: every voice re-acquires one on its next block.
     spatial_.prepare(sample_rate, block_frames_, channels_);
+    path_decoder_ = paths_ != nullptr ? std::make_unique<SpeakerDecoder>(channels_, 1) : nullptr;
+    bed_panner_ = std::make_unique<BedPanner>(channels_);
+    path_bus_used_ = false;
     for (uint32_t i = 0; i < active_count_; ++i) {
         RenderVoice& v = slots_[active_[i]].render;
         v.effect_set = -1;
@@ -167,6 +185,10 @@ void Mixer::render_block() noexcept {
     if (reflections_ != nullptr) {
         reflections_->begin_block();
     }
+    if (path_bus_used_) {
+        std::fill(path_bus_storage_.begin(), path_bus_storage_.end(), 0.0f);
+        path_bus_used_ = false;
+    }
     bus_used_.fill(false);
     for (uint32_t i = 0; i < active_count_;) {
         if (!render_voice(active_[i])) {
@@ -195,6 +217,7 @@ void Mixer::render_block() noexcept {
         }
     }
     mix_reflections();
+    mix_paths();
     // The world ambisonic bus (bus gains already applied), decoded for the listener's head.
     const Orientation orientation{
         {pose_.right[0], pose_.right[1], pose_.right[2]},
@@ -203,6 +226,16 @@ void Mixer::render_block() noexcept {
         {pose_.position[0], pose_.position[1], pose_.position[2]},
     };
     if (spatial_.decode(orientation, spatial_out_[0], spatial_out_[1])) {
+        for (uint32_t c = 0; c < 2; ++c) {
+            const float* in = spatial_out_[c];
+            float* sum = master_[c];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += in[j];
+            }
+        }
+    }
+    // Beds on headphones (bus gains already applied), decoded facing ahead: they turn with the head.
+    if (spatial_.decode_head(spatial_out_[0], spatial_out_[1])) {
         for (uint32_t c = 0; c < 2; ++c) {
             const float* in = spatial_out_[c];
             float* sum = master_[c];
@@ -593,6 +626,7 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
             publish_position(s);  // held until its first simulation result
             return false;
         }
+        update_path(s, params);
     }
 
     const Generated generated = silent ? advance_silent(s) : generate(s);
@@ -667,20 +701,16 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
     }
 
     if (positioned) {
-        // Positioned: mono (stereo assets downmixed) -> gain -> shelf -> Steam Audio -> stereo.
-        if (channels == 2) {
-            for (uint32_t j = 0; j < frames; ++j) {
-                left[j] = 0.5f * (left[j] + right[j]) * gain[j];
-            }
-        } else {
-            for (uint32_t j = 0; j < frames; ++j) {
-                left[j] *= gain[j];
-            }
+        // Positioned: mono (other assets downmixed) -> gain -> shelf -> Steam Audio -> stereo.
+        downmix(*s.asset);
+        for (uint32_t j = 0; j < frames; ++j) {
+            left[j] *= gain[j];
         }
         if (v.shelf.active()) {
             v.shelf.process(left, frames, 0);
         }
         send_reflections(s, params, left);
+        send_path(s, params, left);
         if (v.tier == SpatialTier::Ambisonic) {
             // The shared bus is decoded after every bus gain, so this voice's is applied now.
             const float* bus_gain = bus_gains_[b];
@@ -705,7 +735,14 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         return;
     }
 
-    for (uint32_t c = 0; c < channels; ++c) {
+    // A bed plays from the speakers; a positional voice still waiting for an effect set plays
+    // centred, like a mono one.
+    const bool bed = channels > 2 && v.spatial == VSA_SPATIAL_NONE && bed_panner_ != nullptr;
+    const uint32_t used = channels > 2 && !bed ? 1u : channels;
+    if (used != channels) {
+        downmix(*s.asset);
+    }
+    for (uint32_t c = 0; c < used; ++c) {
         float* x = voice_out_[c];
         for (uint32_t j = 0; j < frames; ++j) {
             x[j] *= gain[j];
@@ -714,7 +751,9 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
             v.shelf.process(x, frames, c);
         }
     }
-    if (channels == 1) {
+    if (bed) {
+        mix_bed(*s.asset, b);
+    } else if (used == 1) {
         for (uint32_t j = 0; j < frames; ++j) {
             const float x = left[j] * kMonoPan;
             bl[j] += x;
@@ -724,6 +763,92 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         for (uint32_t j = 0; j < frames; ++j) {
             bl[j] += left[j];
             br[j] += right[j];
+        }
+    }
+}
+
+void Mixer::downmix(const Asset& asset) noexcept {
+    const uint32_t channels = asset.channels();
+    if (channels == 1) {
+        return;
+    }
+    const uint32_t frames = block_frames_;
+    float* mono = voice_out_[0];
+    if (channels == 2) {
+        const float* right = voice_out_[1];
+        for (uint32_t j = 0; j < frames; ++j) {
+            mono[j] = 0.5f * (mono[j] + right[j]);
+        }
+        return;
+    }
+    // A bed: the average of its speaker channels (the LFE carries nothing a direction needs).
+    const SourceLayout& layout = asset.layout();
+    uint32_t count = layout[0].lfe ? 0u : 1u;
+    if (layout[0].lfe) {
+        std::fill(mono, mono + frames, 0.0f);
+    }
+    for (uint32_t c = 1; c < channels; ++c) {
+        if (layout[c].lfe) {
+            continue;
+        }
+        const float* x = voice_out_[c];
+        for (uint32_t j = 0; j < frames; ++j) {
+            mono[j] += x[j];
+        }
+        ++count;
+    }
+    const float scale = 1.0f / static_cast<float>(std::max(count, 1u));
+    for (uint32_t j = 0; j < frames; ++j) {
+        mono[j] *= scale;
+    }
+}
+
+void Mixer::mix_bed(const Asset& asset, std::size_t b) noexcept {
+    const uint32_t frames = block_frames_;
+    const uint32_t channels = asset.channels();
+    const SourceLayout& layout = asset.layout();
+    float* const* bus = &bus_[b * kMaxOutputChannels];
+
+    if (render_mode_ == VSA_RENDER_HEADPHONES) {
+        // Binaural: each channel from its speaker's direction through the head bus, which is
+        // decoded after every bus gain, so this voice's is applied now. The LFE has no direction
+        // and plays in the middle.
+        const float* bus_gain = bus_gains_[b];
+        for (uint32_t c = 0; c < channels; ++c) {
+            float* x = voice_out_[c];
+            if (layout[c].lfe) {
+                for (uint32_t j = 0; j < frames; ++j) {
+                    const float centred = x[j] * kMonoPan;
+                    bus[0][j] += centred;
+                    bus[1][j] += centred;
+                }
+                continue;
+            }
+            for (uint32_t j = 0; j < frames; ++j) {
+                x[j] *= bus_gain[j];
+            }
+            float direction[3];
+            layout[c].direction(direction);
+            spatial_.encode_head(direction, x);
+        }
+        return;
+    }
+
+    // Speakers: each channel from its speaker (panned between two where the layout lacks it).
+    std::array<float, kMaxOutputChannels> gains{};
+    const uint32_t outputs = std::min(bed_panner_->channels(), channels_);
+    for (uint32_t c = 0; c < channels; ++c) {
+        bed_panner_->gains(layout[c], gains.data());
+        const float* x = voice_out_[c];
+        for (uint32_t o = 0; o < outputs; ++o) {
+            const float k = gains[o];
+            if (k == 0.0f) {
+                continue;
+            }
+            float* sum = bus[o];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += k * x[j];
+            }
         }
     }
 }
@@ -788,10 +913,11 @@ int Mixer::acquire_effects(uint32_t slot, float level) noexcept {
         loser.is_virtual = true;
     }
     spatial_.reset(set);
-    if (direct_ != nullptr) {
+    if (direct_ != nullptr || paths_ != nullptr) {
         uint32_t& generation = set_generation_[static_cast<std::size_t>(set)];
         generation = generation + 1 == 0 ? 1 : generation + 1;
         direct_state_[static_cast<std::size_t>(set)] = DirectState{};
+        path_state_[static_cast<std::size_t>(set)] = PathState{};
     }
     slots_[slot].render.direct_hold = 0;
     return set;
@@ -871,6 +997,9 @@ void Mixer::release_effects(RenderVoice& v) noexcept {
     if (v.effect_set >= 0) {
         if (direct_ != nullptr) {
             direct_->input(static_cast<uint32_t>(v.effect_set)).generation.store(0, std::memory_order_release);
+        }
+        if (paths_ != nullptr) {
+            paths_->input(static_cast<uint32_t>(v.effect_set)).generation.store(0, std::memory_order_release);
         }
         spatial_.release(v.effect_set);
         v.effect_set = -1;
@@ -1019,6 +1148,112 @@ void Mixer::send_reflections(VoiceSlot& s, const SpatialParams& params, const fl
     }
 }
 
+void Mixer::update_path(VoiceSlot& s, const SpatialParams& params) noexcept {
+    RenderVoice& v = s.render;
+    if (paths_ == nullptr || v.effect_set < 0) {
+        return;
+    }
+    const auto set = static_cast<uint32_t>(v.effect_set);
+    world::PathInput& in = paths_->input(set);
+    if (v.spatial != VSA_SPATIAL_WORLD) {
+        in.generation.store(0, std::memory_order_release);
+        return;
+    }
+    // Wanted when the straight path is blocked (or nothing says otherwise: no direct simulation).
+    // Rendered by how blocked it is: full when nothing of the source is seen, nothing at
+    // kPathWanted. A hard gate would flap with the occlusion estimate (a partly seen source
+    // hovering about the threshold), and Steam Audio answers a clear centre ray with the direct
+    // path itself, which would double a source in plain view.
+    const DirectState& direct = direct_state_[set];
+    const bool wanted = direct_ == nullptr || (direct.primed && direct.occlusion < kPathWanted);
+    const float weight = direct_ == nullptr ? 1.0f : std::clamp((kPathWanted - direct.occlusion) / kPathWanted, 0.0f, 1.0f);
+    const uint32_t generation = set_generation_[set];
+    in.x.store(v.position[0], std::memory_order_relaxed);
+    in.y.store(v.position[1], std::memory_order_relaxed);
+    in.z.store(v.position[2], std::memory_order_relaxed);
+    in.level.store(v.open_level, std::memory_order_relaxed);
+    in.wanted.store(wanted, std::memory_order_relaxed);
+    in.voice.store(s.handle, std::memory_order_relaxed);
+    in.generation.store(generation, std::memory_order_release);
+
+    PathState& state = path_state_[set];
+    const world::PathOutput& out = paths_->output(set);
+    float sh[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float eq[3] = {1.0f, 1.0f, 1.0f};
+    bool have = false;
+    if (wanted && out.generation.load(std::memory_order_acquire) == generation) {
+        for (int c = 0; c < 4; ++c) {
+            sh[c] = weight * out.sh[c].load(std::memory_order_relaxed);
+        }
+        for (int b = 0; b < 3; ++b) {
+            eq[b] = out.eq[b].load(std::memory_order_relaxed);
+        }
+        have = true;
+    }
+    // Towards the latest result, or towards silence when there is none (the path closed, or the
+    // straight line opened): smoothed as the direct results are.
+    if (!state.primed) {
+        if (!have) {
+            return;
+        }
+        std::copy_n(sh, 4, state.sh);
+        std::copy_n(eq, 3, state.eq);
+        state.primed = true;
+    } else {
+        for (int c = 0; c < 4; ++c) {
+            state.sh[c] += direct_alpha_ * (sh[c] - state.sh[c]);
+        }
+        for (int b = 0; b < 3; ++b) {
+            state.eq[b] += direct_alpha_ * (eq[b] - state.eq[b]);
+        }
+    }
+    float magnitude = 0.0f;
+    for (const float c : state.sh) {
+        magnitude = std::max(magnitude, std::abs(c));
+    }
+    state.sounding = magnitude > kPathSilence;
+    (void)params;
+}
+
+void Mixer::send_path(VoiceSlot& s, const SpatialParams& params, const float* mono) noexcept {
+    RenderVoice& v = s.render;
+    if (paths_ == nullptr || v.effect_set < 0 || v.spatial != VSA_SPATIAL_WORLD) {
+        return;
+    }
+    const PathState& state = path_state_[static_cast<std::size_t>(v.effect_set)];
+    if (!state.sounding) {
+        return;
+    }
+    // Steam Audio's paths carry 1-at-1-m attenuation over their length; our direct path plays at
+    // 1 within min_distance: the same ratio as for the reflections.
+    const float loudness = std::clamp(params.distance, 1.0f, std::max(1.0f, v.min_distance));
+    const float* bus_gain = bus_gains_[s.bus];
+    float* in = path_in_.data();
+    for (uint32_t j = 0; j < block_frames_; ++j) {
+        in[j] = mono[j] * bus_gain[j] * loudness;
+    }
+    spatial_.render_path(v.effect_set, state.eq, state.sh, in, path_out_.data());
+    for (std::size_t c = 0; c < 4; ++c) {
+        const float* x = path_out_[c];
+        float* sum = path_bus_[c];
+        for (uint32_t j = 0; j < block_frames_; ++j) {
+            sum[j] += x[j];
+        }
+    }
+    path_bus_used_ = true;
+}
+
+void Mixer::mix_paths() noexcept {
+    if (!path_bus_used_) {
+        return;
+    }
+    if (render_mode_ == VSA_RENDER_HEADPHONES) {
+        spatial_.add_ambisonic(path_bus_.data(), 4);
+    } else if (path_decoder_) {
+        path_decoder_->decode(pose_.right, pose_.up, pose_.forward, path_bus_.data(), master_.data(), block_frames_);
+    }
+}
+
 void Mixer::mix_reflections() noexcept {
     if (reflections_ == nullptr || !reflections_->enabled()) {
         return;
@@ -1107,26 +1342,27 @@ void Mixer::gather(const Asset& asset, int64_t first, int64_t end, bool loop, bo
     const auto length = static_cast<int64_t>(asset.frames());
     const uint32_t channels = asset.channels();
     const int16_t* pcm = asset.pcm();
-    float* left = window_[0];
-    float* right = window_[1];
 
     const auto copy = [&](int64_t src, int64_t count, std::size_t out) {
         const int16_t* p = pcm + static_cast<std::size_t>(src) * channels;
         if (channels == 1) {
+            float* mono = window_[0] + out;
             for (int64_t r = 0; r < count; ++r) {
-                left[out + static_cast<std::size_t>(r)] = static_cast<float>(p[r]) * kScale;
+                mono[r] = static_cast<float>(p[r]) * kScale;
             }
-        } else {
+            return;
+        }
+        for (uint32_t c = 0; c < channels; ++c) {
+            float* x = window_[c] + out;
+            const int16_t* q = p + c;
             for (int64_t r = 0; r < count; ++r) {
-                left[out + static_cast<std::size_t>(r)] = static_cast<float>(p[2 * r]) * kScale;
-                right[out + static_cast<std::size_t>(r)] = static_cast<float>(p[2 * r + 1]) * kScale;
+                x[r] = static_cast<float>(q[static_cast<std::size_t>(r) * channels]) * kScale;
             }
         }
     };
     const auto zero = [&](int64_t count, std::size_t out) {
-        std::fill(left + out, left + out + count, 0.0f);
-        if (channels == 2) {
-            std::fill(right + out, right + out + count, 0.0f);
+        for (uint32_t c = 0; c < channels; ++c) {
+            std::fill(window_[c] + out, window_[c] + out + count, 0.0f);
         }
     };
 

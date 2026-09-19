@@ -224,6 +224,47 @@ public sealed record ReflectionSourceInfo(
     (float Low, float Mid, float High) Eq,
     int Delay);
 
+/// <summary>The pathing simulation and its baker (Phase 7), for debugging views.</summary>
+/// <param name="Enabled">Whether pathing runs.</param>
+/// <param name="Baking">A bake is running now.</param>
+/// <param name="BakeDue">A bake is due (chunks changed, the listener left the middle of the box).</param>
+/// <param name="Bakes">Bakes so far.</param>
+/// <param name="LastBakeMs">The latest bake's duration.</param>
+/// <param name="MaxBakeMs">The longest so far.</param>
+/// <param name="Probes">The current batch's probes.</param>
+/// <param name="BoxCentre">The current batch's box centre (world block coordinates).</param>
+/// <param name="Ticks">Simulations so far.</param>
+/// <param name="LastTickMs">The latest simulation's duration.</param>
+/// <param name="MaxTickMs">The longest so far.</param>
+/// <param name="Wanted">Sounds that asked for a path in the latest run.</param>
+/// <param name="Simulated">Of those, run.</param>
+/// <param name="Found">Of those, with a path.</param>
+/// <param name="RateHz">Simulations per second.</param>
+/// <param name="Listener">Where the latest run listened from (scene coordinates).</param>
+public sealed record PathingStats(
+    bool Enabled,
+    bool Baking,
+    bool BakeDue,
+    long Bakes,
+    double LastBakeMs,
+    double MaxBakeMs,
+    int Probes,
+    (double X, double Y, double Z) BoxCentre,
+    long Ticks,
+    double LastTickMs,
+    double MaxTickMs,
+    int Wanted,
+    int Simulated,
+    int Found,
+    int RateHz,
+    (float X, float Y, float Z) Listener);
+
+/// <summary>One leg of a path the pathing simulation considered (scene coordinates).</summary>
+/// <param name="From">Start.</param>
+/// <param name="To">End.</param>
+/// <param name="Occluded">Blocked in the live scene.</param>
+public readonly record struct PathSegment((float X, float Y, float Z) From, (float X, float Y, float Z) To, bool Occluded);
+
 /// <summary>One leg of a traced sound path (scene coordinates).</summary>
 /// <param name="Bounce">0 for the leg leaving the origin.</param>
 /// <param name="From">Start.</param>
@@ -539,6 +580,45 @@ public sealed partial class AudioEngine
     {
         using Lease lease = new(handle);
         NativeException.ThrowIfFailed(VsaNative.EngineSetReflectionGain(lease.Engine, gain), "vsa_engine_set_reflection_gain");
+    }
+
+    public unsafe PathingStats GetPathingStats()
+    {
+        using Lease lease = new(handle);
+        var s = new VsaPathingStats { StructSize = (uint)sizeof(VsaPathingStats) };
+        NativeException.ThrowIfFailed(VsaNative.EngineGetPathingStats(lease.Engine, ref s), "vsa_engine_get_pathing_stats");
+        return new PathingStats(
+            s.Enabled != 0, s.Baking != 0, s.BakeDue != 0, (long)s.Bakes, s.LastBakeMs, s.MaxBakeMs, (int)s.Probes,
+            (s.BoxCentre[0], s.BoxCentre[1], s.BoxCentre[2]), (long)s.Ticks, s.LastTickMs, s.MaxTickMs,
+            (int)s.Wanted, (int)s.Simulated, (int)s.Found, (int)s.RateHz, (s.Listener[0], s.Listener[1], s.Listener[2]));
+    }
+
+    /// <summary>The path legs the pathing simulation considered in its latest run.</summary>
+    public unsafe IReadOnlyList<PathSegment> GetPathSegments()
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineGetPathSegments(lease.Engine, null, 0, out uint count), "vsa_engine_get_path_segments");
+        if (count == 0)
+        {
+            return [];
+        }
+
+        var buffer = new VsaPathSegment[count + 64];
+        buffer[0].StructSize = (uint)sizeof(VsaPathSegment);
+        fixed (VsaPathSegment* p = buffer)
+        {
+            NativeException.ThrowIfFailed(VsaNative.EngineGetPathSegments(lease.Engine, p, (uint)buffer.Length, out count), "vsa_engine_get_path_segments");
+        }
+
+        int n = (int)Math.Min(count, (uint)buffer.Length);
+        var result = new PathSegment[n];
+        for (int i = 0; i < n; i++)
+        {
+            ref VsaPathSegment d = ref buffer[i];
+            result[i] = new PathSegment((d.From[0], d.From[1], d.From[2]), (d.To[0], d.To[1], d.To[2]), d.Occluded != 0);
+        }
+
+        return result;
     }
 
     /// <summary>

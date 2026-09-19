@@ -304,6 +304,43 @@ public sealed class SteamAudioSoundTests
         Assert.Equal(4f, sim.Listener.X, 3);  // the eyes, not 0.5 m behind them
     }
 
+    [Fact]
+    public void A_surround_weather_bed_plays_each_channel_from_its_speaker()
+    {
+        // As vanilla loads weather tracks (relative, at the origin): with a 5.1 asset, a bed.
+        // Signal in the left surround only (WAV/PCM order FL FR FC LFE BL BR).
+        using var rig = new Rig();
+        short[] pcm = new short[Rate * 6];
+        short[] tone = NativeEngineTests.Sine(1000, Rate, Rate, 0.5);
+        for (int j = 0; j < Rate; j++)
+        {
+            pcm[(j * 6) + 4] = tone[j];
+        }
+
+        using AudioAsset bed = rig.Session.Engine.CreatePcmAsset(pcm, 6, Rate, "rain-5.1");
+        foreach (RenderMode mode in new[] { RenderMode.Speakers, RenderMode.Headphones })
+        {
+            rig.Session.Engine.SetRenderMode(mode);
+            var soundParams = new SoundParams
+            {
+                Location = new AssetLocation("game:sounds/weather/tracks/rain-leafless.ogg"),
+                Position = new Vec3f(0, 0, 0),
+                RelativePosition = true,
+                ShouldLoop = true,
+                SoundType = EnumSoundType.Weather,
+            };
+            SteamAudioSound sound = rig.Session.CreateSound(soundParams, () => bed, 6);
+            Assert.Equal(6, sound.Channels);
+            sound.Start();
+            rig.Render(0.1);
+            float[] out2 = new float[Rate / 2 * 2];
+            rig.Session.Engine.RenderOffline(out2);
+            Assert.True(Power(out2, 2, 0) > Power(out2, 2, 1) * 4, $"{mode}: the left surround is heard on the left");
+            sound.Dispose();
+            rig.Render(0.2);
+        }
+    }
+
     private static double Power(float[] interleaved, int channels, int channel)
     {
         double sum = 0;

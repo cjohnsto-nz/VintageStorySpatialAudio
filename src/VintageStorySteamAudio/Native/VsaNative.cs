@@ -176,6 +176,45 @@ internal unsafe struct VsaEngineConfig
     public uint ReflectionRateHz;
     public uint ReflectionThreads;
     public float ReflectionTransition;
+    public uint PathingRange;
+    public uint PathingHeight;
+    public float PathingProbeSpacing;
+    public uint PathingVisSamples;
+    public uint PathingRateHz;
+    public uint PathingSources;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaPathingStats
+{
+    public uint StructSize;
+    public uint Enabled;
+    public uint Baking;
+    public uint BakeDue;
+    public ulong Bakes;
+    public double LastBakeMs;
+    public double MaxBakeMs;
+    public uint Probes;
+    public uint Reserved;
+    public fixed double BoxCentre[3];
+    public ulong Ticks;
+    public double LastTickMs;
+    public double MaxTickMs;
+    public uint Wanted;
+    public uint Simulated;
+    public uint Found;
+    public uint RateHz;
+    public fixed float Listener[3];
+    public uint Reserved2;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaPathSegment
+{
+    public uint StructSize;
+    public uint Occluded;
+    public fixed float From[3];
+    public fixed float To[3];
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -534,11 +573,12 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 10;
+    public const uint AbiVersion = 11;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;
     public const uint EngineFlagNoReflections = 1u << 2;
+    public const uint EngineFlagNoPathing = 1u << 3;
     public const uint SourceEscaped = 1u << 0;
     public const uint FadeStopWhenDone = 1u << 0;
     public const uint EventFlagFadeCancelled = 1u << 0;
@@ -731,6 +771,14 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_engine_set_reflection_mix")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult EngineSetReflectionMix(nint engine, float earlyGain, float tailGain);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_pathing_stats")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineGetPathingStats(nint engine, ref VsaPathingStats stats);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_path_segments")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineGetPathSegments(nint engine, VsaPathSegment* segments, uint capacity, out uint count);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_scene_trace_rays")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

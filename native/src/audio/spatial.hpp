@@ -73,6 +73,11 @@ public:
     void release(int set) noexcept;
     /// Clears a set's filter state (use when a set changes voices).
     void reset(int set) noexcept;
+    /// The set's path effect (Phase 7): `mono` (with every gain) rendered as the paths Steam
+    /// Audio found (`sh`: 4 order-1 world-space coefficients carrying their attenuation; `eq` per
+    /// band), into 4 world-space Ambisonic channels (overwritten).
+    void render_path(int set, const float eq[3], const float sh[4], const float* mono, float* const* out4) noexcept;
+
     /// Clears the state of one tier's effect: for switching a voice between tiers.
     void reset_tier(int set, SpatialTier tier) noexcept;
     void reset_all() noexcept;
@@ -106,11 +111,22 @@ public:
     /// Returns false (and writes nothing) when the bus and the decoder's tail are silent.
     bool decode(const Orientation& orientation, float* left, float* right) noexcept;
 
+    // ---- Head bus (order kAmbisonicOrder, listener space): beds on headphones ----
+
+    /// Adds `mono` (already carrying every gain) from a fixed listener-space direction (+x right,
+    /// +y up, -z ahead) to this block's head bus: a bed channel, which turns with the head as a
+    /// speaker would. Directions do not move, so nothing is ramped.
+    void encode_head(const float direction[3], const float* mono) noexcept;
+    /// Decodes the head bus binaurally, facing ahead, into `left`/`right` (overwritten). Returns
+    /// false (and writes nothing) when the bus and the decoder's tail are silent.
+    bool decode_head(float* left, float* right) noexcept;
+
 private:
     struct EffectSet {
         steam::DirectEffect direct;
         steam::BinauralEffect binaural;
         steam::PanningEffect panning;
+        steam::PathEffect path;
         // VBAP (7.1.4): last block's speaker gains, the start of this block's ramp.
         std::array<float, kMaxOutputChannels> pan{};
         bool pan_ready = false;
@@ -144,6 +160,13 @@ private:
     int last_order_ = 0;
     // Blocks the decoder keeps running after the bus falls silent, to let its convolution tail out.
     uint32_t tail_blocks_ = 0;
+
+    // The head bus: its own decoder (its convolution state is not the world bus's).
+    steam::AmbisonicsDecodeEffect head_decoder_;
+    std::vector<float> head_storage_;
+    std::array<float*, kAmbisonicChannels> head_bus_{};
+    bool head_used_ = false;
+    uint32_t head_tail_blocks_ = 0;
 };
 
 }  // namespace vsa

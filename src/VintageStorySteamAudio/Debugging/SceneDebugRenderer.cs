@@ -34,6 +34,12 @@ public enum SceneOverlay
     /// voice with reflections of its own.
     /// </summary>
     Reflections = 16,
+
+    /// <summary>
+    /// The paths the pathing simulation considered in its latest run: green legs are open, red
+    /// ones blocked in the live scene.
+    /// </summary>
+    Paths = 32,
 }
 
 /// <summary>
@@ -70,6 +76,8 @@ internal sealed class SceneDebugRenderer : IRenderer
     private MeshRef? rayLines;
     private MeshRef? slotLines;
     private Vec3d rayAnchor = new();
+    private MeshRef? pathLines;
+    private Vec3d pathAnchor = new();
 
     public SceneDebugRenderer(ICoreClientAPI capi, AudioEngine engine, Func<MaterialTable?> materials, Func<ChunkKey?> centre)
     {
@@ -202,6 +210,34 @@ internal sealed class SceneDebugRenderer : IRenderer
         }
     }
 
+    /// <summary>The pathing simulation's path legs (scene coordinates relative to <paramref name="origin"/>).</summary>
+    public void SetPaths(IReadOnlyList<PathSegment> segments, (int X, int Y, int Z) origin, Vec3d anchor)
+    {
+        pathLines?.Dispose();
+        pathLines = null;
+        if (segments.Count == 0)
+        {
+            return;
+        }
+
+        pathAnchor = anchor.Clone();
+        var lines = new MeshData(segments.Count * 2, segments.Count * 2, withNormals: false, withUv: false, withRgba: true, withFlags: true);
+        lines.SetMode(EnumDrawMode.Lines);
+        int open = ToRgba(unchecked((int)0xFF40FF60), 255);
+        int blocked = ToRgba(unchecked((int)0xFFFF4040), 255);
+        foreach (PathSegment s in segments)
+        {
+            int color = s.Occluded ? blocked : open;
+            lines.AddVertexSkipTex((float)(s.From.X + origin.X - pathAnchor.X), (float)(s.From.Y + origin.Y - pathAnchor.Y), (float)(s.From.Z + origin.Z - pathAnchor.Z), color);
+            lines.AddIndex(lines.VerticesCount - 1);
+            lines.AddVertexSkipTex((float)(s.To.X + origin.X - pathAnchor.X), (float)(s.To.Y + origin.Y - pathAnchor.Y), (float)(s.To.Z + origin.Z - pathAnchor.Z), color);
+            lines.AddIndex(lines.VerticesCount - 1);
+        }
+
+        lines.Flags = Enumerable.Repeat(256, lines.VerticesCount).ToArray();
+        pathLines = capi.Render.UploadMesh(lines);
+    }
+
     /// <summary>Bright cyan (all the energy) to dark blue (a thousandth), as 0xAARRGGBB.</summary>
     public static int EnergyColor(float energy)
     {
@@ -330,6 +366,30 @@ internal sealed class SceneDebugRenderer : IRenderer
         RenderProbe(camera, program);
         RenderSources(camera, program);
         RenderReflections(camera, program);
+        RenderPaths(camera, program);
+    }
+
+    private void RenderPaths(Vec3d camera, IShaderProgram program)
+    {
+        if ((Overlay & SceneOverlay.Paths) == 0 || pathLines is null)
+        {
+            return;
+        }
+
+        matrix.Identity().Set(capi.Render.CameraMatrixOrigin)
+            .Translate(pathAnchor.X - camera.X, pathAnchor.Y - camera.Y, pathAnchor.Z - camera.Z);
+        program.Use();
+        capi.Render.GLDisableDepthTest();  // paths run round walls: seen through them
+        capi.Render.GlToggleBlend(blend: true);
+        program.Uniform("origin", 0f, 0f, 0f);
+        program.UniformMatrix("projectionMatrix", capi.Render.CurrentProjectionMatrix);
+        program.UniformMatrix("modelViewMatrix", matrix.Values);
+        program.Uniform("colorIn", white);
+        capi.Render.LineWidth = 2.5f;
+        capi.Render.RenderMesh(pathLines);
+        capi.Render.LineWidth = 1.6f;
+        program.Stop();
+        capi.Render.GLEnableDepthTest();
     }
 
     private void RenderReflections(Vec3d camera, IShaderProgram program)
@@ -443,6 +503,8 @@ internal sealed class SceneDebugRenderer : IRenderer
         rayLines = null;
         slotLines?.Dispose();
         slotLines = null;
+        pathLines?.Dispose();
+        pathLines = null;
         box.Dispose();
     }
 
