@@ -10,6 +10,9 @@
     A name for the run, used in the summary and the CSV's file name (default: a timestamp).
 .PARAMETER OutDir
     Where the per-second CSV goes (default artifacts/perf).
+.PARAMETER WarmupSeconds
+    How long to wait before the first sample, so you can switch back to the game (default 5).
+    The game runs slower while it is not the focused window, which would spoil the sample.
 .EXAMPLE
     pwsh ./scripts/perf-sample.ps1 -Seconds 60 -Label vanilla-village
     pwsh ./scripts/perf-sample.ps1 -Seconds 60 -Label mod-village
@@ -17,7 +20,8 @@
 param(
     [int]$Seconds = 60,
     [string]$Label = (Get-Date -Format 'yyyyMMdd-HHmmss'),
-    [string]$OutDir = (Join-Path $PSScriptRoot '..' 'artifacts' 'perf')
+    [string]$OutDir = (Join-Path $PSScriptRoot '..' 'artifacts' 'perf'),
+    [int]$WarmupSeconds = 5
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +36,11 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $csv = Join-Path $OutDir "$Label.csv"
 $cores = [Environment]::ProcessorCount
 $rows = [System.Collections.Generic.List[object]]::new()
+
+if ($WarmupSeconds -gt 0) {
+    Write-Host "Switch back to the game: sampling starts in $WarmupSeconds s."
+    Start-Sleep -Seconds $WarmupSeconds
+}
 
 $game.Refresh()
 $lastCpu = $game.TotalProcessorTime
