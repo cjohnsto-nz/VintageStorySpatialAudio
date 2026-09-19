@@ -47,11 +47,7 @@ DirectSimulator::DirectSimulator(const steam::SteamContext& steam, WorldScene& s
     settings.samplingRate = 48000;
     settings.frameSize = 256;
     check(iplSimulatorCreate(steam_.context(), &settings, simulator_.out()), "iplSimulatorCreate");
-    {
-        std::lock_guard lock(scene_.scene_lock());
-        iplSimulatorSetScene(simulator_.get(), scene_.top());
-        iplSimulatorCommit(simulator_.get());
-    }
+    scene_.attach(simulator_.get());
     debug_.reserve(channel.size());
     active_.reserve(channel.size());
     stats_.rate_hz = rate_hz_;
@@ -74,6 +70,7 @@ DirectSimulator::~DirectSimulator() {
         iplSimulatorCommit(simulator_.get());
     }
     sources_.clear();
+    scene_.detach(simulator_.get());
 }
 
 void DirectSimulator::set_threaded(bool threaded) {
@@ -211,13 +208,11 @@ void DirectSimulator::tick() {
 
     const auto occlusion_start = std::chrono::steady_clock::now();
     if (!active.empty() || membership_changed) {
-        // The world scene's worker edits the top-level scene under this lock; the simulator picks
-        // up its latest commit (and source changes) only when there is something new.
+        // The world scene switches the simulator to each new top-level scene under this lock;
+        // source changes need a commit of their own.
         std::lock_guard lock(scene_.scene_lock());
-        const uint64_t commits = scene_.commit_count();
-        if (membership_changed || commits != committed_scene_) {
+        if (membership_changed) {
             iplSimulatorCommit(simulator_.get());
-            committed_scene_ = commits;
         }
         if (!active.empty()) {
             iplSimulatorRunDirect(simulator_.get());

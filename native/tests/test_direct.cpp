@@ -385,3 +385,50 @@ TEST_CASE("direct: a sound resting on the floor is not half hidden by it") {
     CHECK(s.crossings == 0);
     CHECK(static_cast<double>(s.simulated_position[1]) >= 11.4);
 }
+
+TEST_CASE("direct: occlusion survives chunks being rebuilt again and again, on both ray tracers") {
+    // Opening a door rebuilds its chunk; Steam Audio's Embree scenes went blind after the second
+    // such change (see test_embree_scene_edits.cpp).
+    for (const vsa_ray_tracer tracer : {VSA_RAY_TRACER_STEAM, VSA_RAY_TRACER_AUTO}) {
+        CAPTURE(static_cast<int>(tracer));
+        OfflineEngine e(make_config(tracer));
+        set_materials(e);
+        std::vector<uint16_t> cells(VSA_CHUNK_CELLS, Air);
+        for (int y = 0; y < 32; ++y) {
+            for (int z = 0; z < 32; ++z) {
+                cells[cell(10, y, z)] = Stone;
+            }
+        }
+        vsa_chunk_desc d{};
+        d.struct_size = sizeof d;
+        d.materials = cells.data();
+        REQUIRE(vsa_scene_set_chunk(e.engine, &d) == VSA_OK);
+        REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+        e.listener(4.0f, 16.5f, 16.5f, 1.0f, 0.0f, 0.0f);
+        const AssetPtr asset = band_tones(e);
+        const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 20.0f, 16.5f, 16.5f, 1.0f);
+        REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+        std::vector<uint16_t> neighbour(VSA_CHUNK_CELLS, Stone);
+        for (int round = 0; round < 10; ++round) {
+            CAPTURE(round);
+            cells[cell(20 + round, 5, 5)] = Stone;  // an edit elsewhere in the chunk (a door)
+            REQUIRE(vsa_scene_set_chunk(e.engine, &d) == VSA_OK);
+            if (round % 3 == 1) {  // other chunks coming and going too
+                vsa_chunk_desc n{};
+                n.struct_size = sizeof n;
+                n.x = 3;
+                n.materials = neighbour.data();
+                REQUIRE(vsa_scene_set_chunk(e.engine, &n) == VSA_OK);
+            } else if (round % 3 == 2) {
+                REQUIRE(vsa_scene_remove_chunk(e.engine, 3, 0, 0) == VSA_OK);
+            }
+            REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+            e.render(4800);
+            vsa_source_debug s{};
+            s.struct_size = sizeof s;
+            uint32_t n = 0;
+            REQUIRE(vsa_engine_get_sources(e.engine, &s, 1, &n) == VSA_OK);
+            CHECK(static_cast<double>(s.occlusion) < 0.05);
+        }
+    }
+}

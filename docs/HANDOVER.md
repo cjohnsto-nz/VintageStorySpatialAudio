@@ -72,6 +72,13 @@ Phase 4 is merged into `main` (not pushed).
   - End to end through Steam Audio. Glass measures 17/26/34 dB, one stone 40/54/59 dB and three stone 65/83/85 dB. Steam Audio's EQ limits the deepest losses.
   - No onset blip; a smooth corner; escaping; head-locked voices unaffected; source readout.
 
+- **Steam Audio 4.8.1 + Embree bug:** a scene edited twice (instances or static meshes, removed and added) stops reporting hits to the simulator. In game, occlusion vanished once a door had been opened. Steam's own ray tracer is fine. Workaround: a top-level scene is never edited. Each change builds a fresh one, instancing the chunks' immutable sub-scenes, with no lock held; the attached simulators (`WorldScene::attach`) are switched to it under the scene lock, and then the old one is retired. That costs about 24 ms in Release for 405 chunks on the scene thread. Covered by `core/test_embree_scene_edits.cpp` (reports the in-place behaviour, checks the workaround) and by `test_direct.cpp` (10 rebuilds with chunks coming and going, both ray tracers).
+- **From Chris's first in-game test:**
+  - The listener's backward offset is now `vsa_listener.render_offset` (ABI v7), for rendering only. The simulation listens from the eyes, and leaves solid blocks (third-person camera).
+  - Sources keep their radius off neighbouring solid faces (floor sounds).
+  - A run through full cells shorter than 25 cm pays its crossing loss in proportion (grazing corners).
+  - Vanilla's range check in `PlaySoundAtInternal` is scaled by `SoundRangeMultiplier` (3×; the anvil stopped dead at 12–16 m).
+
 ### Managed
 
 - `Occlusion`, `OcclusionSamples` and `OcclusionRateHz` in the config. The shipped materials were retuned to crossing and bulk losses (documented in the JSON).

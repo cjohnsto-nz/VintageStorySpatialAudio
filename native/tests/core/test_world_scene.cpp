@@ -7,6 +7,7 @@
 
 #include <doctest/doctest.h>
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -50,8 +51,7 @@ public:
         settings.samplingRate = 48000;
         settings.frameSize = 256;
         REQUIRE(iplSimulatorCreate(steam.context(), &settings, simulator_.out()) == IPL_STATUS_SUCCESS);
-        iplSimulatorSetScene(simulator_.get(), scene.top());
-        iplSimulatorCommit(simulator_.get());
+        scene.attach(simulator_.get());
         IPLSourceSettings source_settings{};
         source_settings.flags = IPL_SIMULATIONFLAGS_DIRECT;
         REQUIRE(iplSourceCreate(simulator_.get(), &source_settings, source_.out()) == IPL_STATUS_SUCCESS);
@@ -61,13 +61,13 @@ public:
     ~Probe() {
         iplSourceRemove(source_.get(), simulator_.get());
         iplSimulatorCommit(simulator_.get());
+        scene_.detach(simulator_.get());
     }
     Probe(const Probe&) = delete;
     Probe& operator=(const Probe&) = delete;
 
     float occlusion(IPLVector3 listener, IPLVector3 source) {
         std::lock_guard lock(scene_.scene_lock());
-        iplSimulatorCommit(simulator_.get());  // picks up the scene's latest commit
         IPLSimulationSharedInputs shared{};
         shared.listener = pose(listener);
         iplSimulatorSetSharedInputs(simulator_.get(), IPL_SIMULATIONFLAGS_DIRECT, &shared);
@@ -200,4 +200,25 @@ TEST_CASE("world scene: new materials re-mesh everything, and the destructor rel
         scene->set_chunk({x, 0, 0}, wall_chunk(), 0);
     }
     scene.reset();  // mid-work: must stop cleanly, releasing everything (ASan/LSan in CI)
+}
+
+TEST_CASE("world scene: rebuilding the top-level scene stays cheap with a realistic chunk count") {
+    vsa::steam::SteamContext steam({VSA_RAY_TRACER_AUTO, false});
+    WorldScene scene(steam);
+    scene.set_materials(materials());
+    for (int x = 0; x < 9; ++x) {
+        for (int z = 0; z < 9; ++z) {
+            for (int y = 0; y < 5; ++y) {
+                scene.set_chunk({x, y, z}, wall_chunk(), (std::abs(x - 4) > 2 || std::abs(z - 4) > 2) ? 1 : 0);
+            }
+        }
+    }
+    REQUIRE(scene.wait_idle(60s));
+    const SceneStats before = scene.stats();
+    CHECK(before.meshed_chunks == 405);
+    scene.set_chunk({4, 2, 4}, wall_chunk(), 0);  // one edit: a fresh top-level scene of 405 instances
+    REQUIRE(scene.wait_idle(10s));
+    const SceneStats after = scene.stats();
+    MESSAGE("top-level scene of " << after.meshed_chunks << " instances rebuilt in " << after.last_commit_ms << " ms");
+    CHECK(after.last_commit_ms < 150.0);  // ~25 ms in Release; built with no lock held
 }

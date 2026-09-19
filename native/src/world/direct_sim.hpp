@@ -106,7 +106,6 @@ private:
     steam::Simulator simulator_;
     std::vector<Source> sources_;
     std::vector<Active> active_;         // per tick, reused
-    uint64_t committed_scene_ = ~0ull;   // the scene commit the simulator last picked up
     LatestValue<ListenerPose> listener_;
     double next_offline_ = 0.0;
     bool have_ticked_ = false;

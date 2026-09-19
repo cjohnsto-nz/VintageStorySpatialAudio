@@ -73,6 +73,7 @@ add_executable(vsaudio_core_tests
     core/test_spherical_harmonics.cpp
     core/test_spsc_ring.cpp
     core/test_transmission.cpp
+    core/test_embree_scene_edits.cpp
     core/test_vbap.cpp
     core/test_world_scene.cpp)
 target_include_directories(vsaudio_core_tests SYSTEM PRIVATE "${DOCTEST_INCLUDE_DIR}")
