@@ -53,13 +53,19 @@ void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames, uint3
     IPLBinauralEffectSettings binaural{};
     binaural.hrtf = hrtf_.get();
     IPLPanningEffectSettings panning{};
+    vbap_.reset();
     switch (channels) {
         case 4: panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_QUADRAPHONIC; break;
         case 6: panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_SURROUND_5_1; break;
         case 8: panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_SURROUND_7_1; break;
+        case 12:
+            // Heights: our own VBAP (the panning effect below is created stereo and not used).
+            vbap_ = std::make_unique<Vbap>(channels);
+            panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_STEREO;
+            break;
         default: panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_STEREO; break;
     }
-    speaker_channels_ = channels == 4 || channels == 6 || channels == 8 ? channels : 2;
+    speaker_channels_ = is_supported_layout(channels) ? channels : 2;
 
     sets_.resize(pool_size_);
     for (EffectSet& set : sets_) {
@@ -115,6 +121,7 @@ void SpatialRenderer::reset(int set) noexcept {
     iplDirectEffectReset(s.direct.get());
     iplBinauralEffectReset(s.binaural.get());
     iplPanningEffectReset(s.panning.get());
+    s.pan_ready = false;
     s.sh_ready = false;
 }
 
@@ -123,7 +130,10 @@ void SpatialRenderer::reset_tier(int set, SpatialTier tier) noexcept {
     switch (tier) {
         case SpatialTier::Binaural: iplBinauralEffectReset(s.binaural.get()); break;
         case SpatialTier::Ambisonic: s.sh_ready = false; break;
-        case SpatialTier::Panned: iplPanningEffectReset(s.panning.get()); break;
+        case SpatialTier::Panned:
+            iplPanningEffectReset(s.panning.get());
+            s.pan_ready = false;
+            break;
     }
 }
 
@@ -140,7 +150,7 @@ void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams&
 
     float* mono_channels[1] = {mono};
     IPLAudioBuffer mono_buffer{1, frames, mono_channels};
-    float* out_channels[8] = {};
+    float* out_channels[kMaxOutputChannels] = {};
     const uint32_t count = mode == VSA_RENDER_SPEAKERS ? speaker_channels_ : 2;
     for (uint32_t c = 0; c < count; ++c) {
         out_channels[c] = out[c];
@@ -149,6 +159,10 @@ void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams&
 
     apply_direct(s, params, mono);
 
+    if (mode == VSA_RENDER_SPEAKERS && vbap_) {
+        render_vbap(s, params, mono, out);
+        return;
+    }
     const IPLVector3 direction{params.direction[0], params.direction[1], params.direction[2]};
     if (mode == VSA_RENDER_SPEAKERS) {
         IPLPanningEffectParams panning{};
@@ -174,6 +188,32 @@ void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams&
     binaural.spatialBlend = params.spatial_blend;
     binaural.hrtf = hrtf_.get();
     iplBinauralEffectApply(s.binaural.get(), &binaural, &mono_buffer, &out_buffer);
+}
+
+void SpatialRenderer::render_vbap(EffectSet& set, const SpatialParams& params, const float* mono,
+                                  float* const* out) noexcept {
+    std::array<float, kMaxOutputChannels> target{};
+    vbap_->gains(params.direction, target.data());
+    // At the head: blend towards the unpositioned rendering (front pair, -3 dB each).
+    const float blend = params.spatial_blend;
+    for (uint32_t c = 0; c < speaker_channels_; ++c) {
+        target[c] = blend * target[c] + (c < 2 ? (1.0f - blend) * kCentre : 0.0f);
+    }
+    if (!set.pan_ready) {
+        set.pan = target;
+        set.pan_ready = true;
+    }
+    // Gains ramp across the block, so moving sources and turning heads do not step.
+    const float* ramp = ramp_.data();
+    for (uint32_t c = 0; c < speaker_channels_; ++c) {
+        const float from = set.pan[c];
+        const float change = target[c] - from;
+        float* x = out[c];
+        for (uint32_t j = 0; j < frames_; ++j) {
+            x[j] = (from + change * ramp[j]) * mono[j];
+        }
+    }
+    set.pan = target;
 }
 
 void SpatialRenderer::apply_direct(EffectSet& set, const SpatialParams& params, float* mono) noexcept {

@@ -65,7 +65,8 @@ add_executable(vsaudio_core_tests
     core/test_render_budget.cpp
     core/test_resampler.cpp
     core/test_spherical_harmonics.cpp
-    core/test_spsc_ring.cpp)
+    core/test_spsc_ring.cpp
+    core/test_vbap.cpp)
 target_include_directories(vsaudio_core_tests SYSTEM PRIVATE "${DOCTEST_INCLUDE_DIR}")
 target_link_libraries(vsaudio_core_tests PRIVATE vsaudio_core vsa_test_support)
 vsa_enable_warnings(vsaudio_core_tests)

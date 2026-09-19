@@ -47,7 +47,7 @@ public:
     std::vector<vsa_device_info> enumerate();
 
     /// Opens and starts a device. `id` null = system default, followed when it changes.
-    /// `channels` 0 = native layout, clamped to 2/4/6/8. Throws vsa::Error (VSA_ERROR_DEVICE).
+    /// `channels` 0 = native layout, clamped to 2/4/6/8/12. Throws vsa::Error (VSA_ERROR_DEVICE).
     Format open(const vsa_device_id* id, uint32_t channels, RenderFn render, PrepareFn prepare, void* user);
     void close() noexcept;
 

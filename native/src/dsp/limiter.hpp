@@ -25,7 +25,7 @@ public:
                  float ceiling_db = kDefaultCeilingDb);
     void reset() noexcept;
 
-    static constexpr uint32_t kMaxChannels = 8;
+    static constexpr uint32_t kMaxChannels = 12;
 
     /// In place on `count` planar channels (the same count every call). Returns the smallest gain
     /// applied in this call (1 = none).

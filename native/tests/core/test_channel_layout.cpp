@@ -7,7 +7,7 @@ using vsa::Speaker;
 using enum vsa::Speaker;
 
 TEST_CASE("a device in the engine's own order maps one to one") {
-    for (const uint32_t channels : {2u, 4u, 6u, 8u}) {
+    for (const uint32_t channels : {2u, 4u, 6u, 8u, 12u}) {
         CAPTURE(channels);
         const auto layout = vsa::steam_layout(channels);
         const auto map = map_to_device(channels, layout.data());
@@ -43,4 +43,15 @@ TEST_CASE("speakers the device lacks are dropped, never doubled up") {
     CHECK(map[1] == 1);
     CHECK(map[2] == -1);
     CHECK(map[3] == -1);
+}
+
+TEST_CASE("7.1.4 heights are routed to the device's height channels") {
+    // A 12-channel device listing its heights first.
+    const Speaker device[] = {TopFrontLeft, TopFrontRight, TopBackLeft, TopBackRight, FrontLeft, FrontRight,
+                              FrontCentre,  Lfe,           BackLeft,    BackRight,    SideLeft,  SideRight};
+    const auto map = map_to_device(12, device);
+    CHECK(map[8] == 0);   // engine TFL
+    CHECK(map[11] == 3);  // engine TBR
+    CHECK(map[0] == 4);   // engine FL
+    CHECK(map[7] == 11);  // engine SR
 }

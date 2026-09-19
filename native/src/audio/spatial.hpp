@@ -1,12 +1,14 @@
 #pragma once
 
 #include "audio/spatial_tier.hpp"
+#include "audio/vbap.hpp"
 #include "dsp/spherical_harmonics.hpp"
 #include "steam/ipl_handle.hpp"
 #include "vsaudio.h"
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace vsa {
@@ -52,7 +54,8 @@ public:
     SpatialRenderer& operator=(const SpatialRenderer&) = delete;
 
     /// (Re)creates the HRTF and every effect set for this rate, block size and output channel count
-    /// (panning targets stereo, quad, 5.1 or 7.1 for 2/4/6/8 channels). Throws vsa::Error.
+    /// (panning targets stereo, quad, 5.1 or 7.1 for 2/4/6/8 channels with Steam Audio's panning
+    /// effect, and 7.1.4 for 12 with our own 3D VBAP). Throws vsa::Error.
     void prepare(uint32_t sample_rate, uint32_t block_frames, uint32_t channels);
 
     /// Channels the panning effect writes (the output layout); binaural always writes 2.
@@ -98,18 +101,23 @@ private:
         steam::DirectEffect direct;
         steam::BinauralEffect binaural;
         steam::PanningEffect panning;
+        // VBAP (7.1.4): last block's speaker gains, the start of this block's ramp.
+        std::array<float, kMaxOutputChannels> pan{};
+        bool pan_ready = false;
         // Ambisonic encoding: last block's coefficients, the start of this block's ramp.
         std::array<float, dsp::kSh3Channels> sh{};
         bool sh_ready = false;
     };
 
     void apply_direct(EffectSet& set, const SpatialParams& params, float* mono) noexcept;
+    void render_vbap(EffectSet& set, const SpatialParams& params, const float* mono, float* const* out) noexcept;
 
     const steam::SteamContext& steam_;
     uint32_t pool_size_;
     uint32_t frames_ = 0;
     uint32_t speaker_channels_ = 2;
     steam::Hrtf hrtf_;
+    std::unique_ptr<Vbap> vbap_;  // layouts with heights
     std::vector<EffectSet> sets_;
     std::vector<int> free_;
     uint32_t free_count_ = 0;

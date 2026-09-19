@@ -47,6 +47,8 @@ add_library(vsaudio_core STATIC
     src/audio/spatial_tier.hpp
     src/audio/stream.cpp
     src/audio/stream.hpp
+    src/audio/vbap.cpp
+    src/audio/vbap.hpp
     src/audio/voice.hpp
     src/backend/device.cpp
     src/backend/device.hpp

@@ -130,7 +130,7 @@ TEST_CASE("the render path never allocates") {
     std::vector<float> out(48000 * 2);
     std::vector<uint64_t> allocations;
     // Exercise every command type between renders; only the renders are counted.
-    for (int round = 0; round < 6; ++round) {
+    for (int round = 0; round < 7; ++round) {
         switch (round) {
             case 1:
                 engine.fade_voice(voices[0], 0.05f, 0.3f, 0, 7);
@@ -157,6 +157,15 @@ TEST_CASE("the render path never allocates") {
                 engine.set_voice_lowpass(voices[5], 0.06f);
                 engine.set_render_mode(VSA_RENDER_SPEAKERS);
                 break;
+            case 6: {
+                vsa_output_desc desc{};  // 7.1.4: VBAP panning (the reopen itself may allocate)
+                desc.struct_size = sizeof desc;
+                desc.kind = VSA_OUTPUT_NONE;
+                desc.channels = 12;
+                engine.open_output(desc);
+                out.resize(48000 * 12);
+                break;
+            }
             default: break;
         }
         vsa_test::AllocationScope scope;

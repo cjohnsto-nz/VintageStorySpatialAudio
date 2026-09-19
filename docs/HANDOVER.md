@@ -89,11 +89,17 @@ Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1)
 - Bus gains are rendered per frame at the block start, because ambisonic voices from every category share the one bus; its decode is added to the master front pair before master gain.
 - Tests (`test_spatial.cpp`, "headphone tiers"): left/right and turning, above/below with the head tilted, looking straight up, front vs back brightness, bus gain, centring and the diffuse level match, for both the binaural and ambisonic tiers.
 
+### 7.1.4 layout (12 channels)
+
+- The engine's 7.1.4 order is FL FR FC LFE BL BR SL SR TFL TFR TBL TBR (7.1 plus the heights, which is Windows' channel-mask order). Buses, master and the limiter go up to 12 channels; miniaudio devices that report 12 channels with height positions get it natively.
+- Positional voices are panned with our own 3D VBAP (`audio/vbap.*`), not Steam Audio's panning effect. It uses ITU/Dolby placements (FL/FR ±30°, SL/SR ±90°, BL/BR ±150°, heights at ±45°/±135° azimuth and 45° elevation). Virtual speakers keep it symmetric: the zenith spreads over the four heights, the nadir over the ear-level ring, and the centre of the back quad (BL BR TBL TBR are coplanar, since there's no back-centre speaker) over those four. Without that virtual speaker, the quad's two triangulations swapped and gains jumped by 0.65 behind the listener. Gains ramp across each block.
+- Tests: `core/test_vbap.cpp` (speaker directions, zenith and nadir spread, back symmetry, power, continuity around circles at seven elevations) and the 7.1.4 cases in `test_spatial.cpp`: front, overhead (100 % in the heights), above-front, below, behind, left and above-behind-right, turning, looking up and down, and a source gliding overhead without zipper noise.
+
 ### Still to do for Phase 3
 
 - SOFA HRTF loading (config option).
 - Windows Spatial Audio backend: `ISpatialAudioClient`, 7.1.4 static bed (mask 0x1ffe) first, then dynamic objects; own the `PROPVARIANT` blob correctly (OpenAL Soft's heap-corruption bug); recover from `WAIT_TIMEOUT` / `Reset` 0x88890100 by recreating the stream; fall back to miniaudio.
-- 7.1.4 custom-layout panning; per-mode direction tests; Chris checks the receiver shows Atmos with correct heights.
+- Chris checks the receiver shows Atmos with correct heights (needs the Spatial Audio backend).
 
 ### Still to do for Phase 2
 
@@ -136,7 +142,7 @@ Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1)
 - **Streaming**: Ogg assets longer than 20 s (configurable) stream. Looping is done by the worker, so turning looping off late can play up to ~1 s past the loop point before ending. WAV and raw PCM are always decoded.
 - **Voices start on block boundaries** (commands apply at block starts). Tests that render in pieces must render whole blocks between voice starts to stay sample-aligned.
 - **Offline rendering refills streams synchronously** before each block, so it is deterministic; the worker also services them concurrently under the same lock.
-- **Device output**: the engine runs at the device's native rate; channels are native layout clamped to 2/4/6/8, with front L/R carrying the (non-spatial) Phase 1 mix. Default-device following relies on miniaudio's rerouting; a lost device is reopened by the worker every second, falling back to the default device.
+- **Device output**: the engine runs at the device's native rate; channels are native layout clamped to 2/4/6/8 (12 since Phase 3), with front L/R carrying the (non-spatial) Phase 1 mix. Default-device following relies on miniaudio's rerouting; a lost device is reopened by the worker every second, falling back to the default device.
 - **Performance leftovers**: the stretched-kernel path (ratio > 1, i.e. most pitched-up sounds) still computes its coefficients with scalar table lookups; it costs ~50 % more per voice than the ratio ≤ 1 path. Worth another look if Phase 2's Steam Audio effects make the budget tight.
 
 ### Managed side and tools

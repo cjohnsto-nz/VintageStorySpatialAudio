@@ -537,8 +537,8 @@ void Engine::open_output(const vsa_output_desc& desc) {
     if (desc.kind != VSA_OUTPUT_NONE && desc.kind != VSA_OUTPUT_DEVICE) {
         throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown output kind " + std::to_string(desc.kind));
     }
-    if (desc.channels != 0 && desc.channels != 2 && desc.channels != 4 && desc.channels != 6 && desc.channels != 8) {
-        throw Error(VSA_ERROR_INVALID_ARGUMENT, "channels must be 0, 2, 4, 6 or 8");
+    if (desc.channels != 0 && !is_supported_layout(desc.channels)) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "channels must be 0, 2, 4, 6, 8 or 12");
     }
     const uint32_t rate = desc.sample_rate == 0 ? settings_.sample_rate : desc.sample_rate;
     if (desc.kind == VSA_OUTPUT_NONE && !supported_rate(rate)) {

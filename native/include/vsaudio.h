@@ -390,8 +390,9 @@ typedef enum vsa_render_mode {
     /** Binaural (Steam Audio HRTF) to the front left/right channels. The default. */
     VSA_RENDER_HEADPHONES = 0,
     /**
-     * Amplitude panning to the output's speakers: stereo, quad, 5.1 or 7.1 for 2/4/6/8 channels
-     * (channels are routed by speaker position, so the device's own channel order is respected).
+     * Amplitude panning to the output's speakers: stereo, quad, 5.1, 7.1 or 7.1.4 for 2/4/6/8/12
+     * channels (7.1.4 by 3D vector-base panning, overhead sources on the height speakers; channels
+     * are routed by speaker position, so the device's own channel order is respected).
      * The LFE channel is not used. Unpositioned voices stay on the front pair in every layout.
      */
     VSA_RENDER_SPEAKERS = 1
@@ -433,7 +434,10 @@ typedef struct vsa_output_desc {
     uint32_t kind;
     /** DEVICE: the device to open, or NULL for the system default (and to follow it when it changes). */
     const vsa_device_id* device_id;
-    /** 0 = the device's native layout (NONE: 2); otherwise 2, 4, 6 or 8. */
+    /**
+     * 0 = the device's native layout (NONE: 2); otherwise 2, 4, 6, 8 or 12. The engine's order is
+     * FL FR, then FC LFE BL BR, SL SR, TFL TFR TBL TBR as the layout has them (quad: FL FR BL BR).
+     */
     uint32_t channels;
     /**
      * NONE: the offline rate, 44100 or 48000 (0 = 48000). DEVICE: ignored; the engine renders at

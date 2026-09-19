@@ -247,9 +247,17 @@ TEST_CASE("sources that jump in distance every block do not zipper") {
 
 namespace {
 
+struct Facing {
+    float forward[3] = {0.0f, 0.0f, -1.0f};
+    float up[3] = {0.0f, 1.0f, 0.0f};
+};
+
 /// RMS (dB) per output channel of a positional noise source, on an offline output of `channels`.
-std::vector<double> speaker_levels(uint32_t channels, vsa_render_mode mode, float x, float y, float z) {
+std::vector<double> speaker_levels(uint32_t channels, vsa_render_mode mode, float x, float y, float z,
+                                   const Facing& facing = {}) {
     OfflineEngine e;
+    e.listener(0, 0, 0, facing.forward[0], facing.forward[1], facing.forward[2], facing.up[0], facing.up[1],
+               facing.up[2]);
     vsa_output_desc desc{};
     desc.struct_size = sizeof desc;
     desc.kind = VSA_OUTPUT_NONE;
@@ -285,7 +293,16 @@ double power_sum_db(const std::vector<double>& levels, std::initializer_list<std
 }
 
 // Offline outputs use the engine's (Steam Audio's) order.
-enum : std::size_t { FL = 0, FR = 1, FC = 2, LFE = 3, BL = 4, BR = 5, SL = 6, SR = 7 };
+enum : std::size_t { FL = 0, FR = 1, FC = 2, LFE = 3, BL = 4, BR = 5, SL = 6, SR = 7, TFL = 8, TFR = 9, TBL = 10, TBR = 11 };
+
+/// Share of the total power (0..1) in the given channels.
+double share(const std::vector<double>& levels, std::initializer_list<std::size_t> indices) {
+    double all = 0.0;
+    for (const double l : levels) {
+        all += std::pow(10.0, l / 10.0);
+    }
+    return std::pow(10.0, power_sum_db(levels, indices) / 10.0) / all;
+}
 
 }  // namespace
 
@@ -312,6 +329,91 @@ TEST_CASE("7.1: a source to the side comes from the side speaker") {
 TEST_CASE("quad: a source behind comes from the rear pair") {
     const auto behind = speaker_levels(4, VSA_RENDER_SPEAKERS, 0, 0, 3);
     CHECK(power_sum_db(behind, {2, 3}) > power_sum_db(behind, {0, 1}) + 10.0);
+}
+
+TEST_CASE("7.1.4: sources reach the right speakers, heights included") {
+    const auto front = speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 0, -3);
+    CHECK(share(front, {FC}) > 0.99);
+    CHECK(front[LFE] < -120.0);
+
+    const auto above = speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 3, 0);
+    MESSAGE("overhead: " << 100.0 * share(above, {TFL, TFR, TBL, TBR}) << " % in the heights");
+    CHECK(share(above, {TFL, TFR, TBL, TBR}) > 0.97);
+
+    const auto above_front = speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 3, -3);
+    CHECK(share(above_front, {TFL, TFR}) > 0.8);
+
+    const auto below = speaker_levels(12, VSA_RENDER_SPEAKERS, 0, -3, 0);
+    CHECK(share(below, {TFL, TFR, TBL, TBR}) < 1e-6);
+
+    const auto behind = speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 0, 3);
+    CHECK(share(behind, {BL, BR}) > 0.99);
+
+    const auto left = speaker_levels(12, VSA_RENDER_SPEAKERS, -3, 0, 0);
+    CHECK(share(left, {SL}) > 0.99);
+
+    const auto behind_up_right = speaker_levels(12, VSA_RENDER_SPEAKERS, 2, 3, 2);
+    CHECK(share(behind_up_right, {TBR}) > 0.8);
+}
+
+TEST_CASE("7.1.4: the speakers follow the head turning and looking up and down") {
+    Facing east;  // facing +x
+    east.forward[0] = 1.0f;
+    east.forward[2] = 0.0f;
+    CHECK(share(speaker_levels(12, VSA_RENDER_SPEAKERS, 3, 0, 0, east), {FC}) > 0.99);
+    CHECK(share(speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 0, -3, east), {SL}) > 0.99);
+
+    Facing up;  // looking straight up, the top of the head towards +z
+    up.forward[1] = 1.0f;
+    up.forward[2] = 0.0f;
+    up.up[1] = 0.0f;
+    up.up[2] = 1.0f;
+    // Overhead is now straight ahead; what was ahead at the horizon is now straight below.
+    CHECK(share(speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 3, 0, up), {FC}) > 0.99);
+    CHECK(share(speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 0, -3, up), {TFL, TFR, TBL, TBR}) < 1e-6);
+    // Behind the player's back (+z) is now above the head.
+    CHECK(share(speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 0, 3, up), {TFL, TFR, TBL, TBR}) > 0.97);
+
+    Facing down;  // looking straight down, the top of the head towards -z
+    down.forward[1] = -1.0f;
+    down.forward[2] = 0.0f;
+    down.up[1] = 0.0f;
+    down.up[2] = -1.0f;
+    CHECK(share(speaker_levels(12, VSA_RENDER_SPEAKERS, 0, -3, 0, down), {FC}) > 0.99);
+    // Ahead at the horizon is now above the head.
+    CHECK(share(speaker_levels(12, VSA_RENDER_SPEAKERS, 0, 0, -3, down), {TFL, TFR, TBL, TBR}) > 0.97);
+}
+
+TEST_CASE("7.1.4: a source moving overhead glides between speakers without zipper noise") {
+    OfflineEngine e;
+    vsa_output_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.kind = VSA_OUTPUT_NONE;
+    desc.channels = 12;
+    REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+    set_mode(e, VSA_RENDER_SPEAKERS);
+    const AssetPtr asset = e.pcm(tone(100.0), 1, 48000);
+    const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 0, 0, -3);
+    REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+    std::vector<float> out(256 * 12);
+    std::vector<std::vector<float>> channels(12);
+    for (int block = 0; block < 400; ++block) {
+        // Front, over the top, to behind, one block at a time (0.45 degrees per block).
+        const double angle = std::numbers::pi * block / 400.0;
+        REQUIRE(vsa_voice_set_position(e.engine, v, VSA_SPATIAL_WORLD, 0.0f, static_cast<float>(3.0 * std::sin(angle)),
+                                       static_cast<float>(-3.0 * std::cos(angle))) == VSA_OK);
+        REQUIRE(vsa_engine_render_offline(e.engine, out.data(), 256) == VSA_OK);
+        for (std::size_t c = 0; c < 12; ++c) {
+            for (std::size_t j = 0; j < 256; ++j) {
+                channels[c].push_back(out[j * 12 + c]);
+            }
+        }
+    }
+    const double natural = 2.0 * std::numbers::pi * 100.0 / 48000.0 * 0.5;
+    for (const std::size_t c : {FC, TFL, TFR, TBL, TBR, BL, BR}) {
+        CAPTURE(c);
+        CHECK(max_step(channels[c].data(), channels[c].size()) < natural * 2.0);
+    }
 }
 
 TEST_CASE("binaural rendering on a surround output uses the front pair only") {

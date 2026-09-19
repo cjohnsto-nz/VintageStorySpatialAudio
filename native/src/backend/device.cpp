@@ -28,10 +28,13 @@ void notification_trampoline(const ma_device_notification* notification) {
     }
 }
 
-// Layouts the engine renders: stereo, quad, 5.1 and 7.1.
+// Layouts the engine renders: stereo, quad, 5.1, 7.1 and 7.1.4.
 uint32_t supported_channels(uint32_t channels) noexcept {
     if (channels <= 2) {
         return 2;
+    }
+    if (channels >= 12) {
+        return 12;
     }
     if (channels >= 8) {
         return 8;
@@ -51,6 +54,10 @@ Speaker speaker_of(ma_channel channel) noexcept {
         case MA_CHANNEL_BACK_RIGHT: return Speaker::BackRight;
         case MA_CHANNEL_SIDE_LEFT: return Speaker::SideLeft;
         case MA_CHANNEL_SIDE_RIGHT: return Speaker::SideRight;
+        case MA_CHANNEL_TOP_FRONT_LEFT: return Speaker::TopFrontLeft;
+        case MA_CHANNEL_TOP_FRONT_RIGHT: return Speaker::TopFrontRight;
+        case MA_CHANNEL_TOP_BACK_LEFT: return Speaker::TopBackLeft;
+        case MA_CHANNEL_TOP_BACK_RIGHT: return Speaker::TopBackRight;
         default: return Speaker::Other;
     }
 }
@@ -65,6 +72,10 @@ const char* speaker_name(Speaker speaker) noexcept {
         case Speaker::BackRight: return "BR";
         case Speaker::SideLeft: return "SL";
         case Speaker::SideRight: return "SR";
+        case Speaker::TopFrontLeft: return "TFL";
+        case Speaker::TopFrontRight: return "TFR";
+        case Speaker::TopBackLeft: return "TBL";
+        case Speaker::TopBackRight: return "TBR";
         default: return "?";
     }
 }
