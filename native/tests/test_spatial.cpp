@@ -11,6 +11,7 @@
 #include <iterator>
 #include <numbers>
 #include <string>
+#include <tuple>
 
 using namespace vsa_test;
 
@@ -690,4 +691,37 @@ TEST_CASE("an HRTF from a SOFA file that cannot be loaded falls back to the defa
     reserved.reserved = 1;
     vsa_engine* engine = nullptr;
     CHECK(vsa_engine_create(&reserved, &engine) == VSA_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("a real SOFA HRTF (MIT KEMAR) loads, renders direction, and differs from the default") {
+    REQUIRE(std::filesystem::exists(VSA_TEST_SOFA_PATH));
+    const auto render_right = [](const char* sofa) {
+        CapturedLog log;
+        vsa_engine_config config = make_config(VSA_RAY_TRACER_STEAM, &log);
+        config.hrtf_sofa_path = sofa;
+        OfflineEngine e(config);
+        if (sofa != nullptr) {
+            CHECK(log.contains("SOFA HRTF"));
+            CHECK_FALSE(log.contains("could not be loaded"));
+        }
+        const AssetPtr asset = e.pcm(directional_tone(), 1, 48000);
+        const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 3.0f, 0.0f, 0.0f);
+        REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+        const Ears right = listen(e);
+        REQUIRE(vsa_voice_set_position(e.engine, v, VSA_SPATIAL_WORLD, -3.0f, 0.0f, 0.0f) == VSA_OK);
+        const Ears left = listen(e);
+        e.render(4800);
+        return std::make_tuple(right, left, channel(e.render(9600), 2, 0));
+    };
+    const auto [right, left, kemar] = render_right(VSA_TEST_SOFA_PATH);
+    MESSAGE("KEMAR: right source " << right.balance() << " dB, left source " << left.balance() << " dB");
+    CHECK(right.balance() > 6.0);
+    CHECK(left.balance() < -6.0);
+
+    const auto [default_right, default_left, standard] = render_right(nullptr);
+    std::vector<float> difference(kemar.size());
+    for (std::size_t i = 0; i < difference.size(); ++i) {
+        difference[i] = kemar[i] - standard[i];
+    }
+    CHECK(to_db(rms(difference)) - to_db(rms(standard)) > -30.0);  // a different HRTF really is in use
 }

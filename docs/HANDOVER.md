@@ -77,7 +77,9 @@ Chris played a session on the AV receiver (48 kHz, 6 channels, speakers mode): t
 
 Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1) with Steam Audio's panning effect. Buses, master and the limiter are N-channel (limiter linked). Channels are routed by speaker using miniaudio's channel map for the device, so a 5.1 device with side instead of rear surrounds still gets the rear channels; the log's "output:" line shows the device order. Unpositioned sounds and binaural voices stay on the front pair; the LFE is unused. Tests: `test_channel_layout.cpp`, and the 5.1/7.1/quad direction cases in `test_spatial.cpp`.
 
-## Phase 3 (output formats): in progress on `phase2-takeover`
+## Phase 3 (output formats): done on `phase2-takeover`
+
+**Verified in the game (19 Sep 2026)**: with speakers, the output ran through Windows Spatial Audio and `.steamaudio speakertest` was "perfect" on Chris's Atmos receiver, heights included. Headphone rendering (the ambisonic tier, SOFA) is covered by tests only; Chris has no headphones.
 
 ### World Ambisonic bus (headphones, beyond the binaural budget)
 
@@ -107,12 +109,10 @@ Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1)
 
 ### SOFA HRTF
 
-- `vsa_engine_config.hrtf_sofa_path` (the config struct is now 72 bytes, with a `reserved` field that must be 0 at offset 60) and the `HrtfSofaFile` config option (absolute, or relative to ModConfig). If it can't be loaded, the engine logs a warning and uses the default HRTF. Tested with a missing file and a junk file; **a real SOFA file has not been tried yet** (none is in the repo or the Steam Audio SDK; one needs downloading, e.g. a KEMAR set from sofacoustics.org).
+- `vsa_engine_config.hrtf_sofa_path` (the config struct is now 72 bytes, with a `reserved` field that must be 0 at offset 60) and the `HrtfSofaFile` config option (absolute, or relative to ModConfig). If it can't be loaded, the engine logs a warning and uses the default HRTF. Tested with a missing file, a junk file, and a real one: MIT KEMAR (`third_party/sofa`, pinned in `deps.json`, test-only). It loads at 48 kHz (Steam Audio resamples the 44.1 kHz data) and gives ±10 dB between the ears for sources at the sides.
 
-### Still to do for Phase 3
+### Left open from Phase 3
 
-- SOFA HRTF loading (config option).
-- **Chris**: in game with the HRTF option off, run `.steamaudio stats` (expect "via Windows Spatial Audio (7.1.4)") and `.steamaudio speakertest`; the receiver should show Atmos, with the height bursts coming from the height speakers.
 - Dynamic spatial objects (the loudest sources as Atmos objects rather than panned into the bed): only if the bed turns out not to be enough.
 
 ### Still to do for Phase 2

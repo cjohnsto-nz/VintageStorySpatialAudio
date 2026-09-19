@@ -42,6 +42,9 @@ add_executable(vsaudio_tests
     test_voices.cpp)
 target_include_directories(vsaudio_tests SYSTEM PRIVATE "${DOCTEST_INCLUDE_DIR}")
 target_link_libraries(vsaudio_tests PRIVATE vsaudio vsa_test_support)
+# A real SOFA HRTF (MIT KEMAR, fetched by fetch-deps) for the SOFA loading tests.
+target_compile_definitions(vsaudio_tests PRIVATE
+    VSA_TEST_SOFA_PATH="${VSA_THIRD_PARTY_DIR}/sofa/mit_kemar_normal_pinna.sofa")
 vsa_enable_warnings(vsaudio_tests)
 vsa_place_runtime(vsaudio_tests)
 # Put vsaudio next to the test binary.
