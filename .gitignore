@@ -20,6 +20,7 @@ compile_commands.json
 /third_party/miniaudio/
 /third_party/libogg/
 /third_party/libvorbis/
+/third_party/sofa/
 /third_party/.downloads/
 
 # Packaging output
