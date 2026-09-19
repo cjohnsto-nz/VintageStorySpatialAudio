@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Game version whose reference assemblies the managed code compiles against.
+  VS_VERSION: "1.22.7"
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  native:
+    name: native (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, rid: win-x64, preset: win-x64 }
+          - { os: ubuntu-24.04, rid: linux-x64, preset: linux-x64 }
+          # Apple Silicon runner: builds the universal binary and runs the tests on arm64,
+          # which is also where we learn whether Steam Audio's arm64 slice has Embree.
+          - { os: macos-14, rid: osx, preset: osx }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y ninja-build; else brew install ninja; fi
+
+      - name: Fetch dependencies
+        shell: pwsh
+        run: ./scripts/fetch-deps.ps1
+
+      - name: Configure
+        working-directory: native
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build (Release)
+        working-directory: native
+        run: cmake --build --preset ${{ matrix.preset }}-release
+
+      - name: Test (Release)
+        working-directory: native
+        run: ctest --preset ${{ matrix.preset }}-release
+
+      - name: Build + test with sanitizers
+        if: matrix.rid == 'linux-x64'
+        working-directory: native
+        run: |
+          cmake --preset linux-x64-asan
+          cmake --build --preset linux-x64-asan
+          ctest --preset linux-x64-asan
+
+      - name: Install
+        working-directory: native
+        run: cmake --install build/${{ matrix.preset }} --config Release --prefix ../artifacts/native
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: artifacts/native/${{ matrix.rid }}
+          if-no-files-found: error
+
+  managed:
+    name: managed build + package
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # Reference assemblies only. The dedicated-server package is public and contains
+      # VintagestoryAPI/VintagestoryLib, but not the client's OpenTK dependencies, so
+      # the integration-point verification (VsaDoctor / GameIntegrationTests) runs on a
+      # developer machine with the client installed, not here.
+      - name: Download Vintage Story ${{ env.VS_VERSION }} reference assemblies
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/vs"
+          curl -sSfL "https://cdn.vintagestory.at/gamefiles/stable/vs_server_linux-x64_${VS_VERSION}.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/vs"
+          test -f "$RUNNER_TEMP/vs/VintagestoryAPI.dll"
+          echo "VS_REFERENCE_PATH=$RUNNER_TEMP/vs" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: artifacts/native
+      - name: Arrange natives
+        shell: bash
+        run: |
+          for d in artifacts/native/native-*; do mv "$d" "artifacts/native/${d##*/native-}"; done
+          find artifacts/native -type f
+
+      - name: Build
+        run: dotnet build VintageStorySteamAudio.sln -c Release -p:VintageStoryPath="$VS_REFERENCE_PATH" -p:RequireNatives=true
+
+      # VINTAGE_STORY is deliberately unset: game-integration tests skip, the native engine
+      # test runs against artifacts/native/linux-x64.
+      - name: Test
+        run: dotnet test VintageStorySteamAudio.sln -c Release --no-build
+
+      - name: Package (all platforms)
+        shell: pwsh
+        run: ./scripts/build.ps1 -Configuration Release -SkipNative -SkipTests -SkipDoctor
+        env:
+          VINTAGE_STORY: ${{ env.VS_REFERENCE_PATH }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vssteamaudio-mod
+          path: artifacts/vssteamaudio_*.zip
+          if-no-files-found: error
