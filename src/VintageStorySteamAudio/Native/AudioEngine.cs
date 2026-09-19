@@ -62,6 +62,34 @@ public sealed record EngineOptions
 
     /// <summary>The reflection simulation's quality; zeros are the engine's defaults (Balanced).</summary>
     public ReflectionQualitySettings ReflectionQuality { get; init; } = new();
+
+    /// <summary>Sound round corners and through doorways (Phase 7).</summary>
+    public bool Pathing { get; init; } = true;
+
+    /// <summary>The pathing settings; zeros are the engine's defaults.</summary>
+    public PathingSettings PathingSettings { get; init; } = new();
+}
+
+/// <summary>Pathing settings (vsa_engine_config's pathing_* fields); 0 = the engine's default for each.</summary>
+public sealed record PathingSettings
+{
+    /// <summary>The box baked round the listener, blocks across (32..256).</summary>
+    public int RangeBlocks { get; init; }
+
+    /// <summary>The box's height, blocks (16..128).</summary>
+    public int HeightBlocks { get; init; }
+
+    /// <summary>Metres between probes (1..8).</summary>
+    public float ProbeSpacing { get; init; }
+
+    /// <summary>Point samples per probe when testing whether two probes see each other (1..8).</summary>
+    public int VisibilitySamples { get; init; }
+
+    /// <summary>Simulations per second (1..60).</summary>
+    public int RateHz { get; init; }
+
+    /// <summary>Sounds given paths per simulation at most (1..256).</summary>
+    public int Sources { get; init; }
 }
 
 /// <summary>
@@ -198,7 +226,8 @@ public sealed partial class AudioEngine : IDisposable
                     RayTracer = (uint)options.RayTracer,
                     Flags = (options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0)
                         | (options.DirectSimulation ? 0 : VsaNative.EngineFlagNoDirectSimulation)
-                        | (options.Reflections ? 0 : VsaNative.EngineFlagNoReflections),
+                        | (options.Reflections ? 0 : VsaNative.EngineFlagNoReflections)
+                        | (options.Pathing ? 0 : VsaNative.EngineFlagNoPathing),
                     SampleRate = checked((uint)options.SampleRate),
                     BlockFrames = checked((uint)options.BlockFrames),
                     MaxVoices = checked((uint)options.MaxVoices),
@@ -217,6 +246,12 @@ public sealed partial class AudioEngine : IDisposable
                     ReflectionRateHz = checked((uint)options.ReflectionQuality.RateHz),
                     ReflectionThreads = checked((uint)options.ReflectionQuality.Threads),
                     ReflectionTransition = options.ReflectionQuality.TransitionSeconds,
+                    PathingRange = checked((uint)options.PathingSettings.RangeBlocks),
+                    PathingHeight = checked((uint)options.PathingSettings.HeightBlocks),
+                    PathingProbeSpacing = options.PathingSettings.ProbeSpacing,
+                    PathingVisSamples = checked((uint)options.PathingSettings.VisibilitySamples),
+                    PathingRateHz = checked((uint)options.PathingSettings.RateHz),
+                    PathingSources = checked((uint)options.PathingSettings.Sources),
                 };
 
                 NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out engine), "vsa_engine_create");

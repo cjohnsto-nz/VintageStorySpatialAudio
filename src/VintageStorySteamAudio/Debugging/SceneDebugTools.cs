@@ -27,6 +27,8 @@ internal sealed class SceneDebugTools : IDisposable
         SceneOverlay.Sources | SceneOverlay.Wireframe,
         SceneOverlay.Reflections,
         SceneOverlay.Reflections | SceneOverlay.Wireframe,
+        SceneOverlay.Paths,
+        SceneOverlay.Paths | SceneOverlay.Wireframe,
     ];
 
     // Sound paths drawn by the reflections overlay.
@@ -77,6 +79,7 @@ internal sealed class SceneDebugTools : IDisposable
             sources = [];
             renderer.SetSources(sources, default, new Vec3d());
             renderer.SetReflections([], [], default, new Vec3d());
+            renderer.SetPaths([], default, new Vec3d());
         }
         else
         {
@@ -109,6 +112,9 @@ internal sealed class SceneDebugTools : IDisposable
             case "reflections":
                 SetOverlay(renderer.Overlay ^ SceneOverlay.Reflections);
                 return $"Overlay: {Describe(renderer.Overlay)}";
+            case "paths":
+                SetOverlay(renderer.Overlay ^ SceneOverlay.Paths);
+                return $"Overlay: {Describe(renderer.Overlay)}";
             case "off":
                 SetOverlay(SceneOverlay.None);
                 return "Overlay off.";
@@ -132,7 +138,7 @@ internal sealed class SceneDebugTools : IDisposable
                 renderer.Clear();
                 return world.Reload();
             default:
-                return "Usage: .steamaudio scene [status|wire|faces|bounds|sources|rays|off|radius N|legend|export|reload]";
+                return "Usage: .steamaudio scene [status|wire|faces|bounds|sources|rays|paths|off|radius N|legend|export|reload]";
         }
     }
 
@@ -197,6 +203,7 @@ internal sealed class SceneDebugTools : IDisposable
             UpdateProbe();
             UpdateSources();
             UpdateReflections();
+            UpdatePaths();
             hud.SetText(StatusText());
         }
         catch (NativeException)
@@ -253,6 +260,31 @@ internal sealed class SceneDebugTools : IDisposable
         Vec3f view = player.Pos.GetViewVector();
         var from = new Vec3d(camera.X + (view.X * 0.6), camera.Y + (view.Y * 0.6) - 0.35, camera.Z + (view.Z * 0.6));
         renderer.SetReflections(rays, engine.GetReflectionSources(), o, from);
+    }
+
+    private void UpdatePaths()
+    {
+        if ((renderer.Overlay & SceneOverlay.Paths) == 0 || capi.World.Player?.Entity is not { } player)
+        {
+            return;
+        }
+
+        renderer.SetPaths(engine.GetPathSegments(), world.Status().Origin, player.CameraPos);
+    }
+
+    private string PathingText()
+    {
+        PathingStats p = engine.GetPathingStats();
+        if (!p.Enabled)
+        {
+            return "Pathing: off (Pathing in " + Config.SteamAudioConfig.FileName + ")";
+        }
+
+        string bake = p.Baking ? "baking now" : p.BakeDue ? "bake due" : "baked";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"Pathing: {p.Probes} probes round {p.BoxCentre.X:0},{p.BoxCentre.Y:0},{p.BoxCentre.Z:0} ({bake}; {p.Bakes} bakes, last {p.LastBakeMs:0} ms, max {p.MaxBakeMs:0} ms); " +
+            $"{p.Found} of {p.Wanted} blocked sounds have a path ({p.Simulated} simulated), tick {p.LastTickMs:0.0} ms, {p.RateHz} Hz");
     }
 
     /// <summary>What kind of space a decay time suggests (for the HUD).</summary>
@@ -379,6 +411,7 @@ internal sealed class SceneDebugTools : IDisposable
         text.Append('\n').Append(ProbeText());
         text.Append('\n').Append(SourcesText());
         text.Append('\n').Append(ReflectionsText(detailed: false));
+        text.Append('\n').Append(PathingText());
 
         return text.ToString();
     }

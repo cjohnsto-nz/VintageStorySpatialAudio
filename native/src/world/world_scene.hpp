@@ -109,6 +109,10 @@ struct SceneStats {
 /// Every Steam Audio object is removed and committed before it is released (the Phase 0
 /// LeakSanitizer finding). Thread-safe; nothing here is for the render thread.
 class WorldScene {
+private:
+    struct Built;
+    struct Top;
+
 public:
     explicit WorldScene(const steam::SteamContext& steam);
     ~WorldScene();
@@ -153,26 +157,46 @@ public:
     void attach(IPLSimulator simulator);
     void detach(IPLSimulator simulator);
     [[nodiscard]] SceneLock& scene_lock() noexcept { return scene_mutex_; }
-    /// The current top-level scene, for Steam Audio calls that take a scene (probe generation,
-    /// baking). Hold scene_lock() shared for as long as the handle is used: a compaction replaces
-    /// the scene.
+    /// The current top-level scene, for Steam Audio calls that take a scene. Hold scene_lock()
+    /// shared for as long as the handle is used: a compaction replaces the scene.
     [[nodiscard]] IPLScene scene_locked() const noexcept { return top_ ? top_->scene.get() : nullptr; }
+
+    /// A scene of some chunks as they are now, independent of later edits: for work that takes
+    /// long (baking pathing data), which must not hold the scene lock meanwhile. It instances the
+    /// chunks' immutable sub-scenes, which it keeps alive.
+    class Snapshot {
+    public:
+        ~Snapshot();
+        Snapshot(const Snapshot&) = delete;
+        Snapshot& operator=(const Snapshot&) = delete;
+        [[nodiscard]] IPLScene scene() const noexcept;
+        [[nodiscard]] std::size_t chunk_count() const noexcept { return builds_.size(); }
+
+    private:
+        friend class WorldScene;
+        Snapshot() = default;
+        std::unique_ptr<Top> top_;
+        std::vector<std::shared_ptr<Built>> builds_;
+    };
+    [[nodiscard]] std::unique_ptr<Snapshot> snapshot(const std::vector<ChunkKey>& keys) const;
+    /// Each chunk's version (bumped by every set_chunk; 0 if not in the scene): to see whether a
+    /// set of chunks changed since.
+    [[nodiscard]] std::vector<uint64_t> chunk_versions(const std::vector<ChunkKey>& keys) const;
     /// Top-level scenes built so far.
     [[nodiscard]] uint64_t commit_count() const noexcept { return commits_.load(std::memory_order_acquire); }
 
 private:
-    struct Built;
     struct Top {
         steam::Scene scene;
         std::unordered_map<ChunkKey, steam::InstancedMesh, ChunkKeyHash> live;
         std::vector<steam::InstancedMesh> graveyard;  // removed from `scene`, not released (see above)
-        std::vector<std::unique_ptr<Built>> buried;   // chunk builds the graveyard still instances
+        std::vector<std::shared_ptr<Built>> buried;   // chunk builds the graveyard still instances
     };
     struct Chunk {
         std::shared_ptr<const ChunkVoxels> voxels;  // null: removal pending
         int lod = 0;
         uint64_t version = 0;
-        std::unique_ptr<Built> built;
+        std::shared_ptr<Built> built;
     };
 
     void worker_main();

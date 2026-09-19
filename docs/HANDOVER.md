@@ -71,13 +71,37 @@ Sounds played at a creature or player follow it while they play; vanilla leaves 
 - **Verification:** VsaDoctor 38/38 against 1.22.7. `EntitySoundTrackerTests` cover announcement, expiry, cancel, context nesting, inference (tall creatures, lag, ambiguity) and following/letting go against the engine. All 111 managed tests passed on a worktree of `f62e42a` plus these changes (the working tree's native code was mid-ABI-9 change).
 - **To check in game:** walk past running wolves or chickens, and chase a bear. Calls should come from the animal, not from where it was. Watch the stats line for "matched by position" counts.
 
-## Phase 7 (pathing): in progress on `phase7-pathing`
+## Phase 7 (pathing): done on `phase7-pathing`, to check in game
 
 Phase 6 is merged into `main` (not pushed).
 
 - **The gate (ADR 0013):** a 64³ region of terrain, two buildings and a cave bakes in 0.52 s on one thread with one visibility sample per probe (2.1 s with four): 794 probes, 2.6 MB. Baked pathing ships. `core/test_pathing_bake.cpp` keeps the budget.
 - **Two Steam Audio 4.8.1 gotchas found:** `iplPathBakerBake` crashes without a progress callback (pass a no-op), and the probe generation box is centred on the transform's translation (its unit cube is −0.5..0.5).
-- **Next:** the region manager (probe batches per 64 × 64 × 64 region, background bakes, re-bake on edits with hysteresis, memory cap), the pathing simulation flag on the direct simulator (or its own), `IPLPathEffect` into the Ambisonic bus, the path-segment overlay, and the goat/doorway acceptance test.
+- **One rolling probe batch (ADR 0014), not per-region batches:** Steam Audio finds paths within one batch only, so a region set would have had silent doorways on region borders. The batch is a 96 × 64 × 96 box round the listener (`pathing_range`, `pathing_height`), snapped to 8 blocks, baked on the baker's thread from a `WorldScene::Snapshot`, and baked again when the listener leaves the middle third, the origin moves, or a chunk in it has changed and 3 s have passed without another change.
+- **Third gotcha:** the simulator's `maxOrder` sizes the pathing coefficients and a run writes `pathingOrder`'s worth regardless; with `maxOrder` 0 the paths came out omnidirectional. `PathSimulator` sets `maxOrder` 1.
+
+### Native (ABI v11)
+
+- `world/path_baker.*` (`PathBaker`): probes (`UNIFORMFLOOR`, 2.5 m, 1.6 m high), the bake (radius 1 m, threshold 0.1, visibility range a third of the range, path range the range, one visibility sample), `current()` the latest batch, `stats()`.
+- `world/path_sim.*` (`PathSimulator`): its own simulator (PATHING, `maxOrder` 1) at `pathing_rate_hz` (10); swaps the baker's batch in with a commit and releases the old one after; the `pathing_sources` (16) loudest sounds that want a path (occlusion below 0.9, or no direct simulation); `enableValidation` and `findAlternatePaths`; order-1 coefficients and EQ out through `world/path_channel.hpp`; the legs Steam Audio considered, from its visualisation callback, for the overlay.
+- **Mixer:** `PathState` per effect set, one `IPLPathEffect` each (order 1, not spatialised) into an order-1 world-space Ambisonic path bus; on headphones it joins the world bus's binaural decode, on speakers its own `SpeakerDecoder`. The effect is primed muted until the first result; a sound that stops wanting a path fades out over the direct smoothing.
+- **API:** `vsa_engine_get_pathing_stats`, `vsa_engine_get_path_segments`; config `pathing_range` (32..256), `pathing_height` (16..128), `pathing_probe_spacing`, `pathing_vis_samples`, `pathing_rate_hz`, `pathing_sources`; flag `VSA_ENGINE_FLAG_NO_PATHING`. Test fixtures default to `NO_REFLECTIONS | NO_PATHING`; the pathing tests turn it on.
+- **Tests:** `test_pathing.cpp` (the box bakes and re-bakes; goat and doorway: energy leans 0.60 ahead and 0.00 sideways with paths against 0.30 left without, 79 dB louder; a sealed room has no path, a sound in the open wants none); `core/test_render_budget.cpp` (the pathing render path never allocates through moves, stops, decoder and output changes and a re-bake; 32 blocked voices with 16 paths render at p99 7 % headphones / 5 % 7.1.4 in Release, simulation 0.1 ms); `core/test_pathing_bake.cpp` keeps the bake budget.
+
+### Managed
+
+- Config: `Pathing` (on), `PathingRangeBlocks`, `PathingHeightBlocks`, `PathingProbeSpacing`, `PathingVisibilitySamples`, `PathingRateHz`, `PathingSources` (0 = the engine's defaults).
+- `.steamaudio scene paths` (also in the overlay cycle) draws the legs Steam Audio considered in the last run: occluded legs in red. The HUD has a pathing line (batch, probes, bake time, wanted / simulated / found, tick time).
+- Reverb: `ReflectionGain` now defaults to 0.1, with `ReflectionEarlyGain` and `ReflectionTailGain` (`.steamaudio reverb early N` / `tail N`) to weigh the convolved early part against the diffuse tail.
+- `PathingTests.cs`: config clamping; a room with a doorway bakes and a blocked sound finds its way out through the real engine.
+
+### To check in game (Chris)
+
+- **Goat and doorway:** stand outside a closed room with a sound inside (an anvil, an animal), off to one side of the doorway. The sound should come from the doorway, not through the wall from the sound's true direction; walk round the room and it should follow the doorway. Then close the doorway: it should go back to a muffled sound through the wall.
+- **Caves:** sounds round a bend should come from the bend.
+- **Overlay:** `.steamaudio scene paths` while a sound is blocked; the HUD's pathing line should show a bake within a second of arriving somewhere new, and `found` counting the blocked sounds.
+- **Cost:** the HUD's bake time when walking (the box re-bakes every ~32 blocks) and `.steamaudio stats` render time with many blocked sounds.
+- **Not yet:** a memory cap and a cancellable bake (the default box is small; deferred until they matter).
 
 ## Phase 6 (reflections and reverb): done, merged
 

@@ -32,6 +32,10 @@ constexpr double kDirectMaxHoldSeconds = 0.08;
 constexpr float kPlaceRadius = 3.0f;
 constexpr float kPlaceSteal = 2.0f;
 constexpr double kPlaceIdleSeconds = 30.0;
+// A voice asks for a path round what blocks it when less than this much of it is visible.
+constexpr float kPathWanted = 0.9f;
+// Path coefficients below this (amplitude) count as no path.
+constexpr float kPathSilence = 1e-5f;
 
 template <typename T>
 void store_max(std::atomic<T>& target, T value) noexcept {
@@ -52,7 +56,7 @@ void store_min(std::atomic<T>& target, T value) noexcept {
 Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
              SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
              LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget,
-             world::DirectChannel* direct, ReflectionRenderer* reflections)
+             world::DirectChannel* direct, ReflectionRenderer* reflections, world::PathChannel* paths)
     : kernel_(kernel),
       slots_(slots),
       slot_count_(slot_count),
@@ -65,7 +69,16 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
       block_frames_(block_frames),
       binaural_budget_(binaural_budget),
       direct_(direct),
-      reflections_(reflections) {
+      reflections_(reflections),
+      paths_(paths) {
+    path_state_.resize(spatial.pool_size());
+    path_in_.resize(block_frames);
+    path_out_storage_.resize(static_cast<std::size_t>(block_frames) * 4);
+    path_bus_storage_.resize(static_cast<std::size_t>(block_frames) * 4);
+    for (std::size_t c = 0; c < 4; ++c) {
+        path_out_[c] = path_out_storage_.data() + c * block_frames;
+        path_bus_[c] = path_bus_storage_.data() + c * block_frames;
+    }
     reflection_gain_buf_.resize(block_frames);
     ranking_.resize(spatial.pool_size());
     set_generation_.assign(spatial.pool_size(), 0);
@@ -121,6 +134,8 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
 
     // New effect sets for the new rate: every voice re-acquires one on its next block.
     spatial_.prepare(sample_rate, block_frames_, channels_);
+    path_decoder_ = paths_ != nullptr ? std::make_unique<SpeakerDecoder>(channels_, 1) : nullptr;
+    path_bus_used_ = false;
     for (uint32_t i = 0; i < active_count_; ++i) {
         RenderVoice& v = slots_[active_[i]].render;
         v.effect_set = -1;
@@ -167,6 +182,10 @@ void Mixer::render_block() noexcept {
     if (reflections_ != nullptr) {
         reflections_->begin_block();
     }
+    if (path_bus_used_) {
+        std::fill(path_bus_storage_.begin(), path_bus_storage_.end(), 0.0f);
+        path_bus_used_ = false;
+    }
     bus_used_.fill(false);
     for (uint32_t i = 0; i < active_count_;) {
         if (!render_voice(active_[i])) {
@@ -195,6 +214,7 @@ void Mixer::render_block() noexcept {
         }
     }
     mix_reflections();
+    mix_paths();
     // The world ambisonic bus (bus gains already applied), decoded for the listener's head.
     const Orientation orientation{
         {pose_.right[0], pose_.right[1], pose_.right[2]},
@@ -593,6 +613,7 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
             publish_position(s);  // held until its first simulation result
             return false;
         }
+        update_path(s, params);
     }
 
     const Generated generated = silent ? advance_silent(s) : generate(s);
@@ -681,6 +702,7 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
             v.shelf.process(left, frames, 0);
         }
         send_reflections(s, params, left);
+        send_path(s, params, left);
         if (v.tier == SpatialTier::Ambisonic) {
             // The shared bus is decoded after every bus gain, so this voice's is applied now.
             const float* bus_gain = bus_gains_[b];
@@ -788,10 +810,11 @@ int Mixer::acquire_effects(uint32_t slot, float level) noexcept {
         loser.is_virtual = true;
     }
     spatial_.reset(set);
-    if (direct_ != nullptr) {
+    if (direct_ != nullptr || paths_ != nullptr) {
         uint32_t& generation = set_generation_[static_cast<std::size_t>(set)];
         generation = generation + 1 == 0 ? 1 : generation + 1;
         direct_state_[static_cast<std::size_t>(set)] = DirectState{};
+        path_state_[static_cast<std::size_t>(set)] = PathState{};
     }
     slots_[slot].render.direct_hold = 0;
     return set;
@@ -871,6 +894,9 @@ void Mixer::release_effects(RenderVoice& v) noexcept {
     if (v.effect_set >= 0) {
         if (direct_ != nullptr) {
             direct_->input(static_cast<uint32_t>(v.effect_set)).generation.store(0, std::memory_order_release);
+        }
+        if (paths_ != nullptr) {
+            paths_->input(static_cast<uint32_t>(v.effect_set)).generation.store(0, std::memory_order_release);
         }
         spatial_.release(v.effect_set);
         v.effect_set = -1;
@@ -1016,6 +1042,107 @@ void Mixer::send_reflections(VoiceSlot& s, const SpatialParams& params, const fl
     float* send = reflections_->send(slot);
     for (uint32_t j = 0; j < block_frames_; ++j) {
         send[j] += mono[j] * bus_gain[j] * loudness;
+    }
+}
+
+void Mixer::update_path(VoiceSlot& s, const SpatialParams& params) noexcept {
+    RenderVoice& v = s.render;
+    if (paths_ == nullptr || v.effect_set < 0) {
+        return;
+    }
+    const auto set = static_cast<uint32_t>(v.effect_set);
+    world::PathInput& in = paths_->input(set);
+    if (v.spatial != VSA_SPATIAL_WORLD) {
+        in.generation.store(0, std::memory_order_release);
+        return;
+    }
+    // Wanted when the straight path is blocked (or nothing says otherwise: no direct simulation).
+    const DirectState& direct = direct_state_[set];
+    const bool wanted = direct_ == nullptr || (direct.primed && direct.occlusion < kPathWanted);
+    const uint32_t generation = set_generation_[set];
+    in.x.store(v.position[0], std::memory_order_relaxed);
+    in.y.store(v.position[1], std::memory_order_relaxed);
+    in.z.store(v.position[2], std::memory_order_relaxed);
+    in.level.store(v.open_level, std::memory_order_relaxed);
+    in.wanted.store(wanted, std::memory_order_relaxed);
+    in.voice.store(s.handle, std::memory_order_relaxed);
+    in.generation.store(generation, std::memory_order_release);
+
+    PathState& state = path_state_[set];
+    const world::PathOutput& out = paths_->output(set);
+    float sh[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float eq[3] = {1.0f, 1.0f, 1.0f};
+    bool have = false;
+    if (wanted && out.generation.load(std::memory_order_acquire) == generation) {
+        for (int c = 0; c < 4; ++c) {
+            sh[c] = out.sh[c].load(std::memory_order_relaxed);
+        }
+        for (int b = 0; b < 3; ++b) {
+            eq[b] = out.eq[b].load(std::memory_order_relaxed);
+        }
+        have = true;
+    }
+    // Towards the latest result, or towards silence when there is none (the path closed, or the
+    // straight line opened): smoothed as the direct results are.
+    if (!state.primed) {
+        if (!have) {
+            return;
+        }
+        std::copy_n(sh, 4, state.sh);
+        std::copy_n(eq, 3, state.eq);
+        state.primed = true;
+    } else {
+        for (int c = 0; c < 4; ++c) {
+            state.sh[c] += direct_alpha_ * (sh[c] - state.sh[c]);
+        }
+        for (int b = 0; b < 3; ++b) {
+            state.eq[b] += direct_alpha_ * (eq[b] - state.eq[b]);
+        }
+    }
+    float magnitude = 0.0f;
+    for (const float c : state.sh) {
+        magnitude = std::max(magnitude, std::abs(c));
+    }
+    state.sounding = magnitude > kPathSilence;
+    (void)params;
+}
+
+void Mixer::send_path(VoiceSlot& s, const SpatialParams& params, const float* mono) noexcept {
+    RenderVoice& v = s.render;
+    if (paths_ == nullptr || v.effect_set < 0 || v.spatial != VSA_SPATIAL_WORLD) {
+        return;
+    }
+    const PathState& state = path_state_[static_cast<std::size_t>(v.effect_set)];
+    if (!state.sounding) {
+        return;
+    }
+    // Steam Audio's paths carry 1-at-1-m attenuation over their length; our direct path plays at
+    // 1 within min_distance: the same ratio as for the reflections.
+    const float loudness = std::clamp(params.distance, 1.0f, std::max(1.0f, v.min_distance));
+    const float* bus_gain = bus_gains_[s.bus];
+    float* in = path_in_.data();
+    for (uint32_t j = 0; j < block_frames_; ++j) {
+        in[j] = mono[j] * bus_gain[j] * loudness;
+    }
+    spatial_.render_path(v.effect_set, state.eq, state.sh, in, path_out_.data());
+    for (std::size_t c = 0; c < 4; ++c) {
+        const float* x = path_out_[c];
+        float* sum = path_bus_[c];
+        for (uint32_t j = 0; j < block_frames_; ++j) {
+            sum[j] += x[j];
+        }
+    }
+    path_bus_used_ = true;
+}
+
+void Mixer::mix_paths() noexcept {
+    if (!path_bus_used_) {
+        return;
+    }
+    if (render_mode_ == VSA_RENDER_HEADPHONES) {
+        spatial_.add_ambisonic(path_bus_.data(), 4);
+    } else if (path_decoder_) {
+        path_decoder_->decode(pose_.right, pose_.up, pose_.forward, path_bus_.data(), master_.data(), block_frames_);
     }
 }
 

@@ -292,6 +292,7 @@ Steam Audio's pathing needs **baked** probe-to-probe visibility data (`iplPathBa
 
 1. **Probe generation per region** (64 × 64 blocks by chunk-aligned columns): `iplProbeArrayGenerateProbes` with `IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR`, which naturally follows voxel floors. Spacing is 2–3 m and height 1.6 m.
 2. **Background bake** per region on the pathing thread (cancellable). Several region probe batches are active at once through `iplSimulatorAddProbeBatch`.
+   > **Amended by ADR 0014:** Steam Audio finds paths within one probe batch only, so there is one batch, a box round the listener, baked again as the listener moves on.
 3. **Edits between bakes:** `enableValidation` + `findAlternatePaths` keep paths correct when blocks change. A dirty region re-bakes after a hysteresis delay.
 4. **Rendering:** `IPLPathEffect` into the ambisonic bus, with EQ from the deviation model. Real path segments are shown through the pathing visualisation callback.
 5. **Decision gate (Phase 7, first task):** a spike measures bake time and memory for a 64 × 64 × 64 region with typical caves and buildings.

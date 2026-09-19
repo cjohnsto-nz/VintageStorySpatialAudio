@@ -88,6 +88,11 @@ add_library(vsaudio_core STATIC
     src/world/direct_sim.hpp
     src/world/mesher.cpp
     src/world/mesher.hpp
+    src/world/path_baker.cpp
+    src/world/path_baker.hpp
+    src/world/path_channel.hpp
+    src/world/path_sim.cpp
+    src/world/path_sim.hpp
     src/world/ray_paths.cpp
     src/world/ray_paths.hpp
     src/world/reflection_channel.hpp

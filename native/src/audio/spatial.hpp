@@ -73,6 +73,11 @@ public:
     void release(int set) noexcept;
     /// Clears a set's filter state (use when a set changes voices).
     void reset(int set) noexcept;
+    /// The set's path effect (Phase 7): `mono` (with every gain) rendered as the paths Steam
+    /// Audio found (`sh`: 4 order-1 world-space coefficients carrying their attenuation; `eq` per
+    /// band), into 4 world-space Ambisonic channels (overwritten).
+    void render_path(int set, const float eq[3], const float sh[4], const float* mono, float* const* out4) noexcept;
+
     /// Clears the state of one tier's effect: for switching a voice between tiers.
     void reset_tier(int set, SpatialTier tier) noexcept;
     void reset_all() noexcept;
@@ -111,6 +116,7 @@ private:
         steam::DirectEffect direct;
         steam::BinauralEffect binaural;
         steam::PanningEffect panning;
+        steam::PathEffect path;
         // VBAP (7.1.4): last block's speaker gains, the start of this block's ramp.
         std::array<float, kMaxOutputChannels> pan{};
         bool pan_ready = false;

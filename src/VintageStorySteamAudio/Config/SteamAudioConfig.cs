@@ -151,6 +151,30 @@ public sealed class SteamAudioConfig
     public float ReflectionTransitionSeconds { get; set; }
 
     /// <summary>
+    /// Sound round corners and through doorways (Phase 7): Steam Audio's baked pathing over a box
+    /// round you, baked in the background (about half a second per 64³ of world).
+    /// </summary>
+    public bool Pathing { get; set; } = true;
+
+    /// <summary>The box baked round you, blocks across; 0 = 96 (32..256). Bigger takes longer to bake.</summary>
+    public int PathingRangeBlocks { get; set; }
+
+    /// <summary>The box's height, blocks; 0 = 64 (16..128).</summary>
+    public int PathingHeightBlocks { get; set; }
+
+    /// <summary>Metres between probes; 0 = 2.5 (1..8). Closer follows narrow passages better and bakes slower.</summary>
+    public float PathingProbeSpacing { get; set; }
+
+    /// <summary>Rays per probe when testing whether two probes see each other; 0 = 1 (1..8).</summary>
+    public int PathingVisibilitySamples { get; set; }
+
+    /// <summary>Path simulations per second; 0 = 10 (1..60).</summary>
+    public int PathingRateHz { get; set; }
+
+    /// <summary>Blocked sounds given paths per simulation at most; 0 = 16 (1..256).</summary>
+    public int PathingSources { get; set; }
+
+    /// <summary>
     /// Scales all reverb (0..4; also .steamaudio reverb gain). 1 is the level Steam Audio
     /// simulates; the default is tuned by ear on a 7.1.4 system, where the simulated level is
     /// far too much on top of the game's own sound mix.
@@ -191,6 +215,16 @@ public sealed class SteamAudioConfig
             Threads = ReflectionThreads,
             TransitionSeconds = ReflectionTransitionSeconds,
         }),
+        Pathing = Pathing,
+        PathingSettings = new PathingSettings
+        {
+            RangeBlocks = Math.Clamp(PathingRangeBlocks, 0, 256),
+            HeightBlocks = Math.Clamp(PathingHeightBlocks, 0, 128),
+            ProbeSpacing = float.IsFinite(PathingProbeSpacing) ? Math.Clamp(PathingProbeSpacing, 0f, 8f) : 0f,
+            VisibilitySamples = Math.Clamp(PathingVisibilitySamples, 0, 8),
+            RateHz = Math.Clamp(PathingRateHz, 0, 60),
+            Sources = Math.Clamp(PathingSources, 0, 256),
+        },
         HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
             : modConfigDirectory is null ? HrtfSofaFile.Trim()
             : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),

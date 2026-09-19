@@ -120,6 +120,18 @@ Engine::Settings validate(const vsa_engine_config& config) {
     if (r.transition >= r.duration) {
         throw invalid("reflection_transition must be shorter than reflection_duration");
     }
+
+    settings.pathing = (config.flags & VSA_ENGINE_FLAG_NO_PATHING) == 0;
+    world::PathBakeSettings& b = settings.path_bake;
+    range(config.pathing_range, 32, 256, "pathing_range", b.range);
+    range(config.pathing_height, 16, 128, "pathing_height", b.height);
+    range_f(config.pathing_probe_spacing, 1.0f, 8.0f, "pathing_probe_spacing", b.spacing);
+    range(config.pathing_vis_samples, 1, 8, "pathing_vis_samples", b.vis_samples);
+    range(config.pathing_rate_hz, 1, 60, "pathing_rate_hz", settings.path_sim.rate_hz);
+    range(config.pathing_sources, 1, 256, "pathing_sources", settings.path_sim.max_sources);
+    settings.path_sim.max_sources = std::min(settings.path_sim.max_sources, settings.max_real_voices);
+    b.vis_range = static_cast<float>(b.range) / 3.0f;
+    b.path_range = static_cast<float>(b.range);
     return settings;
 }
 
@@ -188,12 +200,18 @@ Engine::Engine(const vsa_engine_config& config)
                       ? std::make_unique<world::DirectSimulator>(*steam_, *scene_, *direct_channel_,
                                                                  settings_.occlusion_samples, settings_.direct_rate_hz)
                       : nullptr),
+      path_channel_(settings_.pathing ? std::make_unique<world::PathChannel>(settings_.max_real_voices) : nullptr),
+      path_baker_(settings_.pathing ? std::make_unique<world::PathBaker>(*steam_, *scene_, settings_.path_bake) : nullptr),
+      path_sim_(settings_.pathing ? std::make_unique<world::PathSimulator>(*steam_, *scene_, *path_baker_, *path_channel_,
+                                                                           settings_.path_sim, settings_.path_bake)
+                                  : nullptr),
       reflection_channel_(settings_.reflections ? std::make_unique<world::ReflectionChannel>(settings_.reflection.sources + 1)
                                                 : nullptr),
       spatial_(*steam_, settings_.max_real_voices, settings_.hrtf_sofa_path),
       reflections_(*steam_, reflection_channel_.get(), settings_.block_frames),
       mixer_(kernel_, slots_.get(), settings_.max_voices, commands_, events_, retired_, rt_log_, spatial_, listener_,
-             settings_.block_frames, settings_.max_binaural_voices, direct_channel_.get(), &reflections_),
+             settings_.block_frames, settings_.max_binaural_voices, direct_channel_.get(), &reflections_,
+             path_channel_.get()),
       stream_history_frames_(static_cast<uint32_t>(kernel_.max_taps_per_side())),
       stream_window_frames_(kernel_.max_span_frames(settings_.block_frames)) {
     free_slots_.reserve(settings_.max_voices);
@@ -569,6 +587,10 @@ void Engine::set_listener(const vsa_listener& listener) {
     if (reflection_sim_) {
         reflection_sim_->set_listener(pose);
     }
+    if (path_sim_) {
+        path_sim_->set_listener(pose);
+        path_baker_->set_listener(pose);
+    }
 }
 
 void Engine::set_reflection_gain(float gain) {
@@ -680,6 +702,10 @@ void Engine::set_simulations_threaded(bool threaded) {
     if (reflection_sim_) {
         reflection_sim_->set_threaded(threaded);
     }
+    if (path_sim_) {
+        path_baker_->set_threaded(threaded);
+        path_sim_->set_threaded(threaded);
+    }
 }
 
 void Engine::offline_block_hook(void* user) noexcept {
@@ -700,6 +726,14 @@ void Engine::offline_block_hook(void* user) noexcept {
         }
     } catch (const std::exception& e) {
         Log::writef(VSA_LOG_ERROR, "reflection simulation: %s", e.what());
+    }
+    try {
+        if (engine->path_sim_ && !engine->path_sim_->threaded()) {
+            engine->path_baker_->offline_tick(engine->offline_seconds_);
+            engine->path_sim_->offline_tick(engine->offline_seconds_);
+        }
+    } catch (const std::exception& e) {
+        Log::writef(VSA_LOG_ERROR, "pathing: %s", e.what());
     }
     engine->offline_seconds_ += engine->mixer_.block_period_seconds();
 }

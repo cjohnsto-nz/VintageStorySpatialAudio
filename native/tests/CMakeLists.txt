@@ -37,6 +37,7 @@ add_executable(vsaudio_tests
     test_direct.cpp
     test_header_c.c
     test_output.cpp
+    test_pathing.cpp
     test_reflections.cpp
     test_scene.cpp
     test_self_test.cpp
