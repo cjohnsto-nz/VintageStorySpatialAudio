@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -64,11 +65,14 @@ struct SceneStats {
 /// The world as a Steam Audio scene (ADR 0003): a top-level scene holding one instanced mesh per
 /// chunk, whose sub-scene holds the chunk's static mesh from the boundary mesher.
 ///
-/// A top-level scene is never edited: every change builds a fresh one (instances of the chunks'
-/// immutable sub-scenes), switches the attached simulators to it, and retires the old one.
-/// Steam Audio 4.8.1's Embree scenes stop reporting hits after their contents are changed twice
-/// (instances or static meshes, removed and added; tests/core/test_embree_scene_edits.cpp), which
-/// silenced all occlusion in game once a door had been opened.
+/// Chunk edits change the top-level scene in place (remove the chunk's instance, add its new one),
+/// with one rule: nothing removed is released while that scene lives. Steam Audio 4.8.1's Embree
+/// scene gives a released mesh's geometry id to the next mesh without detaching the old geometry,
+/// so the new one fails to attach and is silently missing (tests/core/test_embree_scene_edits.cpp;
+/// in game, occlusion vanished once doors had been opened). Removed instances, and the chunk
+/// sub-scenes they reference, wait in the scene's graveyard; when it grows past a quarter of the
+/// live instances (at least 64), a fresh top-level scene is built without any lock held, the
+/// attached simulators switch to it, and the old one is released whole.
 ///
 /// Chunks arrive as voxel snapshots and are meshed on the scene's own worker thread; a chunk's
 /// arrival or removal also re-meshes its loaded neighbours (their border faces change). Vertices
@@ -130,7 +134,9 @@ private:
     struct Built;
     struct Top {
         steam::Scene scene;
-        std::vector<steam::InstancedMesh> instances;
+        std::unordered_map<ChunkKey, steam::InstancedMesh, ChunkKeyHash> live;
+        std::vector<steam::InstancedMesh> graveyard;  // removed from `scene`, not released (see above)
+        std::vector<std::unique_ptr<Built>> buried;   // chunk builds the graveyard still instances
     };
     struct Chunk {
         std::shared_ptr<const ChunkVoxels> voxels;  // null: removal pending
@@ -144,13 +150,15 @@ private:
     void mark_neighbours_dirty_locked(ChunkKey key);
     [[nodiscard]] IPLMatrix4x4 transform_locked(ChunkKey key) const;
     /// What a top-level scene instances: each built chunk's sub-scene and its placement.
-    using Instances = std::vector<std::pair<IPLScene, IPLMatrix4x4>>;
+    using Instances = std::vector<std::tuple<ChunkKey, IPLScene, IPLMatrix4x4>>;
     [[nodiscard]] Instances instances_locked() const;  // requires mutex_
     /// A new top-level scene (no lock needed: sub-scenes are immutable and only the worker
     /// releases them).
     [[nodiscard]] std::unique_ptr<Top> build_top(const Instances& instances) const;
-    /// Removes a top-level scene's instances, commits, and releases it.
+    /// Removes a top-level scene's instances, commits, and releases it with its graveyard.
     static void retire(std::unique_ptr<Top>& top) noexcept;
+    /// Replaces the top-level scene with a fresh one (drops the graveyard). Worker only.
+    void compact();
 
     const steam::SteamContext& steam_;
     mutable std::mutex scene_mutex_;  // the current top-level scene and the attached simulators

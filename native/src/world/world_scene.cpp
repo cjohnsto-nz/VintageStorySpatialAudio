@@ -114,7 +114,7 @@ WorldScene::Instances WorldScene::instances_locked() const {
     instances.reserve(chunks_.size());
     for (const auto& [key, chunk] : chunks_) {
         if (chunk.built) {
-            instances.emplace_back(chunk.built->sub.get(), transform_locked(key));
+            instances.emplace_back(key, chunk.built->sub.get(), transform_locked(key));
         }
     }
     return instances;
@@ -124,8 +124,7 @@ std::unique_ptr<WorldScene::Top> WorldScene::build_top(const Instances& instance
     auto top = std::make_unique<Top>();
     IPLSceneSettings settings = steam_.scene_settings();
     check(iplSceneCreate(steam_.context(), &settings, top->scene.out()), "iplSceneCreate");
-    top->instances.reserve(instances.size());
-    for (const auto& [sub, transform] : instances) {
+    for (const auto& [key, sub, transform] : instances) {
         IPLInstancedMeshSettings instance{};
         instance.subScene = sub;
         instance.transform = transform;
@@ -135,7 +134,7 @@ std::unique_ptr<WorldScene::Top> WorldScene::build_top(const Instances& instance
             continue;
         }
         iplInstancedMeshAdd(mesh.get(), top->scene.get());
-        top->instances.push_back(std::move(mesh));
+        top->live.emplace(key, std::move(mesh));
     }
     iplSceneCommit(top->scene.get());
     return top;
@@ -145,12 +144,35 @@ void WorldScene::retire(std::unique_ptr<Top>& top) noexcept {
     if (!top) {
         return;
     }
-    for (steam::InstancedMesh& mesh : top->instances) {
+    for (auto& [key, mesh] : top->live) {
         iplInstancedMeshRemove(mesh.get(), top->scene.get());
     }
     iplSceneCommit(top->scene.get());
-    top->instances.clear();
+    top->live.clear();       // instances before the sub-scenes they reference
+    top->graveyard.clear();
+    top->buried.clear();
     top.reset();
+}
+
+void WorldScene::compact() {
+    Instances instances;
+    {
+        std::lock_guard lock(mutex_);
+        instances = instances_locked();
+    }
+    std::unique_ptr<Top> fresh = build_top(instances);
+    std::unique_ptr<Top> old;
+    {
+        std::lock_guard scene(scene_mutex_);
+        for (IPLSimulator simulator : simulators_) {
+            iplSimulatorSetScene(simulator, fresh->scene.get());
+            iplSimulatorCommit(simulator);
+        }
+        old = std::move(top_);
+        top_ = std::move(fresh);
+    }
+    retire(old);  // no simulator uses it any more
+    commits_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void WorldScene::set_materials(std::vector<AcousticMaterial> materials) {
@@ -356,13 +378,17 @@ void WorldScene::worker_main() {
             job.ms = since_ms(start);
         }
 
-        // Swap the results in, then build a fresh top-level scene and switch the simulators to it
-        // (never edit one in place: see the class comment). Only the swap and the switch hold
-        // locks; building and retiring scenes does not. The replaced chunks' sub-scenes are
-        // released only after the old top-level scene that instanced them.
-        std::vector<std::unique_ptr<Built>> retired;
-        bool changed = move_origin;
-        Instances instances;
+        // Swap the results in, then edit the top-level scene in place: the chunk's old instance
+        // is removed (into the graveyard, with its build) and its new one added. See the class
+        // comment for why nothing removed is released until the scene is compacted.
+        struct Change {
+            ChunkKey key;
+            std::unique_ptr<Built> old;
+            IPLScene sub = nullptr;
+            IPLMatrix4x4 transform{};
+        };
+        std::vector<Change> changes;
+        std::vector<std::pair<ChunkKey, IPLMatrix4x4>> moved;
         {
             std::lock_guard both(mutex_);
             for (Job& job : jobs) {
@@ -371,47 +397,86 @@ void WorldScene::worker_main() {
                     continue;  // changed again meanwhile; a newer job follows
                 }
                 Chunk& chunk = it->second;
-                changed = changed || chunk.built || job.built;
-                retired.push_back(std::move(chunk.built));
-                chunk.built = std::move(job.built);
                 ++stats_.chunks_built;
-                if (chunk.built) {
-                    chunk.built->version = static_cast<uint32_t>(stats_.chunks_built);
-                }
                 stats_.last_build_ms = job.ms;
                 stats_.max_build_ms = std::max(stats_.max_build_ms, job.ms);
+                if (chunk.built || job.built) {
+                    Change change;
+                    change.key = job.key;
+                    change.old = std::move(chunk.built);
+                    chunk.built = std::move(job.built);
+                    if (chunk.built) {
+                        chunk.built->version = static_cast<uint32_t>(stats_.chunks_built);
+                        change.sub = chunk.built->sub.get();
+                        change.transform = transform_locked(job.key);
+                    }
+                    changes.push_back(std::move(change));
+                }
                 if (chunk.voxels == nullptr) {
-                    retired.push_back(std::move(chunk.built));
                     chunks_.erase(it);
                 }
             }
-            if (changed) {
-                instances = instances_locked();
+            if (move_origin) {
+                for (const auto& [key, chunk] : chunks_) {
+                    if (chunk.built) {
+                        moved.emplace_back(key, transform_locked(key));
+                    }
+                }
             }
         }
-        if (changed) {
+        if (!changes.empty() || move_origin) {
             const auto start = std::chrono::steady_clock::now();
-            try {
-                std::unique_ptr<Top> fresh = build_top(instances);
-                std::unique_ptr<Top> old;
-                {
-                    std::lock_guard scene(scene_mutex_);
-                    for (IPLSimulator simulator : simulators_) {
-                        iplSimulatorSetScene(simulator, fresh->scene.get());
-                        iplSimulatorCommit(simulator);
+            bool compact_now = false;
+            {
+                std::lock_guard scene(scene_mutex_);
+                Top& top = *top_;
+                for (Change& change : changes) {
+                    if (const auto it = top.live.find(change.key); it != top.live.end()) {
+                        iplInstancedMeshRemove(it->second.get(), top.scene.get());
+                        top.graveyard.push_back(std::move(it->second));
+                        top.live.erase(it);
                     }
-                    old = std::move(top_);
-                    top_ = std::move(fresh);
+                    if (change.old) {
+                        top.buried.push_back(std::move(change.old));
+                    }
+                    if (change.sub != nullptr) {
+                        IPLInstancedMeshSettings instance{};
+                        instance.subScene = change.sub;
+                        instance.transform = change.transform;
+                        steam::InstancedMesh mesh;
+                        if (iplInstancedMeshCreate(top.scene.get(), &instance, mesh.out()) == IPL_STATUS_SUCCESS) {
+                            iplInstancedMeshAdd(mesh.get(), top.scene.get());
+                            top.live[change.key] = std::move(mesh);
+                        } else {
+                            Log::writef(VSA_LOG_ERROR, "scene: chunk %d,%d,%d: iplInstancedMeshCreate failed",
+                                        change.key.x, change.key.y, change.key.z);
+                        }
+                    }
                 }
-                retire(old);  // no simulator uses it any more
-                commits_.fetch_add(1, std::memory_order_acq_rel);
-            } catch (const Error& e) {
-                Log::writef(VSA_LOG_ERROR, "scene: %s", e.what());
+                for (const auto& [key, transform] : moved) {
+                    if (const auto it = top.live.find(key); it != top.live.end()) {
+                        iplInstancedMeshUpdateTransform(it->second.get(), top.scene.get(), transform);
+                    }
+                }
+                iplSceneCommit(top.scene.get());
+                for (IPLSimulator simulator : simulators_) {
+                    iplSimulatorCommit(simulator);
+                }
+                compact_now = top.graveyard.size() >= std::max<std::size_t>(64, top.live.size() / 4);
+            }
+            commits_.fetch_add(1, std::memory_order_acq_rel);
+            const double edit_ms = since_ms(start);
+            if (compact_now) {
+                try {
+                    compact();
+                } catch (const Error& e) {
+                    Log::writef(VSA_LOG_ERROR, "scene: %s", e.what());
+                }
             }
             std::lock_guard both(mutex_);
-            stats_.last_commit_ms = since_ms(start);
+            stats_.last_commit_ms = edit_ms;
         }
-        retired.clear();  // no top-level scene instances them any more
+
 
 
         lock.lock();

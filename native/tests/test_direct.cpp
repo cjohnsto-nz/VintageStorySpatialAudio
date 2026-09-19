@@ -432,3 +432,39 @@ TEST_CASE("direct: occlusion survives chunks being rebuilt again and again, on b
         }
     }
 }
+
+TEST_CASE("direct: a sound inside its own partial block (an anvil) is not hidden by it") {
+    OfflineEngine e;
+    set_materials(e);
+    std::vector<uint16_t> cells(VSA_CHUNK_CELLS, Air);
+    for (int z = 0; z < 32; ++z) {
+        for (int x = 0; x < 32; ++x) {
+            cells[cell(x, 15, z)] = Stone;  // the floor the anvil stands on
+        }
+    }
+    const vsa_box box{{0.1f, 0.0f, 0.25f}, {0.9f, 0.7f, 0.75f}};
+    const vsa_partial_block anvil{static_cast<uint32_t>(cell(10, 16, 16)), Stone, 0, 1};
+    vsa_chunk_desc d{};
+    d.struct_size = sizeof d;
+    d.materials = cells.data();
+    d.partials = &anvil;
+    d.partial_count = 1;
+    d.boxes = &box;
+    d.box_count = 1;
+    REQUIRE(vsa_scene_set_chunk(e.engine, &d) == VSA_OK);
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+    e.listener(4.5f, 17.6f, 16.5f, 1.0f, 0.0f, 0.0f);
+    const AssetPtr asset = band_tones(e);
+    const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 10.5f, 16.5f, 16.5f, 1.0f);  // the block's centre
+    REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+    e.render(9600);
+    vsa_source_debug s{};
+    s.struct_size = sizeof s;
+    uint32_t n = 0;
+    REQUIRE(vsa_engine_get_sources(e.engine, &s, 1, &n) == VSA_OK);
+    MESSAGE("anvil: occlusion " << s.occlusion << ", crossings " << s.crossings << ", simulated at " << s.simulated_position[0]
+                                << "," << s.simulated_position[1] << "," << s.simulated_position[2]);
+    CHECK((s.flags & VSA_SOURCE_ESCAPED) != 0);
+    CHECK(static_cast<double>(s.occlusion) > 0.9);
+    CHECK(s.crossings == 0);
+}

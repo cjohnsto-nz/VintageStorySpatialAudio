@@ -195,3 +195,24 @@ TEST_CASE("transmission: clearance keeps a point off neighbouring solid faces") 
     view.clearance(inside, 0.3);
     CHECK(inside[1] == doctest::Approx(10.5));
 }
+
+TEST_CASE("transmission: a sound inside a partial block (an anvil) leaves it, and clears its face") {
+    auto c = std::make_shared<ChunkVoxels>();
+    PartialBlock anvil;
+    anvil.cell = static_cast<uint16_t>(cell_index(10, 16, 16));
+    anvil.material = Wood;
+    anvil.boxes.push_back({{0.1f, 0.0f, 0.25f}, {0.9f, 0.7f, 0.75f}});
+    c->partials.push_back(anvil);
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView view(std::move(chunks), materials());
+    double source[3] = {10.5, 16.5, 16.5};  // the block's centre, inside its box
+    const double listener[3] = {4.5, 16.5, 16.5};
+    CHECK(view.trace(listener, source).crossings == 1);  // from inside, its own box counts
+    CHECK(view.escape(source, listener, 2, 0.25));
+    CHECK(source[0] == doctest::Approx(10.0 - 0.25).epsilon(0.01));
+    CHECK(!view.trace(source, listener).blocked());
+    // Air with nothing in it: no move.
+    double open[3] = {6.5, 16.5, 16.5};
+    CHECK(!view.escape(open, listener, 2, 0.25));
+}

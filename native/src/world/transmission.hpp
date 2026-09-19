@@ -56,10 +56,11 @@ public:
     /// blocks' boxes. Chunks that are not loaded count as air.
     [[nodiscard]] TransmissionTrace trace(const double from[3], const double to[3]) const;
 
-    /// Moves `point` towards `target` until it is out of solid cells (at most `max_cells` cells):
-    /// sounds are often placed at the centre of a block (breaking, placing, a door), which must
-    /// not muffle its own sound. Returns true if the point moved.
-    bool escape(double point[3], const double target[3], int max_cells) const;
+    /// Moves `point` towards `target` until it is out of occupied cells (solid, or holding a
+    /// partial block's boxes; at most `max_cells` cells), ending `beyond` metres past the last
+    /// one's face: sounds are placed at the centre of their block (breaking, placing, a door, an
+    /// anvil being struck), which must not muffle its own sound. Returns true if the point moved.
+    bool escape(double point[3], const double target[3], int max_cells, double beyond = 1e-3) const;
 
     /// Keeps `point` at least `radius` from the faces of solid cells next to its own (a sound on
     /// the floor would otherwise have half its occlusion volume inside the floor).
@@ -73,6 +74,8 @@ public:
 
 private:
     [[nodiscard]] const ChunkVoxels* chunk_of(int64_t x, int64_t y, int64_t z, int& cell) const;
+    /// Whether a cell holds a partial block with a non-air material.
+    [[nodiscard]] bool has_partial(int64_t x, int64_t y, int64_t z) const;
     [[nodiscard]] MaterialKind kind(uint16_t material) const noexcept {
         return material < materials_.size() ? materials_[material].kind : MaterialKind::Air;
     }

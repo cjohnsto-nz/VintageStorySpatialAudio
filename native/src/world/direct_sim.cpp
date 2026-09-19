@@ -181,8 +181,14 @@ void DirectSimulator::tick() {
         for (int k = 0; k < 3; ++k) {
             a.world[k] = static_cast<double>(a.debug.position[k]) + origin[k];
         }
-        a.debug.escaped = view->escape(a.world, listener_world, 2);
-        const float radius = std::max(0.05f, in.radius.load(std::memory_order_relaxed));
+        // Out of the block the sound sits in (full or partial), and far enough off its face that
+        // the occlusion volume clears it.
+        constexpr double kClear = 0.25;
+        a.debug.escaped = view->escape(a.world, listener_world, 2, kClear);
+        float radius = std::max(0.05f, in.radius.load(std::memory_order_relaxed));
+        if (a.debug.escaped) {
+            radius = std::min(radius, static_cast<float>(kClear));
+        }
         view->clearance(a.world, static_cast<double>(radius));
         for (int k = 0; k < 3; ++k) {
             a.debug.simulated_position[k] = static_cast<float>(a.world[k] - origin[k]);

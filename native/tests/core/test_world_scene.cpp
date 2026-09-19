@@ -7,6 +7,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -216,9 +217,17 @@ TEST_CASE("world scene: rebuilding the top-level scene stays cheap with a realis
     REQUIRE(scene.wait_idle(60s));
     const SceneStats before = scene.stats();
     CHECK(before.meshed_chunks == 405);
-    scene.set_chunk({4, 2, 4}, wall_chunk(), 0);  // one edit: a fresh top-level scene of 405 instances
-    REQUIRE(scene.wait_idle(10s));
+    // One edit at a time (a door): the top-level scene is edited in place, not rebuilt.
+    std::vector<double> times;
+    for (int i = 0; i < 100; ++i) {  // past the compaction threshold, too
+        scene.set_chunk({4, 2, 4}, wall_chunk(), 0);
+        REQUIRE(scene.wait_idle(10s));
+        times.push_back(scene.stats().last_commit_ms);
+    }
+    std::sort(times.begin(), times.end());
+    const double worst = times.back();
     const SceneStats after = scene.stats();
-    MESSAGE("top-level scene of " << after.meshed_chunks << " instances rebuilt in " << after.last_commit_ms << " ms");
-    CHECK(after.last_commit_ms < 150.0);  // ~25 ms in Release; built with no lock held
+    MESSAGE("in-place edits of a " << after.meshed_chunks << "-chunk scene: median " << times[50] << " ms, worst " << worst << " ms");
+    CHECK(after.meshed_chunks == 405);
+    CHECK(worst < 20.0);
 }

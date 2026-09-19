@@ -260,4 +260,48 @@ TEST_CASE("Steam Audio scene edits: in place (reported), and a fresh top-level s
         iplSimulatorSetScene(probe.sim.get(), nullptr);
         retire(top);
     }
+
+    // H: in place, but nothing removed from the top scene is released while the scene lives
+    // (Steam Audio recycles a released mesh's geometry id without detaching its geometry, so the
+    // next mesh given that id fails to attach). Removed instances wait in a graveyard.
+    for (const vsa_ray_tracer tracer : {VSA_RAY_TRACER_STEAM, VSA_RAY_TRACER_AUTO}) {
+        steam::SteamContext steam({tracer, false});
+        IPLSceneSettings settings = steam.scene_settings();
+        steam::Scene top;
+        REQUIRE(iplSceneCreate(steam.context(), &settings, top.out()) == IPL_STATUS_SUCCESS);
+        std::vector<Sub> graveyard_subs;
+        std::vector<steam::InstancedMesh> graveyard;
+        Sub sub = make_wall(steam, 10);
+        steam::InstancedMesh instance;
+        IPLInstancedMeshSettings is{sub.scene.get(), identity()};
+        REQUIRE(iplInstancedMeshCreate(top.get(), &is, instance.out()) == IPL_STATUS_SUCCESS);
+        iplInstancedMeshAdd(instance.get(), top.get());
+        iplSceneCommit(top.get());
+        Probe probe(steam, top.get());
+        std::vector<float> seen{probe.occlusion()};
+        for (int round = 0; round < 8; ++round) {
+            Sub next = make_wall(steam, round % 2 == 0 ? 10.0f : 10.5f);
+            iplInstancedMeshRemove(instance.get(), top.get());
+            steam::InstancedMesh next_instance;
+            IPLInstancedMeshSettings ns{next.scene.get(), identity()};
+            REQUIRE(iplInstancedMeshCreate(top.get(), &ns, next_instance.out()) == IPL_STATUS_SUCCESS);
+            iplInstancedMeshAdd(next_instance.get(), top.get());
+            iplSceneCommit(top.get());
+            graveyard.push_back(std::move(instance));
+            graveyard_subs.push_back(std::move(sub));
+            instance = std::move(next_instance);
+            sub = std::move(next);
+            seen.push_back(probe.occlusion());
+        }
+        std::string line;
+        for (float f : seen) {
+            line += std::to_string(f).substr(0, 4) + " ";
+        }
+        MESSAGE("tracer " << tracer << " in place, nothing released: " << line);
+        for (const float occlusion : seen) {
+            CHECK(static_cast<double>(occlusion) < 0.01);
+        }
+        iplInstancedMeshRemove(instance.get(), top.get());
+        iplSceneCommit(top.get());
+    }
 }

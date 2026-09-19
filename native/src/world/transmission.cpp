@@ -197,14 +197,31 @@ void VoxelView::clearance(double point[3], double radius) const {
     }
 }
 
-bool VoxelView::escape(double point[3], const double target[3], int max_cells) const {
+bool VoxelView::has_partial(int64_t x, int64_t y, int64_t z) const {
+    int index = 0;
+    const ChunkVoxels* chunk = chunk_of(x, y, z, index);
+    if (chunk == nullptr || chunk->partials.empty()) {
+        return false;
+    }
+    const auto cell16 = static_cast<uint16_t>(index);
+    auto it = std::lower_bound(chunk->partials.begin(), chunk->partials.end(), cell16,
+                               [](const PartialBlock& p, uint16_t c) { return p.cell < c; });
+    for (; it != chunk->partials.end() && it->cell == cell16; ++it) {
+        if (kind(it->material) != MaterialKind::Air && !it->boxes.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool VoxelView::escape(double point[3], const double target[3], int max_cells, double beyond) const {
     bool moved = false;
     for (int i = 0; i < max_cells; ++i) {
         const auto cx = static_cast<int64_t>(std::floor(point[0]));
         const auto cy = static_cast<int64_t>(std::floor(point[1]));
         const auto cz = static_cast<int64_t>(std::floor(point[2]));
-        if (kind(material_at(cx, cy, cz)) != MaterialKind::Solid) {
-            return moved;
+        if (kind(material_at(cx, cy, cz)) != MaterialKind::Solid && !has_partial(cx, cy, cz)) {
+            break;
         }
         // Step to where the line towards the target leaves this cell, just past the face.
         const double d[3] = {target[0] - point[0], target[1] - point[1], target[2] - point[2]};
@@ -229,6 +246,22 @@ bool VoxelView::escape(double point[3], const double target[3], int max_cells) c
             point[a] += d[a] * (t_exit + nudge);
         }
         moved = true;
+    }
+    if (moved && beyond > 1e-3) {
+        // Further off the block's face, unless that runs into another solid cell or the target.
+        const double d[3] = {target[0] - point[0], target[1] - point[1], target[2] - point[2]};
+        const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        const double step = std::min(beyond, len * 0.5);
+        if (len > 1e-6) {
+            double next[3];
+            for (int a = 0; a < 3; ++a) {
+                next[a] = point[a] + d[a] / len * step;
+            }
+            if (kind(material_at(static_cast<int64_t>(std::floor(next[0])), static_cast<int64_t>(std::floor(next[1])),
+                                 static_cast<int64_t>(std::floor(next[2])))) != MaterialKind::Solid) {
+                std::copy_n(next, 3, point);
+            }
+        }
     }
     return moved;
 }
