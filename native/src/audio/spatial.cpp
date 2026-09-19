@@ -255,6 +255,7 @@ void SpatialRenderer::begin_block() noexcept {
         std::fill(bus_storage_.begin(), bus_storage_.end(), 0.0f);
         bus_used_ = false;
     }
+    bus_order_ = 0;
 }
 
 void SpatialRenderer::encode(int set, const SpatialParams& params, float* mono) noexcept {
@@ -290,6 +291,24 @@ void SpatialRenderer::encode(int set, const SpatialParams& params, float* mono) 
     }
     s.sh = target;
     bus_used_ = true;
+    bus_order_ = kAmbisonicOrder;
+}
+
+void SpatialRenderer::add_ambisonic(const float* const* in, uint32_t channels) noexcept {
+    const uint32_t count = std::min(channels, kAmbisonicChannels);
+    for (uint32_t c = 0; c < count; ++c) {
+        const float* x = in[c];
+        float* sum = bus_[c];
+        for (uint32_t j = 0; j < frames_; ++j) {
+            sum[j] += x[j];
+        }
+    }
+    bus_used_ = true;
+    int order = 0;
+    while (static_cast<uint32_t>((order + 1) * (order + 1)) < count) {
+        ++order;
+    }
+    bus_order_ = std::max(bus_order_, order);
 }
 
 bool SpatialRenderer::decode(const Orientation& o, float* left, float* right) noexcept {
@@ -302,12 +321,16 @@ bool SpatialRenderer::decode(const Orientation& o, float* left, float* right) no
         --tail_blocks_;
     }
 
+    // Only the orders in use cost (a decode's work grows with the channels): the reflections alone
+    // are order 2. After a change, the higher order runs one more block for its filters' tails.
+    const int order = std::max({bus_order_, last_order_, 1});
+    last_order_ = bus_order_ > 0 ? bus_order_ : last_order_;
     const auto frames = static_cast<IPLint32>(frames_);
-    IPLAudioBuffer in{static_cast<IPLint32>(kAmbisonicChannels), frames, bus_.data()};
+    IPLAudioBuffer in{static_cast<IPLint32>((order + 1) * (order + 1)), frames, bus_.data()};
     float* out_channels[2] = {left, right};
     IPLAudioBuffer out{2, frames, out_channels};
     IPLAmbisonicsDecodeEffectParams decode{};
-    decode.order = kAmbisonicOrder;
+    decode.order = order;
     decode.hrtf = hrtf_.get();
     decode.orientation.right = IPLVector3{o.right[0], o.right[1], o.right[2]};
     decode.orientation.up = IPLVector3{o.up[0], o.up[1], o.up[2]};

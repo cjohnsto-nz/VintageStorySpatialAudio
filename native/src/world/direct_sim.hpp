@@ -71,6 +71,7 @@ public:
 
     /// Runs the simulation on its own thread (device output) or not (offline output).
     void set_threaded(bool threaded);
+    [[nodiscard]] bool threaded() const noexcept { return thread_.joinable(); }
     /// Offline rendering: called before each block with the output's elapsed time; runs a tick
     /// whenever a period has passed (the first call always ticks).
     void offline_tick(double seconds);
@@ -79,6 +80,10 @@ public:
 
     [[nodiscard]] SimulationStats stats() const;
     [[nodiscard]] std::vector<SourceDebug> sources() const;
+
+    /// Where the simulations listen from (world block coordinates): the pose's position, moved out
+    /// of any solid block it is in towards where it looks.
+    static void listen_from(const VoxelView& view, const ListenerPose& pose, double world[3]);
 
     /// Amplitude through the occluded part of a partly occluded source whose centre line is clear.
     static constexpr float kEdgeTransmission[3] = {0.5f, 0.35f, 0.25f};

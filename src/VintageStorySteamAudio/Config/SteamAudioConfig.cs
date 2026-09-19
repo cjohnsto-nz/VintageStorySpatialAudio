@@ -92,6 +92,21 @@ public sealed class SteamAudioConfig
     /// </summary>
     public float SoundRangeMultiplier { get; set; } = 3f;
 
+    /// <summary>
+    /// Sounds a creature or player makes follow them while they play. Vanilla leaves each sound where
+    /// it started, so a running wolf's growl stays behind it.
+    /// </summary>
+    public bool TrackEntitySounds { get; set; } = true;
+
+    /// <summary>
+    /// Also for creature sounds the server sends as plain coordinates (most calls, even in single
+    /// player): each is matched to the creature it came from, when only one is close enough.
+    /// </summary>
+    public bool InferEntitySounds { get; set; } = true;
+
+    /// <summary>How far (blocks, 0..4) such a sound may be from a creature's body to be matched to it.</summary>
+    public float EntitySoundMatchDistance { get; set; } = 1f;
+
     /// <summary>Walls muffle what is behind them (occlusion and transmission by the world scene, Phase 5).</summary>
     public bool Occlusion { get; set; } = true;
 
@@ -100,6 +115,53 @@ public sealed class SteamAudioConfig
 
     /// <summary>Occlusion updates per second. 0 = 30.</summary>
     public int OcclusionRateHz { get; set; }
+
+    /// <summary>
+    /// Reverb from the world itself (Phase 6): rooms, caves and halls ring as their size and
+    /// materials make them. Replaces vanilla's reverb presets.
+    /// </summary>
+    public bool Reflections { get; set; } = true;
+
+    /// <summary>Low, Medium, High or Ultra (see <see cref="ReflectionPresets"/>); the settings below override single values.</summary>
+    [JsonConverter(typeof(StringEnumConverter))]
+    public ReflectionQuality ReflectionQuality { get; set; } = ReflectionQuality.Medium;
+
+    /// <summary>Places simulated at once (every sound is simulated from where it is; sounds within 3 m share a place); 0 = the preset's.</summary>
+    public int ReflectionSources { get; set; }
+
+    /// <summary>Rays per simulation; 0 = the preset's.</summary>
+    public int ReflectionRays { get; set; }
+
+    /// <summary>Bounces per ray; 0 = the preset's.</summary>
+    public int ReflectionBounces { get; set; }
+
+    /// <summary>Longest reverb simulated, seconds; 0 = the preset's.</summary>
+    public float ReflectionDurationSeconds { get; set; }
+
+    /// <summary>Ambisonic order of the reflections (1..3, direction detail); 0 = the preset's.</summary>
+    public int ReflectionOrder { get; set; }
+
+    /// <summary>Simulations per second at most; 0 = the preset's.</summary>
+    public int ReflectionRateHz { get; set; }
+
+    /// <summary>Threads per simulation; 0 = the preset's (a quarter of the cores, up to 4).</summary>
+    public int ReflectionThreads { get; set; }
+
+    /// <summary>Seconds of early reflections rendered exactly (directional); 0 = the preset's.</summary>
+    public float ReflectionTransitionSeconds { get; set; }
+
+    /// <summary>
+    /// Scales all reverb (0..4; also .steamaudio reverb gain). 1 is the level Steam Audio
+    /// simulates; the default is tuned by ear on a 7.1.4 system, where the simulated level is
+    /// far too much on top of the game's own sound mix.
+    /// </summary>
+    public float ReflectionGain { get; set; } = 0.1f;
+
+    /// <summary>Scales the early reflections, the first 0.1 s or so (0 = off, 0..4; also .steamaudio reverb early).</summary>
+    public float ReflectionEarlyGain { get; set; } = 1f;
+
+    /// <summary>Scales the reverb tail after them (0 = off, 0..4; also .steamaudio reverb tail).</summary>
+    public float ReflectionTailGain { get; set; } = 1f;
 
     /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
@@ -117,10 +179,30 @@ public sealed class SteamAudioConfig
         DirectSimulation = Occlusion,
         OcclusionSamples = Math.Clamp(OcclusionSamples, 0, 256),
         DirectRateHz = Math.Clamp(OcclusionRateHz, 0, 120),
+        Reflections = Reflections,
+        ReflectionQuality = ReflectionPresets.Resolve(ReflectionQuality, new ReflectionQualitySettings
+        {
+            Sources = ReflectionSources,
+            Rays = ReflectionRays,
+            Bounces = ReflectionBounces,
+            DurationSeconds = ReflectionDurationSeconds,
+            Order = ReflectionOrder,
+            RateHz = ReflectionRateHz,
+            Threads = ReflectionThreads,
+            TransitionSeconds = ReflectionTransitionSeconds,
+        }),
         HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
             : modConfigDirectory is null ? HrtfSofaFile.Trim()
             : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),
     };
+
+    /// <summary>The reflection gain, clamped to what the engine accepts.</summary>
+    public float ReflectionGainClamped() => ClampGain(ReflectionGain);
+
+    /// <summary>The early reflections' and the tail's gains, clamped to what the engine accepts.</summary>
+    public (float Early, float Tail) ReflectionMixClamped() => (ClampGain(ReflectionEarlyGain), ClampGain(ReflectionTailGain));
+
+    private static float ClampGain(float gain) => float.IsFinite(gain) ? Math.Clamp(gain, 0f, 4f) : 1f;
 
     /// <summary>The trims by bus; unknown names are ignored.</summary>
     public IReadOnlyDictionary<AudioBus, float> CategoryTrimsDb()

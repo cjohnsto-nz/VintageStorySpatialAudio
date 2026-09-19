@@ -43,6 +43,9 @@ public static class ScenarioRunner
                 StreamThresholdMs = scenario.Engine.StreamThresholdMs,
                 MaxRealVoices = scenario.Engine.MaxRealVoices,
                 MaxBinauralVoices = scenario.Engine.MaxBinauralVoices,
+                // No geometry to reflect off; and offline, the reflection simulation would run on
+                // the rendering thread and count in the block load.
+                Reflections = false,
             },
             log);
         engine.SetRenderMode(scenario.RenderMode);

@@ -283,6 +283,8 @@ asset PCM ─► variable-rate resampler (rate ratio × pitch; polyphase windowe
   - N sources 4–32
   - Irradiance minimum distance 1 m
 - **Open-sky handling:** rays escaping above the loaded vertical extent count as sky, which is fully absorptive. Otherwise an open field would reverberate off the snapshot's edges.
+- **As built (ADR 0012):** every world sound is simulated by Steam Audio from where it is (sounds within 3 m share a "place", kept while sounds keep happening there), with no other path for its reflections; a new place's first result runs at once. The listener-centred reverb serves head-locked sounds only.
+- **Rendering (ADR 0009):** HYBRID's parametric tail is mono and sits ~6 dB under the simulated response, and HYBRID can't use a reflection mixer. So each slot convolves only the early part (Steam Audio's CONVOLUTION effect over the hybrid-windowed response) and renders the tail with our own 8-output diffuse reverb, calibrated to the convolution response. Speakers decode through our AllRAD decoder (VBAP, so 7.1.4 has heights). Open sky needs nothing extra: no surfaces face unloaded chunks.
 
 ### 5.5 Pathing (sound around corners and through doorways)
 

@@ -43,6 +43,10 @@ add_library(vsaudio_core STATIC
     src/audio/listener_pose.hpp
     src/audio/mixer.cpp
     src/audio/mixer.hpp
+    src/audio/reflections.cpp
+    src/audio/reflections.hpp
+    src/audio/speaker_decoder.cpp
+    src/audio/speaker_decoder.hpp
     src/audio/spatial.cpp
     src/audio/spatial.hpp
     src/audio/spatial_tier.hpp
@@ -67,6 +71,8 @@ add_library(vsaudio_core STATIC
     src/decode/decoders.hpp
     src/dsp/gain_ramp.hpp
     src/dsp/high_shelf.hpp
+    src/dsp/late_reverb.cpp
+    src/dsp/late_reverb.hpp
     src/dsp/limiter.cpp
     src/dsp/limiter.hpp
     src/dsp/resampler.cpp
@@ -82,6 +88,11 @@ add_library(vsaudio_core STATIC
     src/world/direct_sim.hpp
     src/world/mesher.cpp
     src/world/mesher.hpp
+    src/world/ray_paths.cpp
+    src/world/ray_paths.hpp
+    src/world/reflection_channel.hpp
+    src/world/reflection_sim.cpp
+    src/world/reflection_sim.hpp
     src/world/transmission.cpp
     src/world/transmission.hpp
     src/world/voxel.hpp

@@ -26,6 +26,12 @@ constexpr float kCentreRadius = 0.5f;
 // Direct simulation results: smoothing time, and how long a new voice may wait for its first.
 constexpr double kDirectSmoothSeconds = 0.06;
 constexpr double kDirectMaxHoldSeconds = 0.08;
+// Places (ADR 0012): sounds within this distance of a place share its simulation; a sound takes
+// a place in use only if it is this much louder (+6 dB) than the place's loudest user; a place
+// nothing has used for this long is let go.
+constexpr float kPlaceRadius = 3.0f;
+constexpr float kPlaceSteal = 2.0f;
+constexpr double kPlaceIdleSeconds = 30.0;
 
 template <typename T>
 void store_max(std::atomic<T>& target, T value) noexcept {
@@ -46,7 +52,7 @@ void store_min(std::atomic<T>& target, T value) noexcept {
 Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
              SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
              LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget,
-             world::DirectChannel* direct)
+             world::DirectChannel* direct, ReflectionRenderer* reflections)
     : kernel_(kernel),
       slots_(slots),
       slot_count_(slot_count),
@@ -58,7 +64,9 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
       listener_(listener),
       block_frames_(block_frames),
       binaural_budget_(binaural_budget),
-      direct_(direct) {
+      direct_(direct),
+      reflections_(reflections) {
+    reflection_gain_buf_.resize(block_frames);
     ranking_.resize(spatial.pool_size());
     set_generation_.assign(spatial.pool_size(), 0);
     direct_state_.resize(spatial.pool_size());
@@ -105,6 +113,8 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
     const double block_seconds = static_cast<double>(block_frames_) / sample_rate;
     direct_alpha_ = static_cast<float>(1.0 - std::exp(-block_seconds / kDirectSmoothSeconds));
     direct_max_hold_ = static_cast<uint32_t>(std::ceil(kDirectMaxHoldSeconds / block_seconds));
+    place_idle_blocks_ = static_cast<uint64_t>(std::ceil(kPlaceIdleSeconds / block_seconds));
+    places_.assign(reflections_ != nullptr && reflections_->enabled() ? reflections_->slot_count() : 0, Place{});
     limiter_.prepare(sample_rate);
     block_out_.assign(static_cast<std::size_t>(block_frames_) * channels, 0.0f);
     block_read_ = block_frames_;  // empty: the next render() starts a block
@@ -115,6 +125,7 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
         RenderVoice& v = slots_[active_[i]].render;
         v.effect_set = -1;
         v.is_virtual = false;
+        v.reflection_slot = -1;  // the reflection renderer was prepared afresh
     }
 }
 
@@ -147,11 +158,15 @@ void Mixer::render_block() noexcept {
     }
     pose_ = listener_.read();
     update_binaural_threshold();
+    update_places();
 
     for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
         bus_gain_[b].render(bus_gains_[b], frames);
     }
     spatial_.begin_block();
+    if (reflections_ != nullptr) {
+        reflections_->begin_block();
+    }
     bus_used_.fill(false);
     for (uint32_t i = 0; i < active_count_;) {
         if (!render_voice(active_[i])) {
@@ -179,6 +194,7 @@ void Mixer::render_block() noexcept {
             }
         }
     }
+    mix_reflections();
     // The world ambisonic bus (bus gains already applied), decoded for the listener's head.
     const Orientation orientation{
         {pose_.right[0], pose_.right[1], pose_.right[2]},
@@ -247,6 +263,12 @@ void Mixer::apply(const Command& c) noexcept {
             }
             return;
         case Op::SetMasterGain: master_gain_.linear(c.value, smooth_frames_); return;
+        case Op::SetReflectionGain: reflection_gain_.linear(c.value, smooth_frames_); return;
+        case Op::SetReflectionMix:
+            if (reflections_ != nullptr) {
+                reflections_->set_mix(c.value, c.seconds, smooth_frames_);
+            }
+            return;
         case Op::SetRenderMode:
             render_mode_ = c.flags == VSA_RENDER_SPEAKERS ? VSA_RENDER_SPEAKERS : VSA_RENDER_HEADPHONES;
             spatial_.reset_all();  // the other effect kind's state is stale
@@ -539,6 +561,7 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
     // ranks low. Virtualisation does not: an occluded voice stays real, so it keeps being
     // simulated and is heard again the moment a door opens.
     v.level = level;
+    v.open_level = level;
     if (spatial && v.effect_set >= 0 && direct_state_[static_cast<std::size_t>(v.effect_set)].primed) {
         const DirectState& d = direct_state_[static_cast<std::size_t>(v.effect_set)];
         v.level = level * (d.occlusion + (1.0f - d.occlusion) * d.transmission[1]);
@@ -657,6 +680,7 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         if (v.shelf.active()) {
             v.shelf.process(left, frames, 0);
         }
+        send_reflections(s, params, left);
         if (v.tier == SpatialTier::Ambisonic) {
             // The shared bus is decoded after every bus gain, so this voice's is applied now.
             const float* bus_gain = bus_gains_[b];
@@ -720,6 +744,7 @@ SpatialParams Mixer::spatial_params(const RenderVoice& v) const noexcept {
     const float distance = std::sqrt(dot(local, local));
 
     SpatialParams p;
+    p.distance = distance;
     p.distance_gain = std::min(1.0f, v.min_distance / std::max(distance, 1e-6f));
     for (std::size_t band = 0; band < 3; ++band) {
         p.air_absorption[band] = std::exp(-kAirAbsorption[band] * distance);
@@ -842,12 +867,171 @@ void Mixer::update_binaural_threshold() noexcept {
 }
 
 void Mixer::release_effects(RenderVoice& v) noexcept {
+    leave_place(v);
     if (v.effect_set >= 0) {
         if (direct_ != nullptr) {
             direct_->input(static_cast<uint32_t>(v.effect_set)).generation.store(0, std::memory_order_release);
         }
         spatial_.release(v.effect_set);
         v.effect_set = -1;
+    }
+}
+
+void Mixer::leave_place(RenderVoice& v) noexcept {
+    if (v.reflection_slot > 0) {
+        Place& p = places_[static_cast<std::size_t>(v.reflection_slot)];
+        if (p.generation == v.place_generation && p.users > 0) {
+            --p.users;
+        }
+    }
+    v.reflection_slot = -1;
+}
+
+void Mixer::update_places() noexcept {
+    ++block_index_;
+    for (std::size_t i = 1; i < places_.size(); ++i) {
+        Place& p = places_[i];
+        p.ranked = p.level;
+        p.level = 0.0f;
+        if (p.used && p.users == 0 && block_index_ - p.last_used > place_idle_blocks_) {
+            reflections_->release(static_cast<int>(i));
+            p.used = false;
+        }
+    }
+}
+
+int Mixer::assign_place(VoiceSlot& s) noexcept {
+    RenderVoice& v = s.render;
+    int nearest = -1;
+    float nearest_d2 = kPlaceRadius * kPlaceRadius;
+    for (std::size_t i = 1; i < places_.size(); ++i) {
+        const Place& p = places_[i];
+        if (!p.used) {
+            continue;
+        }
+        float d2 = 0.0f;
+        for (int k = 0; k < 3; ++k) {
+            const float d = p.position[k] - v.position[k];
+            d2 += d * d;
+        }
+        if (d2 <= nearest_d2) {
+            nearest_d2 = d2;
+            nearest = static_cast<int>(i);
+        }
+    }
+    if (nearest > 0) {
+        Place& p = places_[static_cast<std::size_t>(nearest)];
+        ++p.users;
+        v.reflection_slot = nearest;
+        v.place_generation = p.generation;
+        return nearest;
+    }
+    int slot = reflections_->acquire(s.handle);
+    if (slot < 0) {
+        // The place unused the longest; failing that, a place in use whose loudest sound is well
+        // below this one (its users lose their reflections until they find another place).
+        uint64_t oldest = std::numeric_limits<uint64_t>::max();
+        float quietest = std::numeric_limits<float>::infinity();
+        int quiet = -1;
+        for (std::size_t i = 1; i < places_.size(); ++i) {
+            const Place& p = places_[i];
+            if (!p.used) {
+                continue;
+            }
+            if (p.users == 0 && p.last_used < oldest) {
+                oldest = p.last_used;
+                slot = static_cast<int>(i);
+            } else if (p.users > 0 && p.ranked < quietest) {
+                quietest = p.ranked;
+                quiet = static_cast<int>(i);
+            }
+        }
+        if (slot < 0 && quiet > 0 && v.open_level > kPlaceSteal * quietest) {
+            slot = quiet;
+        }
+        if (slot < 0) {
+            return -1;
+        }
+        reflections_->reassign(slot, s.handle);
+    }
+    Place& p = places_[static_cast<std::size_t>(slot)];
+    p.used = true;
+    std::copy_n(v.position, 3, p.position);
+    p.users = 1;
+    p.level = v.open_level;
+    p.ranked = v.open_level;
+    p.generation = p.generation + 1 == 0 ? 1 : p.generation + 1;
+    reflections_->set_position(slot, v.position);
+    v.reflection_slot = slot;
+    v.place_generation = p.generation;
+    return slot;
+}
+
+void Mixer::send_reflections(VoiceSlot& s, const SpatialParams& params, const float* mono) noexcept {
+    if (reflections_ == nullptr || !reflections_->enabled()) {
+        return;
+    }
+    RenderVoice& v = s.render;
+    int slot = 0;  // head-locked sounds: the listener's own reverb
+    if (v.spatial == VSA_SPATIAL_WORLD) {
+        slot = v.reflection_slot;
+        if (slot > 0 && places_[static_cast<std::size_t>(slot)].generation != v.place_generation) {
+            v.reflection_slot = -1;  // the place was taken over
+            slot = -1;
+        }
+        if (slot > 0) {
+            Place& p = places_[static_cast<std::size_t>(slot)];
+            if (p.users == 1) {
+                // Alone at its place, a moving sound takes the place with it.
+                std::copy_n(v.position, 3, p.position);
+                reflections_->set_position(slot, v.position);
+            } else {
+                float d2 = 0.0f;
+                for (int k = 0; k < 3; ++k) {
+                    const float d = p.position[k] - v.position[k];
+                    d2 += d * d;
+                }
+                if (d2 > kPlaceRadius * kPlaceRadius) {
+                    leave_place(v);  // moved away from a shared place: find another
+                    slot = -1;
+                }
+            }
+        }
+        if (slot < 0) {
+            slot = assign_place(s);
+        }
+        if (slot < 0) {
+            return;  // no place to be had: this sound has no reflections
+        }
+        Place& p = places_[static_cast<std::size_t>(slot)];
+        p.last_used = block_index_;
+        p.level = std::max(p.level, v.open_level);
+    }
+    // Steam Audio simulates a source that plays at 1 at 1 m (1 / distance beyond); our direct path
+    // plays at 1 within min_distance (min_distance / distance beyond). The ratio of the two scales
+    // its reflections to this sound. Sent from the first block: a waiting place's effects take it
+    // into their history.
+    const float loudness = std::clamp(params.distance, 1.0f, std::max(1.0f, v.min_distance));
+    const float* bus_gain = bus_gains_[s.bus];
+    float* send = reflections_->send(slot);
+    for (uint32_t j = 0; j < block_frames_; ++j) {
+        send[j] += mono[j] * bus_gain[j] * loudness;
+    }
+}
+
+void Mixer::mix_reflections() noexcept {
+    if (reflections_ == nullptr || !reflections_->enabled()) {
+        return;
+    }
+    float* gain = reflection_gain_buf_.data();
+    reflection_gain_.render(gain, block_frames_);
+    if (!reflections_->render(gain)) {
+        return;
+    }
+    if (render_mode_ == VSA_RENDER_HEADPHONES) {
+        spatial_.add_ambisonic(reflections_->bus(), reflections_->bus_channels());
+    } else {
+        reflections_->decode_speakers(pose_.right, pose_.up, pose_.forward, master_.data());
     }
 }
 

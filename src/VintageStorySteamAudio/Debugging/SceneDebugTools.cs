@@ -25,7 +25,14 @@ internal sealed class SceneDebugTools : IDisposable
         SceneOverlay.Faces | SceneOverlay.Wireframe,
         SceneOverlay.Sources,
         SceneOverlay.Sources | SceneOverlay.Wireframe,
+        SceneOverlay.Reflections,
+        SceneOverlay.Reflections | SceneOverlay.Wireframe,
     ];
+
+    // Sound paths drawn by the reflections overlay.
+    private const int OverlayRays = 48;
+    private const int OverlayBounces = 6;
+    private const float OverlayRayMetres = 48f;
 
     private readonly ICoreClientAPI capi;
     private readonly AudioEngine engine;
@@ -69,6 +76,7 @@ internal sealed class SceneDebugTools : IDisposable
             renderer.SetProbe(null);
             sources = [];
             renderer.SetSources(sources, default, new Vec3d());
+            renderer.SetReflections([], [], default, new Vec3d());
         }
         else
         {
@@ -97,6 +105,10 @@ internal sealed class SceneDebugTools : IDisposable
             case "sources":
                 SetOverlay(renderer.Overlay ^ SceneOverlay.Sources);
                 return $"Overlay: {Describe(renderer.Overlay)}";
+            case "rays":
+            case "reflections":
+                SetOverlay(renderer.Overlay ^ SceneOverlay.Reflections);
+                return $"Overlay: {Describe(renderer.Overlay)}";
             case "off":
                 SetOverlay(SceneOverlay.None);
                 return "Overlay off.";
@@ -120,7 +132,41 @@ internal sealed class SceneDebugTools : IDisposable
                 renderer.Clear();
                 return world.Reload();
             default:
-                return "Usage: .steamaudio scene [status|wire|faces|bounds|sources|off|radius N|legend|export|reload]";
+                return "Usage: .steamaudio scene [status|wire|faces|bounds|sources|rays|off|radius N|legend|export|reload]";
+        }
+    }
+
+    /// <summary>".steamaudio reverb [status|gain N|early N|tail N|rays]".</summary>
+    public string ReverbCommand(string? action, string? argument)
+    {
+        switch ((action ?? string.Empty).ToLowerInvariant())
+        {
+            case "":
+            case "status":
+                return ReflectionsText(detailed: true);
+            case "gain":
+                if (!float.TryParse(argument, NumberStyles.Float, CultureInfo.InvariantCulture, out float gain) || !float.IsFinite(gain) || gain < 0f || gain > 4f)
+                {
+                    return "Usage: .steamaudio reverb gain <0-4> (1 = as simulated; ReflectionGain in the config sets it at start)";
+                }
+
+                engine.SetReflectionGain(gain);
+                return string.Create(CultureInfo.InvariantCulture, $"Reflection gain {gain:0.##} ({20 * Math.Log10(Math.Max(gain, 1e-4f)):0.#} dB).");
+            case "early":
+            case "tail":
+                if (!float.TryParse(argument, NumberStyles.Float, CultureInfo.InvariantCulture, out float part) || !float.IsFinite(part) || part < 0f || part > 4f)
+                {
+                    return $"Usage: .steamaudio reverb {action!.ToLowerInvariant()} <0-4> (1 = as simulated, 0 = off)";
+                }
+
+                bool early = action!.Equals("early", StringComparison.OrdinalIgnoreCase);
+                engine.SetReflectionMix(early ? part : engine.ReflectionEarlyGain, early ? engine.ReflectionTailGain : part);
+                return string.Create(CultureInfo.InvariantCulture, $"Early reflections {engine.ReflectionEarlyGain:0.##}, reverb tail {engine.ReflectionTailGain:0.##}.");
+            case "rays":
+                SetOverlay(renderer.Overlay ^ SceneOverlay.Reflections);
+                return $"Overlay: {Describe(renderer.Overlay)}";
+            default:
+                return "Usage: .steamaudio reverb [status|gain N|early N|tail N|rays]";
         }
     }
 
@@ -150,6 +196,7 @@ internal sealed class SceneDebugTools : IDisposable
         {
             UpdateProbe();
             UpdateSources();
+            UpdateReflections();
             hud.SetText(StatusText());
         }
         catch (NativeException)
@@ -190,6 +237,60 @@ internal sealed class SceneDebugTools : IDisposable
         Vec3f view = player.Pos.GetViewVector();
         var from = new Vec3d(camera.X + (view.X * 0.6), camera.Y + (view.Y * 0.6) - 0.35, camera.Z + (view.Z * 0.6));
         renderer.SetSources(sources, world.Status().Origin, from);
+    }
+
+    private void UpdateReflections()
+    {
+        if ((renderer.Overlay & SceneOverlay.Reflections) == 0 || capi.World.Player?.Entity is not { } player)
+        {
+            return;
+        }
+
+        (int X, int Y, int Z) o = world.Status().Origin;
+        Vec3d camera = player.CameraPos;
+        IReadOnlyList<RaySegment> rays = engine.TraceRays(
+            ((float)(camera.X - o.X), (float)(camera.Y - o.Y), (float)(camera.Z - o.Z)), OverlayRays, OverlayBounces, OverlayRayMetres);
+        Vec3f view = player.Pos.GetViewVector();
+        var from = new Vec3d(camera.X + (view.X * 0.6), camera.Y + (view.Y * 0.6) - 0.35, camera.Z + (view.Z * 0.6));
+        renderer.SetReflections(rays, engine.GetReflectionSources(), o, from);
+    }
+
+    /// <summary>What kind of space a decay time suggests (for the HUD).</summary>
+    internal static string DescribeSpace(float rt60) => rt60 switch
+    {
+        <= 0f => "not simulated yet",
+        < 0.25f => "open or deadened",
+        < 0.6f => "a small room",
+        < 1.2f => "a large room",
+        < 2.0f => "a hall",
+        _ => "a cave or cathedral",
+    };
+
+    private string ReflectionsText(bool detailed)
+    {
+        ReflectionStats r = engine.GetReflectionStats();
+        if (!r.Enabled)
+        {
+            return "Reflections: off (Reflections in " + Config.SteamAudioConfig.FileName + ")";
+        }
+
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture, $"Reflections: RT60 here {r.ListenerReverbTimes.Low:0.00}/{r.ListenerReverbTimes.Mid:0.00}/{r.ListenerReverbTimes.High:0.00} s ({DescribeSpace(r.ListenerReverbTimes.Mid)}), ")
+            .Append(CultureInfo.InvariantCulture, $"level {r.OutputDb:0} dB, gain {r.Gain:0.##} (early {engine.ReflectionEarlyGain:0.##}, tail {engine.ReflectionTailGain:0.##})\n")
+            .Append(CultureInfo.InvariantCulture, $"  {r.LiveSlots}/{r.Slots} places simulated ({r.WaitingSlots} waiting, {r.DrainingSlots} fading); ")
+            .Append(CultureInfo.InvariantCulture, $"simulation {r.LastTickMs:0} ms (max {r.MaxTickMs:0}), {r.Rays} rays x {r.Bounces} bounces, {r.DurationSeconds:0.0} s, order {r.Order}, up to {r.RateHz} Hz on {r.Threads} threads");
+        if (!detailed && (renderer.Overlay & SceneOverlay.Reflections) == 0)
+        {
+            return text.ToString();
+        }
+
+        foreach (ReflectionSourceInfo s in engine.GetReflectionSources().Where(s => s.Slot > 0).Take(8))
+        {
+            string name = describeVoice(s.Voice) ?? $"voice {s.Voice}";
+            text.Append(CultureInfo.InvariantCulture, $"\n  at {name}: RT60 {s.ReverbTimes.Mid:0.00} s ({DescribeSpace(s.ReverbTimes.Mid)})");
+        }
+
+        return text.ToString();
     }
 
     private string SourcesText()
@@ -277,6 +378,7 @@ internal sealed class SceneDebugTools : IDisposable
 
         text.Append('\n').Append(ProbeText());
         text.Append('\n').Append(SourcesText());
+        text.Append('\n').Append(ReflectionsText(detailed: false));
 
         return text.ToString();
     }

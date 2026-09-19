@@ -31,6 +31,8 @@ enum class Op : uint32_t {
     SetBusGain,
     SetMasterGain,
     SetRenderMode,
+    SetReflectionGain,
+    SetReflectionMix,  // value: early reflections' gain, seconds: the tail's
 };
 
 struct Command {
@@ -84,8 +86,15 @@ struct RenderVoice {
     int effect_set = -1;
     /// Inaudible: position advances, nothing is rendered.
     bool is_virtual = false;
-    /// Estimated output level from the last block (gain x bus x master x distance).
+    /// Estimated output level from the last block (gain x bus x master x distance), times what
+    /// walls let through.
     float level = 0.0f;
+    /// The same without walls: what decides who gets reflections of their own.
+    float open_level = 0.0f;
+    /// The place (a reflection slot >= 1) whose simulation its reflections come from, or -1
+    /// (ADR 0012), and that place's generation when it joined: the place may have been taken over.
+    int reflection_slot = -1;
+    uint32_t place_generation = 0;
     /// Panned (speakers), its own HRTF (headphones, within the binaural budget) or the world
     /// ambisonic bus (headphones, beyond it).
     SpatialTier tier = SpatialTier::Panned;

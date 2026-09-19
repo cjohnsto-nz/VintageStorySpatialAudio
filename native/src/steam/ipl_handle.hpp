@@ -59,6 +59,7 @@ using PanningEffect = IplHandle<IPLPanningEffect, iplPanningEffectRelease>;
 using InstancedMesh = IplHandle<IPLInstancedMesh, iplInstancedMeshRelease>;
 using AmbisonicsEncodeEffect = IplHandle<IPLAmbisonicsEncodeEffect, iplAmbisonicsEncodeEffectRelease>;
 using AmbisonicsDecodeEffect = IplHandle<IPLAmbisonicsDecodeEffect, iplAmbisonicsDecodeEffectRelease>;
+using ReflectionEffect = IplHandle<IPLReflectionEffect, iplReflectionEffectRelease>;
 
 /// Human-readable name for an IPLerror.
 [[nodiscard]] const char* error_name(IPLerror error) noexcept;

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -33,6 +34,31 @@ struct AcousticMaterial {
     float scattering = 0.05f;
     float transmission[3] = {0.0f, 0.0f, 0.0f};
     float attenuation_db_per_metre[3] = {0.0f, 0.0f, 0.0f};
+};
+
+/// Guards the top-level scene and the simulators attached to it. Simulations hold it shared (the
+/// direct and reflection simulations trace the same committed scene at once); scene edits hold it
+/// exclusively. A waiting edit holds off new simulation runs, so a stream of overlapping runs
+/// (reflections take tens of milliseconds) cannot starve it.
+class SceneLock {
+public:
+    void lock() {
+        writers_.fetch_add(1, std::memory_order_acq_rel);
+        mutex_.lock();
+        writers_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    void unlock() { mutex_.unlock(); }
+    void lock_shared() {
+        while (writers_.load(std::memory_order_acquire) > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        mutex_.lock_shared();
+    }
+    void unlock_shared() { mutex_.unlock_shared(); }
+
+private:
+    std::shared_mutex mutex_;
+    std::atomic<int> writers_{0};
 };
 
 /// A ray's first hit on the scene's meshes (see WorldScene::raycast).
@@ -122,11 +148,11 @@ public:
     [[nodiscard]] std::shared_ptr<const VoxelView> voxel_view() const;
 
     /// Attaches a simulator: it is given the current top-level scene now and every new one as it
-    /// is built (under scene_lock(), which the simulator must hold while it runs). Detach before
-    /// destroying the simulator or this scene.
+    /// is built (under scene_lock(), which the simulator must hold, shared, while it runs or
+    /// commits). Detach before destroying the simulator or this scene.
     void attach(IPLSimulator simulator);
     void detach(IPLSimulator simulator);
-    [[nodiscard]] std::mutex& scene_lock() noexcept { return scene_mutex_; }
+    [[nodiscard]] SceneLock& scene_lock() noexcept { return scene_mutex_; }
     /// Top-level scenes built so far.
     [[nodiscard]] uint64_t commit_count() const noexcept { return commits_.load(std::memory_order_acquire); }
 
@@ -161,7 +187,7 @@ private:
     void compact();
 
     const steam::SteamContext& steam_;
-    mutable std::mutex scene_mutex_;  // the current top-level scene and the attached simulators
+    SceneLock scene_mutex_;  // the current top-level scene and the attached simulators
     std::unique_ptr<Top> top_;
     std::vector<IPLSimulator> simulators_;
     std::atomic<uint64_t> commits_{0};

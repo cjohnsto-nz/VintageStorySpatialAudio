@@ -176,6 +176,108 @@ TransmissionTrace VoxelView::trace(const double from[3], const double to[3]) con
     return result;
 }
 
+bool VoxelView::first_hit(const double origin[3], const double direction[3], double max_distance,
+                          VoxelHit& hit) const {
+    int64_t cell[3];
+    int64_t step[3];
+    double t_max[3];
+    double t_delta[3];
+    for (int a = 0; a < 3; ++a) {
+        cell[a] = static_cast<int64_t>(std::floor(origin[a]));
+        const double d = direction[a];
+        if (d > 0.0) {
+            step[a] = 1;
+            t_max[a] = (static_cast<double>(cell[a] + 1) - origin[a]) / d;
+            t_delta[a] = 1.0 / d;
+        } else if (d < 0.0) {
+            step[a] = -1;
+            t_max[a] = (origin[a] - static_cast<double>(cell[a])) / -d;
+            t_delta[a] = -1.0 / d;
+        } else {
+            step[a] = 0;
+            t_max[a] = std::numeric_limits<double>::infinity();
+            t_delta[a] = std::numeric_limits<double>::infinity();
+        }
+    }
+    constexpr double kEpsilon = 1e-6;
+    double t = 0.0;
+    int entered = -1;  // the axis crossed into the current cell; -1 for the starting cell
+    for (int steps = 0; steps < kMaxSteps && t <= max_distance; ++steps) {
+        const int axis = t_max[0] < t_max[1] ? (t_max[0] < t_max[2] ? 0 : 2) : (t_max[1] < t_max[2] ? 1 : 2);
+        const double t_exit = t_max[axis];
+        int index = 0;
+        const ChunkVoxels* chunk = chunk_of(cell[0], cell[1], cell[2], index);
+        const uint16_t material = chunk != nullptr ? chunk->materials[static_cast<std::size_t>(index)] : kAir;
+        if (entered >= 0 && kind(material) != MaterialKind::Air) {
+            hit.distance = t;
+            for (int a = 0; a < 3; ++a) {
+                hit.point[a] = origin[a] + direction[a] * t;
+                hit.normal[a] = a == entered ? static_cast<double>(-step[a]) : 0.0;
+            }
+            hit.material = material;
+            hit.partial = false;
+            return true;
+        }
+        if (chunk != nullptr && !chunk->partials.empty()) {
+            const auto cell16 = static_cast<uint16_t>(index);
+            auto it = std::lower_bound(chunk->partials.begin(), chunk->partials.end(), cell16,
+                                       [](const PartialBlock& p, uint16_t c) { return p.cell < c; });
+            double best = std::min(t_exit, max_distance);
+            bool found = false;
+            for (; it != chunk->partials.end() && it->cell == cell16; ++it) {
+                if (kind(it->material) == MaterialKind::Air) {
+                    continue;
+                }
+                for (const Box& box : it->boxes) {
+                    // Slab test: where the ray enters the box, and through which face.
+                    double near = -std::numeric_limits<double>::infinity();
+                    double far = std::numeric_limits<double>::infinity();
+                    int face = -1;
+                    bool miss = false;
+                    for (int a = 0; a < 3 && !miss; ++a) {
+                        const double lo = static_cast<double>(cell[a]) + static_cast<double>(box.min[a]);
+                        const double hi = static_cast<double>(cell[a]) + static_cast<double>(box.max[a]);
+                        if (std::abs(direction[a]) < 1e-12) {
+                            miss = origin[a] < lo || origin[a] > hi;
+                            continue;
+                        }
+                        double ta = (lo - origin[a]) / direction[a];
+                        double tb = (hi - origin[a]) / direction[a];
+                        if (ta > tb) {
+                            std::swap(ta, tb);
+                        }
+                        if (ta > near) {
+                            near = ta;
+                            face = a;
+                        }
+                        far = std::min(far, tb);
+                    }
+                    if (miss || face < 0 || near > far || near <= kEpsilon || near >= best) {
+                        continue;  // missed, or starts inside the box
+                    }
+                    best = near;
+                    found = true;
+                    hit.distance = near;
+                    for (int a = 0; a < 3; ++a) {
+                        hit.point[a] = origin[a] + direction[a] * near;
+                        hit.normal[a] = a == face ? (direction[a] > 0.0 ? -1.0 : 1.0) : 0.0;
+                    }
+                    hit.material = it->material;
+                    hit.partial = true;
+                }
+            }
+            if (found) {
+                return true;
+            }
+        }
+        t = t_exit;
+        cell[axis] += step[axis];
+        t_max[axis] += t_delta[axis];
+        entered = axis;
+    }
+    return false;
+}
+
 void VoxelView::clearance(double point[3], double radius) const {
     const int64_t c[3] = {static_cast<int64_t>(std::floor(point[0])), static_cast<int64_t>(std::floor(point[1])),
                           static_cast<int64_t>(std::floor(point[2]))};
@@ -195,6 +297,21 @@ void VoxelView::clearance(double point[3], double radius) const {
             point[a] = static_cast<double>(c[a]) + 1.0 - r;
         }
     }
+}
+
+VoxelView::Passage VoxelView::passage(int64_t x, int64_t y, int64_t z) const {
+    int index = 0;
+    const ChunkVoxels* chunk = chunk_of(x, y, z, index);
+    if (chunk == nullptr) {
+        return Passage::Open;
+    }
+    switch (kind(chunk->materials[static_cast<std::size_t>(index)])) {
+        case MaterialKind::Solid:
+        case MaterialKind::Liquid: return Passage::Closed;
+        case MaterialKind::Porous: return Passage::Open;
+        case MaterialKind::Air: break;
+    }
+    return has_partial(x, y, z) ? Passage::Partial : Passage::Open;
 }
 
 bool VoxelView::has_partial(int64_t x, int64_t y, int64_t z) const {

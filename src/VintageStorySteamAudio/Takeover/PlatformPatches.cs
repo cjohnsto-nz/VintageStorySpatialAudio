@@ -2,6 +2,7 @@ using System.Reflection.Emit;
 using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.Client.NoObf;
 
 namespace VintageStorySteamAudio.Takeover;
@@ -134,6 +135,35 @@ internal static class PlatformPatches
     public static bool ChangeOutputDevice() => active is null;
 
     // ---- ClientMain ----
+
+    [ThreadStatic]
+    private static Entity? emittingEntity;
+
+    /// <summary>The entity a PlaySoundAt(…, Entity, …) overload is playing a sound at, during that call.</summary>
+    internal static Entity? EmittingEntity => emittingEntity;
+
+    /// <summary>Prefix on the PlaySoundAt overloads that take an entity: remember it for PlaySoundAtInternal.</summary>
+    public static void PlaySoundAtEntity(Entity atEntity, out Entity? __state)
+    {
+        __state = emittingEntity;
+        emittingEntity = atEntity;
+    }
+
+    /// <summary>Finalizer for <see cref="PlaySoundAtEntity"/> (runs even if the game throws).</summary>
+    public static void PlaySoundAtEntityDone(Entity? __state) => emittingEntity = __state;
+
+    /// <summary>Prefix on PlaySoundAtInternal: a sound that should follow an entity is announced here.</summary>
+    public static void PlaySoundAtInternal(AssetLocation? location, double x, double y, double z, EnumSoundType soundType) =>
+        active?.OnPlaySound(location, x, y, z, soundType);
+
+    /// <summary>Postfix on PlaySoundAtInternal: 0 means nothing was played.</summary>
+    public static void PlaySoundAtInternalDone(double x, double y, double z, int __result)
+    {
+        if (__result == 0)
+        {
+            active?.OnPlaySoundSkipped(x, y, z);
+        }
+    }
 
     /// <summary>
     /// Removes vanilla's fixed cap of 250 concurrent sounds in PlaySoundAtInternal: the constant

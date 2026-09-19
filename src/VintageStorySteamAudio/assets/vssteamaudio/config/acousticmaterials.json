@@ -5,30 +5,37 @@
   // kind: Air (never meshed), Liquid, Porous or Solid. Surfaces are meshed where a denser kind
   //   meets a more open one, so buried stone against soil has no surface.
   // absorption, scattering: Steam Audio surface properties per band (low, mid, high), 0..1;
-  //   values start from Steam Audio's material presets.
+  //   values start from Steam Audio's material presets. Building materials (wood, brick, ceramic)
+  //   absorb more than the bare presets: the scene has no furniture, beds, shelves or people, and
+  //   plank walls are not sealed panels. Stone and brick stay hard, so the spaces sound apart:
+  //   a 7 x 4 x 7 room decays in about 0.4 s built of wood, 1.3 s of brick, 1.4 s of stone, and a
+  //   large cave (26 x 14 x 26) in about 5 s. Rough materials scatter more: flat voxel faces
+  //   would otherwise be perfect mirrors, and parallel walls ring with flutter echoes.
   // Sound through blocks (ADR 0008), per band: each time the straight path from a sound to the
   //   listener enters the material it loses its "transmission" (an amplitude, 0..1: 0.1 is -20 dB),
   //   plus "attenuationDbPerMetre" for every metre inside it. So a pane or a door costs mostly the
   //   crossing, a thick wall mostly the metres: glass < wood < 1 stone < 3 stone < 6 stone.
+  //   Half the dB of the Phase 5 values (by ear in game: walls were too absolute; a block of
+  //   stone is now about 27 dB mid-band).
   // color: for the debug overlay (#rrggbb).
   "materials": {
     "air":     { "kind": "Air",    "color": "#000000" },
-    "generic": { "kind": "Solid",  "absorption": [0.10, 0.20, 0.30], "scattering": 0.05, "transmission": [0.1, 0.0316, 0.01], "attenuationDbPerMetre": [10, 18, 26], "color": "#ff00ff" },
-    "stone":   { "kind": "Solid",  "absorption": [0.13, 0.20, 0.24], "scattering": 0.05, "transmission": [0.0562, 0.0178, 0.0056], "attenuationDbPerMetre": [12, 20, 30], "color": "#8c8c8c" },
-    "brick":   { "kind": "Solid",  "absorption": [0.03, 0.04, 0.07], "scattering": 0.05, "transmission": [0.0794, 0.0251, 0.0079], "attenuationDbPerMetre": [12, 20, 30], "color": "#b04030" },
-    "ceramic": { "kind": "Solid",  "absorption": [0.01, 0.02, 0.02], "scattering": 0.05, "transmission": [0.0794, 0.0251, 0.0079], "attenuationDbPerMetre": [12, 20, 30], "color": "#d08060" },
-    "soil":    { "kind": "Solid",  "absorption": [0.30, 0.45, 0.60], "scattering": 0.20, "transmission": [0.1, 0.0316, 0.01], "attenuationDbPerMetre": [10, 18, 26], "color": "#7a5230" },
-    "gravel":  { "kind": "Solid",  "absorption": [0.60, 0.70, 0.80], "scattering": 0.30, "transmission": [0.1259, 0.0501, 0.02], "attenuationDbPerMetre": [8, 15, 24], "color": "#a09080" },
-    "sand":    { "kind": "Solid",  "absorption": [0.50, 0.60, 0.70], "scattering": 0.30, "transmission": [0.1259, 0.0501, 0.02], "attenuationDbPerMetre": [8, 15, 24], "color": "#e0cf8a" },
-    "wood":    { "kind": "Solid",  "absorption": [0.11, 0.07, 0.06], "scattering": 0.05, "transmission": [0.1778, 0.0794, 0.0316], "attenuationDbPerMetre": [6, 10, 16], "color": "#b07a3c" },
-    "metal":   { "kind": "Solid",  "absorption": [0.20, 0.07, 0.06], "scattering": 0.05, "transmission": [0.1, 0.0316, 0.01], "attenuationDbPerMetre": [20, 30, 45], "color": "#c0c8d0" },
-    "glass":   { "kind": "Solid",  "absorption": [0.06, 0.03, 0.02], "scattering": 0.05, "transmission": [0.2512, 0.1259, 0.0631], "attenuationDbPerMetre": [4, 8, 12],  "color": "#80e0e0" },
-    "cloth":   { "kind": "Solid",  "absorption": [0.24, 0.69, 0.73], "scattering": 0.30, "transmission": [0.7079, 0.5012, 0.3162], "attenuationDbPerMetre": [3, 6, 10],   "color": "#c060c0" },
-    "snow":    { "kind": "Solid",  "absorption": [0.45, 0.75, 0.90], "scattering": 0.40, "transmission": [0.5012, 0.3162, 0.1778], "attenuationDbPerMetre": [6, 10, 16],  "color": "#f0f0ff" },
-    "ice":     { "kind": "Solid",  "absorption": [0.02, 0.02, 0.03], "scattering": 0.05, "transmission": [0.2512, 0.1259, 0.0631], "attenuationDbPerMetre": [8, 12, 18], "color": "#a8d8ff" },
-    "leaves":  { "kind": "Porous", "absorption": [0.20, 0.40, 0.60], "scattering": 0.80, "transmission": [0.9441, 0.8913, 0.7943], "attenuationDbPerMetre": [1, 2, 4], "color": "#3fa34d" },
-    "water":   { "kind": "Liquid", "absorption": [0.01, 0.01, 0.02], "scattering": 0.05, "transmission": [0.1778, 0.1, 0.0562], "attenuationDbPerMetre": [1, 2, 4],    "color": "#3a7bd5" },
-    "lava":    { "kind": "Liquid", "absorption": [0.05, 0.05, 0.05], "scattering": 0.10, "transmission": [0.1, 0.0316, 0.01], "attenuationDbPerMetre": [20, 30, 40], "color": "#ff5a00" }
+    "generic": { "kind": "Solid",  "absorption": [0.10, 0.20, 0.30], "scattering": 0.30, "transmission": [0.3162, 0.1778, 0.1], "attenuationDbPerMetre": [5, 9, 13], "color": "#ff00ff" },
+    "stone":   { "kind": "Solid",  "absorption": [0.07, 0.10, 0.13], "scattering": 0.40, "transmission": [0.2371, 0.1334, 0.0748], "attenuationDbPerMetre": [6, 10, 15], "color": "#8c8c8c" },
+    "brick":   { "kind": "Solid",  "absorption": [0.08, 0.11, 0.14], "scattering": 0.30, "transmission": [0.2818, 0.1584, 0.0889], "attenuationDbPerMetre": [6, 10, 15], "color": "#b04030" },
+    "ceramic": { "kind": "Solid",  "absorption": [0.05, 0.07, 0.08], "scattering": 0.15, "transmission": [0.2818, 0.1584, 0.0889], "attenuationDbPerMetre": [6, 10, 15], "color": "#d08060" },
+    "soil":    { "kind": "Solid",  "absorption": [0.30, 0.45, 0.60], "scattering": 0.50, "transmission": [0.3162, 0.1778, 0.1], "attenuationDbPerMetre": [5, 9, 13], "color": "#7a5230" },
+    "gravel":  { "kind": "Solid",  "absorption": [0.60, 0.70, 0.80], "scattering": 0.50, "transmission": [0.3548, 0.2238, 0.1414], "attenuationDbPerMetre": [4, 7.5, 12], "color": "#a09080" },
+    "sand":    { "kind": "Solid",  "absorption": [0.50, 0.60, 0.70], "scattering": 0.50, "transmission": [0.3548, 0.2238, 0.1414], "attenuationDbPerMetre": [4, 7.5, 12], "color": "#e0cf8a" },
+    "wood":    { "kind": "Solid",  "absorption": [0.20, 0.30, 0.33], "scattering": 0.30, "transmission": [0.4217, 0.2818, 0.1778], "attenuationDbPerMetre": [3, 5, 8], "color": "#b07a3c" },
+    "metal":   { "kind": "Solid",  "absorption": [0.20, 0.07, 0.06], "scattering": 0.10, "transmission": [0.3162, 0.1778, 0.1], "attenuationDbPerMetre": [10, 15, 22.5], "color": "#c0c8d0" },
+    "glass":   { "kind": "Solid",  "absorption": [0.06, 0.03, 0.02], "scattering": 0.05, "transmission": [0.5012, 0.3548, 0.2512], "attenuationDbPerMetre": [2, 4, 6],  "color": "#80e0e0" },
+    "cloth":   { "kind": "Solid",  "absorption": [0.24, 0.69, 0.73], "scattering": 0.50, "transmission": [0.8414, 0.708, 0.5623], "attenuationDbPerMetre": [1.5, 3, 5],   "color": "#c060c0" },
+    "snow":    { "kind": "Solid",  "absorption": [0.45, 0.75, 0.90], "scattering": 0.50, "transmission": [0.708, 0.5623, 0.4217], "attenuationDbPerMetre": [3, 5, 8],  "color": "#f0f0ff" },
+    "ice":     { "kind": "Solid",  "absorption": [0.02, 0.02, 0.03], "scattering": 0.10, "transmission": [0.5012, 0.3548, 0.2512], "attenuationDbPerMetre": [4, 6, 9], "color": "#a8d8ff" },
+    "leaves":  { "kind": "Porous", "absorption": [0.20, 0.40, 0.60], "scattering": 0.80, "transmission": [0.9716, 0.9441, 0.8912], "attenuationDbPerMetre": [0.5, 1, 2], "color": "#3fa34d" },
+    "water":   { "kind": "Liquid", "absorption": [0.01, 0.01, 0.02], "scattering": 0.05, "transmission": [0.4217, 0.3162, 0.2371], "attenuationDbPerMetre": [0.5, 1, 2],    "color": "#3a7bd5" },
+    "lava":    { "kind": "Liquid", "absorption": [0.05, 0.05, 0.05], "scattering": 0.10, "transmission": [0.3162, 0.1778, 0.1], "attenuationDbPerMetre": [10, 15, 20], "color": "#ff5a00" }
   },
 
   // Block material (EnumBlockMaterial) to acoustic material. Unlisted values use "generic";

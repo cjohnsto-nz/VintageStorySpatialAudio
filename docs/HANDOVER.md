@@ -48,6 +48,180 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Entity sound tracking (from PLAN Phase 8, done early; managed only, uncommitted)
+
+Sounds played at a creature or player follow it while they play; vanilla leaves them where they started. No Doppler (Chris doesn't want it). Ported in spirit from VintageStorySurroundSound, with the problems found in its review fixed.
+
+- **Named by the game:** prefixes on the three `ClientMain.PlaySoundAt(…, Entity, …)` overloads put the entity in a thread-static context (restored by a finalizer).
+- **Announce and claim:** a prefix on `PlaySoundAtInternal` announces the sound with its exact float position (`EntitySoundTracker.Expect`). `CreateSound` claims it by that position.
+  - Announce/claim is needed because the first play of an asset decodes on the thread pool, so the sound is created after the call returns.
+  - A postfix withdraws the announcement when the call returned 0; otherwise it expires after 10 s.
+  - The claimed sound starts at the entity's current position, then moves once per frame in `OnFrame` (only when it has moved at least 1 cm).
+- **Matched by position:** the server sends creature sounds as plain coordinates, even in single player, and those come through the typed `PlaySoundAt` overload.
+  - `Entity`-category sounds and `creature/` / `voice/` assets are matched to the nearest `EntityAgent` (not the local player) whose body (upright axis plus radius, from the selection box) is within `EntitySoundMatchDistance` (1 block).
+  - Nothing is matched if a second creature is within 0.5 blocks of the best.
+  - Only the height offset is kept: the horizontal one is mostly client interpolation lag.
+- **The player's own sounds** (armour, eating, tools: named at the local player, or at exactly their feet) are head-locked 0.75 m ahead and 0.25 m below the ears (`OwnBodyAnchor`), like vanilla's own footsteps.
+  - **Why:** Chris heard armour and eating from the rear speakers. At mid-body, almost straight below the ears, 7.1.4 VBAP puts most of the sound on the nadir, which is shared by all ear-level speakers, so the rears get it too. The listener tilts with the camera, so looking up makes it worse.
+  - **Modelled rear and side share:** 30% of the power looking level, 46% at +20°, 74% at +60°. Head-locked, it's about 2% whatever the pitch.
+- **What happens when things end:** a sound whose entity leaves `LoadedEntities` stays where it was. Tracking ends when the sound stops.
+- **What isn't tracked:** sounds that entity code loads itself (gait, bees, bells, elevators) are left to their owners, which move them.
+- **Config:** `TrackEntitySounds`, `InferEntitySounds`, `EntitySoundMatchDistance`.
+- **Stats:** `.steamaudio stats` has a "Following entities" line.
+- **Verification:** VsaDoctor 38/38 against 1.22.7. `EntitySoundTrackerTests` cover announcement, expiry, cancel, context nesting, inference (tall creatures, lag, ambiguity) and following/letting go against the engine. All 111 managed tests passed on a worktree of `f62e42a` plus these changes (the working tree's native code was mid-ABI-9 change).
+- **To check in game:** walk past running wolves or chickens, and chase a bear. Calls should come from the animal, not from where it was. Watch the stats line for "matched by position" counts.
+
+## Phase 6 (reflections and reverb): in progress on `phase6-reflections`
+
+Phase 5 is merged into `main` (not pushed). The design, and why it differs from PLAN §5.4, is ADR 0009.
+
+### Native (ABI v8)
+
+- **`world/reflection_sim.*` (`ReflectionSimulator`):**
+  - Steam Audio real-time reflections (HYBRID simulation) for a fixed pool of sources that live as long as the simulator.
+  - Slot 0 sits at the listener: the reverb every other world sound shares. Slots 1..N follow the voices the mixer gives them.
+  - Runs on its own thread at up to `rate_hz`, resting at least as long as each run took (so it is busy half the time at most); runs synchronously offline.
+  - Each run simulates the listener's slot plus at most half the voice slots (new voices first, then round-robin).
+  - Rebuilt when the output's sample rate changes (its impulse responses are partitioned for the render block).
+- **`world/reflection_channel.hpp`:** lock-free per-slot inputs (position, voice, generation) and outputs:
+  - the hybrid RT60 / EQ / delay, published under the generation;
+  - `observed`, the input generation the last run started with.
+- **`audio/reflections.*` (`ReflectionRenderer`):** per slot:
+  - a Steam Audio CONVOLUTION effect over the first `transition` seconds;
+  - our `dsp::LateReverb` tail: 16-line FDN, per-band decay, 8 independent outputs as plane waves from a cube's corners.
+  - Everything goes into a world-space Ambisonic bus. A released slot drains and is reused only once `observed == 0` and one pass has consumed any response in flight.
+- **`audio/speaker_decoder.*`:** AllRAD for every speaker layout (VBAP onto the real speakers, max-rE, normalised to a panned voice's power), following the head per block.
+- **Mixer:**
+  - ranks voices for slots by level without walls;
+  - short sounds (< 0.75 s, one-shot) always use the listener's reverb;
+  - sends are taken after voice gain, fades and the bus gain;
+  - a voice cross-fades from the shared reverb to its own slot over 8 blocks.
+  - **Headphones:** the reflections join the world bus's binaural decode, which now runs only at the highest order present (order 2 when only reflections are there).
+  - **Speakers:** the speaker decoder.
+  - `vsa_engine_set_reflection_gain`.
+- **`WorldScene`'s lock is now a writer-preferring shared lock (`SceneLock`):** the direct and reflection simulations trace at once; edits wait at most one run.
+- **Config:**
+  - `reflection_sources`, `_rays`, `_bounces`, `_duration`, `_order`, `_rate_hz`, `_threads`, `_transition`;
+  - defaults are the Medium preset (8 / 2048 / 16 / 1.0 s / order 2 / 10 Hz / 0.1 s);
+  - flag `VSA_ENGINE_FLAG_NO_REFLECTIONS`.
+- **Debug:**
+  - `vsa_engine_get_reflection_stats`: RT60 at the listener per band, output level, slots live/waiting/draining, timings;
+  - `vsa_engine_get_reflection_sources`;
+  - `vsa_scene_trace_rays`: deterministic specular or scattered paths off the voxels, losing each surface's absorption.
+- **Tests:**
+  - **Golden RT60, `test_reflections.cpp`:** closed stone rooms at 20% absorption give 0.40 / 1.08 / 2.29 s against Eyring's 0.43 / 1.08 / 2.43. Also: the open field (13 dB less), the rendered decay against the simulated one, slots and hand-over, gain, validation, and ray paths.
+  - **Tail calibration, `core/test_reflection_calibration.cpp`:** against Steam Audio's full convolution response in five rooms.
+  - **Late reverb, `core/test_late_reverb.cpp`:** RT per band, decorrelation, level, silence, no allocation.
+  - **Speaker decoder, `core/test_speaker_decoder.cpp`:** even power per layout, 7.1.4 heights, direction, head tracking.
+  - **Voxel ray query, `core/test_transmission.cpp`:** first hit.
+  - **Budgets, `core/test_render_budget.cpp`:**
+    - the reflections' render path allocates nothing (slot churn, mode switch, 7.1.4 reopen);
+    - Medium within PLAN's budget: render p99 about 17% (headphones) and 13% (7.1.4) of the block, a run about 27 ms.
+  - The engine test fixture turns reflections off by default: they would add reverb to every level the older tests measure. SceneLab turns them off too (no geometry; offline they would count in its block load).
+
+### Managed
+
+- **Config (`vssteamaudio.json`):**
+  - `Reflections` (on);
+  - `ReflectionQuality` (Low / Medium / High / Ultra, `Config/ReflectionPresets.cs`);
+  - per-value overrides (`ReflectionSources`, `ReflectionRays`, `ReflectionBounces`, `ReflectionDurationSeconds`, `ReflectionOrder`, `ReflectionRateHz`, `ReflectionThreads`, `ReflectionTransitionSeconds`; 0 = the preset's);
+  - `ReflectionGain` (1).
+- **`.steamaudio reverb [status|gain N|rays]`.**
+- **Overlay "reflections"** (in the Ctrl+F7 cycle, or `.steamaudio scene rays`):
+  - 48 sound paths from your head bouncing off the scene, bright cyan fading to dark blue as surfaces absorb them;
+  - a magenta line and diamond to each voice with reflections of its own.
+- **The HUD's reflection lines:**
+  - RT60 where you are per band, with a name for the space ("a small room", "a hall", "a cave or cathedral");
+  - the reflections' level;
+  - slots live/waiting/fading;
+  - the simulation's timings and settings;
+  - with the overlay on, each voice with its own reflections and its RT60.
+- **Vanilla's `SetReverb`** is recorded and ignored. There is no fallback reverb when reflections are off.
+
+### After Chris's first test (ADR 0010)
+
+- **What Chris found:**
+  - reverb far too strong even at gain 0.1;
+  - phasing from early reflections;
+  - a wooden house sounding like a cave;
+  - far animals reverberating in his room, as if through walls.
+- **Causes:**
+  - the listener's shared reverb was fed by distance alone, ignoring walls;
+  - every send was scaled by vanilla's reference distance (3 m and more, so +10 dB);
+  - the listener's reverb had early reflections;
+  - Steam Audio's bare-panel wood preset.
+- **Fixes:**
+  - the listener's reverb gets each sound at its direct path's level (walls included) and has only a tail;
+  - sends are scaled by `clamp(distance, 1, min_distance)`;
+  - short sounds share "spots" simulated where they happen (4 m, kept 20 s after the last sound), so an animal's calls ring in its own room with walls respected by Steam Audio;
+  - building materials absorb more and rough ones scatter more.
+- **Tests:**
+  - a sound outside a closed room adds nothing to the listener's reverb;
+  - reverb keeps the direct sound's ratio for any reference distance;
+  - spots are made, shared and let go.
+- **Open:** the direct sound has no propagation delay, so far sounds' reflections come late after it (58 ms at 20 m). A physical propagation delay would fix that.
+
+### After Chris's second test
+
+- **Reported:**
+  - still strong (gain 0.2);
+  - poor, jumpy quality;
+  - an anvil behind a block heard only by reflections, at very inconsistent levels, sometimes none;
+  - walls too absolute for the direct sound.
+- **Fixes:**
+  - **Tail smoothing:** the tail's level and decay time are smoothed in the log domain over 0.7 s and 1 s (before: ~20 ms). Each run's estimate is noisy.
+  - **Onsets:** a sound's onset goes straight to its ready slot or spot. The old 43 ms crossfade from the listener's reverb (which gets nothing from behind a wall) lost a strike's attack.
+  - **Holding positions:** the reflection simulation holds the listener's and each source's position until they move 0.5 m. Steam Audio averages its runs only while nothing moves at all, so the noise now settles.
+  - **Rays doubled in every preset:** Medium is 4096. They are cheap next to impulse-response rebuilding.
+  - **Separate controls:** `vsa_engine_set_reflection_mix(early, tail)`, `.steamaudio reverb early N` / `tail N`, and `ReflectionEarlyGain` / `ReflectionTailGain` in the config.
+  - **Direct sound through materials:** half the dB (stone 27.5 dB mid-band per block, was 55).
+- **Tests:**
+  - a strike behind a wall has the same reflection level on every repeat (-19 dB on strikes 2–6; the first has none, its spot not existing yet);
+  - a 6 dB level change reaches the tail in steps of at most 0.5 dB per 50 ms;
+  - early and tail can each be turned off.
+- **Materials pulled apart** (wood and stone sounded alike after the first retune): stone 0.07 / 0.10 / 0.13 absorbed, brick 0.08 / 0.11 / 0.14, wood 0.20 / 0.30 / 0.33. A 7×4×7 room decays in about 0.4 s built of wood and 1.4 s of stone; a large cave in about 5 s.
+- **Worth knowing:** in a small room about 97% of the reflected energy is early reflections (the first 0.1 s). `.steamaudio reverb early 0` shows how much is them.
+
+### Back to the plan (ADR 0011)
+
+- **Reported:** reverb volume jumping from hit to hit on an anvil in a small room.
+- **Measured:** Steam Audio's output is identical from run to run. The cause was our routing: own slots, spots, or a tail-only listener reverb, with about 15 dB between them, chosen by slot bookkeeping.
+- **Now:**
+  - one listener reverb (early reflections and tail) for every sound;
+  - each sound feeds it by the louder of its direct path and its shortest path round obstacles through the air (`world/air_paths.*`, recomputed when the listener changes block);
+  - spots removed;
+  - voices' own reflections optional (`VoiceReflections`, ABI v9 `reflection_sources` 0 = none, the default).
+- **Tests:**
+  - six strikes alike, first included (in the open and behind a pillar);
+  - air paths: straight in the open, round a pillar, through a doorway, dearer through a door, none out of a sealed room or between diagonal blocks.
+
+### Steam Audio's own way (ADR 0012)
+
+- **Reported (ADR 0011's single reverb):** no directionality, and leaks through walls again.
+- **Now:** every world sound is simulated from where it is (`world/reflection_sim.*` places; `Mixer::assign_place`), no fallback path at all. Sounds within 3 m share a place; places are kept while used (converging), taken over by the longest-idle or a much louder sound, let go after 30 s idle. A new place's first result runs at once (the simulation thread polls every 4 ms); its effects run muted until then so the onset is in their history.
+- **Removed:** the listener reverb for world sounds, spots, `AirField` and `air_path` (ABI v10), `VoiceReflections`. `ReflectionSources` = places (Medium 10, Low 8, High 20, Ultra 32).
+- **Fixed on the way:** the tail's smoothing primed on a new place's empty parameters and crept up from silence (a click at a new place had no tail).
+- **Measured:** six strikes alike from the first (-16 dB open, -19 dB behind a pillar); rendered decay matches simulated; Medium's 10 live places with 32 voices: render p99 18-21 % (budget 25 %; 12 places 22-28 %), a run ~45 ms. Each live place costs ~55 us per block: the next optimisation.
+
+### Directionality, measured (after Chris's "no panning" report)
+
+- A hole in the left or right wall of a room built round the listener, anvil outside, sounded the same.
+- **Measured (7.1.4, `test_reflections.cpp` / `test_speaker_decoder.cpp`):** a plane wave decodes at 16 dB left over right at order 2 (18.5 at order 3); a click 3 m to the side has its early reflections lean 5.5 dB to that side in the first 40 ms; over 30-150 ms the lean is 1.5 dB (the room's field is diffuse by then, and the tail is diffuse by design). So the rendering is directional; the cue is short.
+- **Why the hole test hears nothing:** reflections carry only what rays through the hole find; the sound "coming through an opening from the opening's direction" is diffraction, which is Steam Audio's *pathing* (PLAN 5.5, Phase 7), not its reflections. Meanwhile the direct sound transmitted through the wall arrives from the anvil's true direction in both cases.
+- **Knobs:** `ReflectionTransitionSeconds` (0.1) lengthens the directional, convolved part at CPU cost; `ReflectionTailGain` lowers the diffuse part.
+
+### Level
+
+- `ReflectionGain` defaults to 0.1 (-20 dB): what Chris finds comfortable on the 7.1.4 system with the current calibration (1 = the level Steam Audio simulates). Worth revisiting if the calibration or the materials change.
+
+### To check in game (Chris)
+
+- **Reverb that follows the space:** walk from outdoors into a small stone room, a big hall, a cave. The HUD's RT60 and space name should follow; outdoors should be nearly dry.
+- **The occlusion feel from Phase 5:** is it better now that sound also arrives by reflections? If reverb is too much or too little overall, try `.steamaudio reverb gain 0.5` or `2` and report which sounds right.
+- **Reflections overlay:** paths should stay inside rooms and escape to the sky outdoors. Magenta lines should go to the loud, lasting sounds (a fire, a trader's music, rain?).
+- **Speakers:** reverb should surround you on the 7.1.4 system (including the heights), not sit in the centre.
+- **Stats:** note `.steamaudio stats` render time and the HUD's simulation time in a busy place.
+
 ## Phase 5 (direct simulation): in progress on `phase5-direct-simulation`
 
 Phase 4 is merged into `main` (not pushed).

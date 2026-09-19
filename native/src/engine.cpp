@@ -85,6 +85,41 @@ Engine::Settings validate(const vsa_engine_config& config) {
         }
         settings.direct_rate_hz = config.direct_rate_hz;
     }
+
+    settings.reflections = (config.flags & VSA_ENGINE_FLAG_NO_REFLECTIONS) == 0;
+    world::ReflectionSettings& r = settings.reflection;
+    const auto range = [&](uint32_t value, uint32_t lo, uint32_t hi, const char* name, uint32_t& out) {
+        if (value == 0) {
+            return;
+        }
+        if (value < lo || value > hi) {
+            throw invalid(std::string(name) + " " + std::to_string(value) + " is outside " + std::to_string(lo) + ".." +
+                          std::to_string(hi));
+        }
+        out = value;
+    };
+    const auto range_f = [&](float value, float lo, float hi, const char* name, float& out) {
+        if (value == 0.0f) {
+            return;
+        }
+        if (!std::isfinite(value) || value < lo || value > hi) {
+            throw invalid(std::string(name) + " " + std::to_string(value) + " is outside " + std::to_string(lo) + ".." +
+                          std::to_string(hi));
+        }
+        out = value;
+    };
+    range(config.reflection_sources, 1, 64, "reflection_sources", r.sources);
+    range(config.reflection_rays, 256, 32768, "reflection_rays", r.rays);
+    range(config.reflection_bounces, 1, 64, "reflection_bounces", r.bounces);
+    range_f(config.reflection_duration, 0.25f, 4.0f, "reflection_duration", r.duration);
+    range(config.reflection_order, 1, 3, "reflection_order", r.order);
+    range(config.reflection_rate_hz, 1, 60, "reflection_rate_hz", r.rate_hz);
+    r.threads = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+    range(config.reflection_threads, 1, 32, "reflection_threads", r.threads);
+    range_f(config.reflection_transition, 0.02f, 0.5f, "reflection_transition", r.transition);
+    if (r.transition >= r.duration) {
+        throw invalid("reflection_transition must be shorter than reflection_duration");
+    }
     return settings;
 }
 
@@ -153,16 +188,19 @@ Engine::Engine(const vsa_engine_config& config)
                       ? std::make_unique<world::DirectSimulator>(*steam_, *scene_, *direct_channel_,
                                                                  settings_.occlusion_samples, settings_.direct_rate_hz)
                       : nullptr),
+      reflection_channel_(settings_.reflections ? std::make_unique<world::ReflectionChannel>(settings_.reflection.sources + 1)
+                                                : nullptr),
       spatial_(*steam_, settings_.max_real_voices, settings_.hrtf_sofa_path),
+      reflections_(*steam_, reflection_channel_.get(), settings_.block_frames),
       mixer_(kernel_, slots_.get(), settings_.max_voices, commands_, events_, retired_, rt_log_, spatial_, listener_,
-             settings_.block_frames, settings_.max_binaural_voices, direct_channel_.get()),
+             settings_.block_frames, settings_.max_binaural_voices, direct_channel_.get(), &reflections_),
       stream_history_frames_(static_cast<uint32_t>(kernel_.max_taps_per_side())),
       stream_window_frames_(kernel_.max_span_frames(settings_.block_frames)) {
     free_slots_.reserve(settings_.max_voices);
     for (uint32_t i = settings_.max_voices; i > 0; --i) {
         free_slots_.push_back(i - 1);  // hand out low slots first
     }
-    mixer_.prepare(settings_.sample_rate, 2);
+    prepare_output(settings_.sample_rate, 2, nullptr);
 
     worker_ = std::thread(&Engine::worker_main, this);
     Log::writef(VSA_LOG_INFO,
@@ -192,6 +230,9 @@ Engine::~Engine() {
         }
     }
     rt_log_.drain();
+    // The reflection effects before the simulator whose impulse responses they read.
+    reflections_.prepare(settings_.sample_rate, 2, nullptr);
+    reflection_sim_.reset();
     // Steam Audio objects (spatial_, then steam_) are released by member destruction order.
     Log::write(VSA_LOG_INFO, "engine destroyed");
 }
@@ -521,9 +562,60 @@ void Engine::set_listener(const vsa_listener& listener) {
     u[2] = r[0] * f[1] - r[1] * f[0];
     std::lock_guard lock(api_mutex_);  // LatestValue has a single writer
     listener_.publish(pose);
+    last_pose_ = pose;
     if (direct_sim_) {
         direct_sim_->set_listener(pose);
     }
+    if (reflection_sim_) {
+        reflection_sim_->set_listener(pose);
+    }
+}
+
+void Engine::set_reflection_gain(float gain) {
+    if (!std::isfinite(gain) || gain < 0.0f || gain > 4.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "reflection gain must be a finite value in 0..4");
+    }
+    Command command{};
+    command.op = Op::SetReflectionGain;
+    command.value = gain;
+    {
+        std::lock_guard lock(api_mutex_);
+        reflection_gain_ = gain;
+    }
+    post_global_command(command);
+}
+
+void Engine::set_reflection_mix(float early, float tail) {
+    if (!std::isfinite(early) || !std::isfinite(tail) || early < 0.0f || tail < 0.0f || early > 4.0f || tail > 4.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "reflection early and tail gains must be finite values in 0..4");
+    }
+    Command command{};
+    command.op = Op::SetReflectionMix;
+    command.value = early;
+    command.seconds = tail;
+    post_global_command(command);
+}
+
+Engine::ReflectionReport Engine::reflection_report() {
+    ReflectionReport report;
+    std::lock_guard lock(api_mutex_);
+    report.gain = reflection_gain_;
+    if (!reflection_sim_) {
+        return report;
+    }
+    report.enabled = true;
+    report.stats = reflection_sim_->stats();
+    ReflectionMeter& meter = reflections_.meter();
+    report.live = meter.live_slots.load(std::memory_order_relaxed);
+    report.waiting = meter.waiting_slots.load(std::memory_order_relaxed);
+    report.draining = meter.draining_slots.load(std::memory_order_relaxed);
+    report.mean_square = meter.mean_square.load(std::memory_order_relaxed);
+    return report;
+}
+
+std::vector<world::ReflectionSlotDebug> Engine::reflection_slots() {
+    std::lock_guard lock(api_mutex_);
+    return reflection_sim_ ? reflection_sim_->slots() : std::vector<world::ReflectionSlotDebug>{};
 }
 
 void Engine::set_render_mode(uint32_t mode) {
@@ -557,7 +649,37 @@ void Engine::render_callback(void* user, float* out, uint32_t frames) noexcept {
 }
 
 void Engine::prepare_callback(void* user, uint32_t sample_rate, uint32_t channels, const Speaker* speakers) {
-    static_cast<Engine*>(user)->mixer_.prepare(sample_rate, channels, speakers);
+    static_cast<Engine*>(user)->prepare_output(sample_rate, channels, speakers);
+}
+
+void Engine::prepare_output(uint32_t sample_rate, uint32_t channels, const Speaker* speakers) {
+    if (settings_.reflections && (!reflection_sim_ || reflection_sim_->sample_rate() != sample_rate)) {
+        reflections_.prepare(sample_rate, channels, nullptr);  // lets go of the old impulse responses
+        std::unique_ptr<world::ReflectionSimulator> simulator;
+        try {
+            simulator = std::make_unique<world::ReflectionSimulator>(*steam_, *scene_, *reflection_channel_,
+                                                                     settings_.reflection, sample_rate,
+                                                                     settings_.block_frames);
+        } catch (const Error& e) {
+            Log::writef(VSA_LOG_ERROR, "reflections unavailable: %s", e.what());
+        }
+        std::lock_guard lock(api_mutex_);
+        reflection_sim_ = std::move(simulator);
+        if (reflection_sim_) {
+            reflection_sim_->set_listener(last_pose_);
+        }
+    }
+    reflections_.prepare(sample_rate, channels, reflection_sim_.get());
+    mixer_.prepare(sample_rate, channels, speakers);
+}
+
+void Engine::set_simulations_threaded(bool threaded) {
+    if (direct_sim_) {
+        direct_sim_->set_threaded(threaded);
+    }
+    if (reflection_sim_) {
+        reflection_sim_->set_threaded(threaded);
+    }
 }
 
 void Engine::offline_block_hook(void* user) noexcept {
@@ -566,11 +688,18 @@ void Engine::offline_block_hook(void* user) noexcept {
     // Deterministic offline rendering: the simulation runs on the rendering thread, on the
     // output's own clock.
     try {
-        if (engine->direct_sim_) {
+        if (engine->direct_sim_ && !engine->direct_sim_->threaded()) {
             engine->direct_sim_->offline_tick(engine->offline_seconds_);
         }
     } catch (const std::exception& e) {
         Log::writef(VSA_LOG_ERROR, "direct simulation: %s", e.what());
+    }
+    try {
+        if (engine->reflection_sim_ && !engine->reflection_sim_->threaded()) {
+            engine->reflection_sim_->offline_tick(engine->offline_seconds_);
+        }
+    } catch (const std::exception& e) {
+        Log::writef(VSA_LOG_ERROR, "reflection simulation: %s", e.what());
     }
     engine->offline_seconds_ += engine->mixer_.block_period_seconds();
 }
@@ -581,9 +710,7 @@ void Engine::open_device_locked(const vsa_device_id* id, uint32_t channels) {
         try {
             spatial_output_.open(id, &render_callback, &prepare_callback, this);
             output_kind_ = VSA_OUTPUT_SPATIAL;
-            if (direct_sim_) {
-                direct_sim_->set_threaded(true);
-            }
+            set_simulations_threaded(true);
             return;
         } catch (const Error& e) {
             Log::writef(VSA_LOG_INFO, "spatial audio unavailable (%s); opening the device directly", e.what());
@@ -591,17 +718,13 @@ void Engine::open_device_locked(const vsa_device_id* id, uint32_t channels) {
     }
     device_.open(id, channels, &render_callback, &prepare_callback, this);
     output_kind_ = VSA_OUTPUT_DEVICE;
-    if (direct_sim_) {
-        direct_sim_->set_threaded(true);
-    }
+    set_simulations_threaded(true);
 }
 
 void Engine::close_device_locked() noexcept {
     device_.close();
     spatial_output_.close();
-    if (direct_sim_) {
-        direct_sim_->set_threaded(false);
-    }
+    set_simulations_threaded(false);
 }
 
 void Engine::open_output(const vsa_output_desc& desc) {
@@ -621,7 +744,7 @@ void Engine::open_output(const vsa_output_desc& desc) {
     reopen_pending_ = false;
     wants_spatial_ = desc.kind == VSA_OUTPUT_SPATIAL;
     if (desc.kind == VSA_OUTPUT_NONE) {
-        mixer_.prepare(rate, desc.channels == 0 ? 2 : desc.channels);
+        prepare_output(rate, desc.channels == 0 ? 2 : desc.channels, nullptr);
         output_kind_ = VSA_OUTPUT_NONE;
         device_id_.reset();
         return;
@@ -633,7 +756,7 @@ void Engine::open_output(const vsa_output_desc& desc) {
         open_device_locked(device_id_ ? &*device_id_ : nullptr, device_channels_);
     } catch (...) {
         // Stay consistent: back to offline output at the configured rate.
-        mixer_.prepare(settings_.sample_rate, 2);
+        prepare_output(settings_.sample_rate, 2, nullptr);
         output_kind_ = VSA_OUTPUT_NONE;
         wants_spatial_ = false;
         device_id_.reset();

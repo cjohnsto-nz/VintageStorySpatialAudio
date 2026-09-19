@@ -114,11 +114,18 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
             .EndSubCommand()
             .BeginSubCommand("scene")
-                .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
+                .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|rays|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
                 .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
                 .HandleWith(args => WithEngine(() => sceneTools is null
                     ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + ")."
                     : sceneTools.Command(args[0] as string, args[1] as string)))
+            .EndSubCommand()
+            .BeginSubCommand("reverb")
+                .WithDescription("Reverb from the world: status, gain N (all of it, 0-4, 1 = as simulated), early N (early reflections), tail N (the reverb after them), rays (show sound paths)")
+                .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
+                .HandleWith(args => WithEngine(() => sceneTools is null
+                    ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + "): nothing to reflect off."
+                    : sceneTools.ReverbCommand(args[0] as string, args[1] as string)))
             .EndSubCommand();
     }
 
@@ -291,6 +298,11 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 $"\nGame sounds: {session.SoundCount} ({session.PendingCount} waiting for data), " +
                 $"{session.Assets.Count} assets ({session.Assets.MemoryBytes / (1024.0 * 1024.0):0.0} MB), " +
                 $"250-sound cap {(takeover.SoundCapRemoved ? "removed" : "STILL ACTIVE")}");
+            text += takeover.EntitySounds is { } entitySounds
+                ? string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"\nFollowing entities: {entitySounds.Count} sounds ({entitySounds.InferredCount} matched by position), {entitySounds.ExpectedCount} awaited")
+                : "\nFollowing entities: off";
         }
 
         return text;
@@ -306,6 +318,9 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             NativeLibraryResolver.Register(NativeLibraryResolver.DefaultNativeDirectory(typeof(SteamAudioModSystem).Assembly.Location));
             EngineVersion version = AudioEngine.GetVersion();
             engine = AudioEngine.Create(config.ToEngineOptions(modConfigDirectory), new GameLoggerEngineLog(logger));
+            engine.SetReflectionGain(config.ReflectionGainClamped());
+            (float early, float tail) = config.ReflectionMixClamped();
+            engine.SetReflectionMix(early, tail);
             SelfTestResult? selfTest = config.RunSelfTestOnStartup ? engine.RunSelfTest() : null;
             return new StatusReport { Version = version, Engine = engine.Info, SelfTest = selfTest, Verification = verification };
         }

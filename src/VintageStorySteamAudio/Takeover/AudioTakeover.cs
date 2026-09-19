@@ -3,6 +3,7 @@ using System.Reflection;
 using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 using Vintagestory.Client.NoObf;
 using VintageStorySteamAudio.Config;
@@ -36,22 +37,31 @@ internal sealed class AudioTakeover : IDisposable
     private readonly Members members;
     private readonly HashSet<string> undecodable = new(StringComparer.Ordinal);
     private readonly bool spatialAudio;
+    private readonly EntitySoundTracker? entitySounds;
+    private readonly bool inferEntitySounds;
+    private readonly double entityMatchDistance;
     private IList<string> deviceNames = [];
     private AudioDevice? selectedDevice;
     private bool? outputForHeadphones;
     private long nextSettingsPoll;
     private bool disposed;
 
-    private AudioTakeover(ICoreClientAPI api, ILogger logger, AudioSession session, Members members, bool spatialAudio)
+    private AudioTakeover(ICoreClientAPI api, ILogger logger, AudioSession session, Members members, SteamAudioConfig config)
     {
         this.api = api;
         this.logger = logger;
         this.session = session;
         this.members = members;
-        this.spatialAudio = spatialAudio;
+        spatialAudio = config.SpatialAudio;
+        entitySounds = config.TrackEntitySounds ? new EntitySoundTracker() : null;
+        inferEntitySounds = config.InferEntitySounds;
+        entityMatchDistance = float.IsFinite(config.EntitySoundMatchDistance) ? Math.Clamp(config.EntitySoundMatchDistance, 0f, 4f) : 1f;
     }
 
     public AudioSession Session => session;
+
+    /// <summary>Sounds following the entity that made them; null when turned off in the config.</summary>
+    public EntitySoundTracker? EntitySounds => entitySounds;
 
     /// <summary>Whether vanilla's 250-sound cap was found and removed.</summary>
     public bool SoundCapRemoved { get; private set; }
@@ -85,7 +95,7 @@ internal sealed class AudioTakeover : IDisposable
         };
         float rangeScale = float.IsFinite(config.SoundRangeMultiplier) ? Math.Clamp(config.SoundRangeMultiplier, 1f, 16f) : 3f;
         PlatformPatches.RangeScaleSquared = rangeScale * rangeScale;
-        var takeover = new AudioTakeover(api, logger, session, members, config.SpatialAudio);
+        var takeover = new AudioTakeover(api, logger, session, members, config);
         try
         {
             string? conflict = takeover.ForeignPatches();
@@ -120,6 +130,7 @@ internal sealed class AudioTakeover : IDisposable
 
         disposed = true;
         PlatformPatches.Active = null;
+        entitySounds?.Clear();
         session.Dispose();
         harmony.UnpatchAll(HarmonyId);
         ResetEmptiedSamples();
@@ -175,8 +186,56 @@ internal sealed class AudioTakeover : IDisposable
         }
 
         string location = meta.Asset.Location.ToString();
-        return session.CreateSound(sound, () => Resolve(meta, location), Math.Max(1, meta.Channels));
+        ISoundAnchor? anchor = entitySounds?.Claim(sound, Environment.TickCount64);
+        if (anchor is OwnBodyAnchor)
+        {
+            OwnBodyAnchor.Place(sound);
+            anchor = null;
+        }
+        else if (anchor is not null && anchor.TryGetPosition(out double x, out double y, out double z))
+        {
+            sound.Position.Set((float)x, (float)y, (float)z);  // it may have moved while the asset decoded
+        }
+
+        SteamAudioSound created = session.CreateSound(sound, () => Resolve(meta, location), Math.Max(1, meta.Channels));
+        if (anchor is not null)
+        {
+            entitySounds!.Track(created, anchor);
+        }
+
+        return created;
     }
+
+    /// <summary>
+    /// ClientMain.PlaySoundAtInternal (main thread), before it plays: if the sound belongs to an
+    /// entity, announce it so it follows that entity once created.
+    /// </summary>
+    public void OnPlaySound(AssetLocation? location, double x, double y, double z, EnumSoundType soundType)
+    {
+        if (entitySounds is null || (x == 0 && y == 0 && z == 0))
+        {
+            return;  // at (0, 0, 0) vanilla plays it unpositioned
+        }
+
+        IClientWorldAccessor? world = api.World;
+        if (world is null)
+        {
+            return;
+        }
+
+        Entity? self = world.Player?.Entity;
+        ISoundAnchor? anchor = PlatformPatches.EmittingEntity is { } entity
+            ? entity == self ? OwnBodyAnchor.Instance : EntityAnchor.Named(world, entity, x, y, z)
+            : IsAtFeet(self, x, y, z) ? OwnBodyAnchor.Instance
+            : inferEntitySounds && EntitySoundInference.IsEligible(location, soundType) ? InferAnchor(world, x, y, z) : null;
+        if (anchor is not null)
+        {
+            entitySounds.Expect((float)x, (float)y, (float)z, anchor, Environment.TickCount64);
+        }
+    }
+
+    /// <summary>ClientMain.PlaySoundAtInternal played nothing (out of range, no asset).</summary>
+    public void OnPlaySoundSkipped(double x, double y, double z) => entitySounds?.Cancel((float)x, (float)y, (float)z);
 
     /// <summary>ClientPlatformWindows.UpdateAudioListener: once per frame on the main thread.</summary>
     public void OnFrame(float posX, float posY, float posZ, float orientX, float orientY, float orientZ)
@@ -192,6 +251,7 @@ internal sealed class AudioTakeover : IDisposable
             session.SetListener(posX, posY, posZ, view.X, view.Y, view.Z);
         }
 
+        entitySounds?.Update(Environment.TickCount64);
         session.Pump();
         PollSettings(force: false);
     }
@@ -276,6 +336,7 @@ internal sealed class AudioTakeover : IDisposable
         members.StartAudio, members.CreateAudioData, members.CreateAudio, members.CreateAudioInGame, members.UpdateListener,
         members.Devices.GetMethod!, members.CurrentDevice.GetMethod!, members.CurrentDevice.SetMethod!,
         members.MasterLevel.GetMethod!, members.MasterLevel.SetMethod!, members.ChangeOutputDevice, members.PlaySoundAt,
+        .. entitySounds is null ? [] : members.PlaySoundAtEntity,
     ];
 
     /// <summary>
@@ -319,7 +380,19 @@ internal sealed class AudioTakeover : IDisposable
         harmony.Patch(members.MasterLevel.GetMethod!, prefix: Prefix(nameof(PlatformPatches.GetMasterSoundLevel)));
         harmony.Patch(members.MasterLevel.SetMethod!, prefix: Prefix(nameof(PlatformPatches.SetMasterSoundLevel)));
         harmony.Patch(members.ChangeOutputDevice, prefix: Prefix(nameof(PlatformPatches.ChangeOutputDevice)));
-        harmony.Patch(members.PlaySoundAt, transpiler: new HarmonyMethod(typeof(PlatformPatches), nameof(PlatformPatches.RemoveSoundCap)));
+        harmony.Patch(
+            members.PlaySoundAt,
+            prefix: entitySounds is null ? null : Prefix(nameof(PlatformPatches.PlaySoundAtInternal)),
+            postfix: entitySounds is null ? null : Prefix(nameof(PlatformPatches.PlaySoundAtInternalDone)),
+            transpiler: new HarmonyMethod(typeof(PlatformPatches), nameof(PlatformPatches.RemoveSoundCap)));
+        if (entitySounds is not null)
+        {
+            foreach (MethodInfo method in members.PlaySoundAtEntity)
+            {
+                harmony.Patch(method, prefix: Prefix(nameof(PlatformPatches.PlaySoundAtEntity)), finalizer: Prefix(nameof(PlatformPatches.PlaySoundAtEntityDone)));
+            }
+        }
+
         SoundCapRemoved = PlatformPatches.SoundCapRemoved;
         if (!SoundCapRemoved)
         {
@@ -433,6 +506,34 @@ internal sealed class AudioTakeover : IDisposable
 
     // ---- helpers ----
 
+    /// <summary>
+    /// Exactly the player's own position: PlaySoundAt(…, IPlayer) and PlaySoundFor place the
+    /// player's sounds at their feet, from the same numbers.
+    /// </summary>
+    private static bool IsAtFeet(Entity? self, double x, double y, double z) =>
+        self?.Pos is { } pos && x == pos.X && y == pos.InternalY && z == pos.Z;
+
+    /// <summary>The creature a coordinates-only sound came from (not the player listening), if it is clear which.</summary>
+    private EntityAnchor? InferAnchor(IClientWorldAccessor world, double x, double y, double z)
+    {
+        Entity? self = world.Player?.Entity;
+        Entity[] around = world.GetEntitiesAround(
+            new Vec3d(x, y, z), (float)entityMatchDistance + 4f, (float)entityMatchDistance + 6f, e => e is EntityAgent && e != self && e.Pos is not null);
+        if (around.Length == 0)
+        {
+            return null;
+        }
+
+        var bodies = new EntitySoundInference.Body[around.Length];
+        for (int i = 0; i < around.Length; i++)
+        {
+            bodies[i] = EntitySoundInference.BodyOf(around[i]);
+        }
+
+        int picked = EntitySoundInference.Pick(x, y, z, bodies, entityMatchDistance);
+        return picked < 0 ? null : EntityAnchor.Matched(world, around[picked], y);
+    }
+
     private AudioAsset? Resolve(AudioMetaData meta, string location)
     {
         if (meta.Loaded < 2)
@@ -538,6 +639,7 @@ internal sealed class AudioTakeover : IDisposable
         MethodInfo DisposeAllSounds,
         MethodInfo ChangeOutputDevice,
         MethodInfo PlaySoundAt,
+        MethodInfo[] PlaySoundAtEntity,
         FieldInfo PlatformInstance,
         FieldInfo IntroMusic,
         FieldInfo SoundAudioData)
@@ -563,6 +665,11 @@ internal sealed class AudioTakeover : IDisposable
                 Get<MethodInfo>("loadedsound.dispose-all"),
                 Get<MethodInfo>("loadedsound.change-output-device"),
                 Get<MethodInfo>("clientmain.play-sound-at"),
+                [
+                    Get<MethodInfo>("clientmain.play-sound-at-entity"),
+                    Get<MethodInfo>("clientmain.play-sound-at-entity-pitch"),
+                    Get<MethodInfo>("clientmain.play-sound-at-entity-random-pitch"),
+                ],
                 Get<FieldInfo>("screenmanager.platform"),
                 Get<FieldInfo>("screenmanager.intro-music"),
                 Get<FieldInfo>("screenmanager.audio-data"));
