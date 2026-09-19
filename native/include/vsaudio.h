@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 5u
+#define VSA_ABI_VERSION 7u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -104,7 +104,9 @@ typedef struct vsa_version_info {
 
 enum {
     /** Enables Steam Audio's API validation layer. Slow; for development builds only. */
-    VSA_ENGINE_FLAG_STEAM_AUDIO_VALIDATION = 1u << 0
+    VSA_ENGINE_FLAG_STEAM_AUDIO_VALIDATION = 1u << 0,
+    /** Disables the direct simulation: no occlusion or transmission by the world scene. */
+    VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION = 1u << 1
 };
 
 /** Resampler quality: zero crossings per side of the bandlimited-interpolation kernel. */
@@ -159,6 +161,13 @@ typedef struct vsa_engine_config {
      * warning and uses the default HRTF.
      */
     const char* hrtf_sofa_path;
+    /**
+     * Direct simulation (occlusion by the world scene): rays per source for Steam Audio's
+     * volumetric occlusion, 0 = 16; 1..256.
+     */
+    uint32_t occlusion_samples;
+    /** Direct simulation updates per second while a device plays, 0 = 30; 1..120. */
+    uint32_t direct_rate_hz;
 } vsa_engine_config;
 
 typedef struct vsa_engine_info {
@@ -392,6 +401,13 @@ typedef struct vsa_listener {
     float forward[3];
     /** Unit vector up from the listener's head, orthogonal to forward. */
     float up[3];
+    /**
+     * Added to the position for rendering only (directions and distances the voices are panned
+     * and spatialised with), not for the simulation, which listens from `position`. E.g. a little
+     * behind the eyes, so sounds at the player's feet are clearly in front rather than straddling
+     * front and back speakers. Zero for none.
+     */
+    float render_offset[3];
 } vsa_listener;
 
 typedef enum vsa_render_mode {
@@ -580,11 +596,14 @@ typedef struct vsa_acoustic_material {
     uint32_t struct_size;
     /** A vsa_material_kind value. */
     uint32_t kind;
-    /** Steam Audio surface properties, 0..1, bands low/mid/high. */
+    /** Surface properties for reflections, 0..1, bands low/mid/high. */
     float absorption[3];
     float scattering;
+    /**
+     * Sound through the material (the direct simulation): amplitude 0..1 per band each time a
+     * path enters it, and the loss per metre inside it, dB per band.
+     */
     float transmission[3];
-    /** Attenuation inside the material, dB per metre per band (the voxel transmission). */
     float attenuation_db_per_metre[3];
     /** UTF-8 name for debugging output (copied), or NULL. */
     const char* name;
@@ -736,6 +755,63 @@ VSA_API vsa_result VSA_CALL vsa_scene_raycast(vsa_engine* engine, const float or
 
 /** Writes the scene as an OBJ file (plus .mtl) in world block coordinates. UTF-8 path. */
 VSA_API vsa_result VSA_CALL vsa_scene_save_obj(vsa_engine* engine, const char* path);
+
+/* =============================================================================================
+ * Direct simulation (Phase 5): occlusion and transmission for world-positioned voices.
+ *
+ * Every world voice rendered with its own effects is simulated against the world scene: Steam
+ * Audio's volumetric occlusion (the visible fraction of the source), and transmission along the
+ * listener-source line through the voxels: each material entered costs its surface transmission
+ * once, plus its per-metre attenuation. Where the centre line is clear but the source is partly
+ * hidden, the hidden part is attenuated as at an edge. A source inside a solid block (a block
+ * being broken) is first moved out of it towards the listener. Results are smoothed over ~60 ms;
+ * a new voice waits (up to 80 ms) for its first result rather than play unoccluded.
+ * ============================================================================================= */
+
+/** vsa_source_debug.flags: the simulated position was moved out of a solid block. */
+#define VSA_SOURCE_ESCAPED (1u << 0)
+
+typedef struct vsa_source_debug {
+    uint32_t struct_size;
+    uint32_t flags;
+    vsa_voice voice;
+    /** Scene coordinates: where the voice is, and where it was simulated from. */
+    float position[3];
+    float simulated_position[3];
+    /** Visible fraction 0..1, and amplitude per band through what is in the way. */
+    float occlusion;
+    float transmission[3];
+    /** Metres of material on the centre line, and how many materials it entered. */
+    float solid_metres;
+    uint32_t crossings;
+} vsa_source_debug;
+
+/**
+ * The sources simulated in the latest tick: fills up to `capacity` entries (out[0].struct_size
+ * set) and sets *out_count to the total.
+ */
+VSA_API vsa_result VSA_CALL vsa_engine_get_sources(vsa_engine* engine, vsa_source_debug* out, uint32_t capacity,
+                                                   uint32_t* out_count);
+
+typedef struct vsa_simulation_stats {
+    uint32_t struct_size;
+    /** Sources simulated in the latest tick. */
+    uint32_t sources;
+    uint64_t ticks;
+    double last_tick_ms;
+    double max_tick_ms;
+    /** The latest tick's Steam Audio occlusion part, and the voxel transmission part. */
+    double occlusion_ms;
+    double transmission_ms;
+    uint32_t rate_hz;
+    uint32_t occlusion_samples;
+    /** Where the latest tick listened from (scene coordinates, after leaving any solid block). */
+    float listener[3];
+    /** The scene origin the latest tick used. */
+    int32_t origin[3];
+} vsa_simulation_stats;
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, vsa_simulation_stats* out);
 
 /**
  * Message for the most recent failure on the calling thread, or "" if none.

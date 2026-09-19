@@ -166,6 +166,8 @@ internal unsafe struct VsaEngineConfig
     public uint MaxBinauralVoices;
     public uint Reserved;
     public byte* HrtfSofaPath;
+    public uint OcclusionSamples;
+    public uint DirectRateHz;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -222,6 +224,9 @@ internal struct VsaListener
     public float UpX;
     public float UpY;
     public float UpZ;
+    public float RenderOffsetX;
+    public float RenderOffsetY;
+    public float RenderOffsetZ;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -429,6 +434,40 @@ internal unsafe struct VsaRayHit
     public uint Lod;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaSourceDebug
+{
+    public uint StructSize;
+    public uint Flags;
+    public ulong Voice;
+    public fixed float Position[3];
+    public fixed float SimulatedPosition[3];
+    public float Occlusion;
+    public fixed float Transmission[3];
+    public float SolidMetres;
+    public uint Crossings;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct VsaSimulationStats
+{
+    public uint StructSize;
+    public uint Sources;
+    public ulong Ticks;
+    public double LastTickMs;
+    public double MaxTickMs;
+    public double OcclusionMs;
+    public double TransmissionMs;
+    public uint RateHz;
+    public uint OcclusionSamples;
+    public float ListenerX;
+    public float ListenerY;
+    public float ListenerZ;
+    public int OriginX;
+    public int OriginY;
+    public int OriginZ;
+}
+
 internal static unsafe partial class VsaNative
 {
     public const int ChunkSize = 32;
@@ -437,9 +476,11 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 5;
+    public const uint AbiVersion = 7;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
+    public const uint EngineFlagNoDirectSimulation = 1u << 1;
+    public const uint SourceEscaped = 1u << 0;
     public const uint FadeStopWhenDone = 1u << 0;
     public const uint EventFlagFadeCancelled = 1u << 0;
     public const int BusCount = 5;
@@ -607,6 +648,14 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_scene_save_obj")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult SceneSaveObj(nint engine, byte* path);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_sources")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineGetSources(nint engine, VsaSourceDebug* sources, uint capacity, out uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_simulation_stats")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineGetSimulationStats(nint engine, ref VsaSimulationStats stats);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_get_last_error")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

@@ -89,6 +89,11 @@ struct RenderVoice {
     /// Panned (speakers), its own HRTF (headphones, within the binaural budget) or the world
     /// ambisonic bus (headphones, beyond it).
     SpatialTier tier = SpatialTier::Panned;
+    /// Blocks held back waiting for the first direct-simulation result (a sound starting behind a
+    /// wall must not play unoccluded meanwhile).
+    uint16_t direct_hold = 0;
+    /// Has produced audio since it was last started (only a voice's onset waits for a result).
+    bool sounded = false;
 
     dsp::HighShelf shelf;
 };

@@ -270,6 +270,40 @@ public sealed class SteamAudioSoundTests
         Assert.Equal((511000, 0, 513000), rig.Session.Engine.GetSceneStats().Origin);
     }
 
+    [Fact]
+    public void The_session_places_sounds_and_listener_in_the_simulation_frame_with_the_eyes_as_listener()
+    {
+        using var rig = new Rig();
+        rig.Session.Engine.SetSceneMaterials(World.MaterialTable.Build(WorldSceneTests.ShippedConfig()).Materials);
+        rig.Session.SetOrigin(512000, 64, 512000);
+        var snapshot = new ChunkSnapshot { X = 16000, Y = 2, Z = 16000 };
+        for (int y = 0; y < 32; y++)
+        {
+            for (int z = 0; z < 32; z++)
+            {
+                snapshot.Materials[(y * 32 + z) * 32 + 10] = 3;
+            }
+        }
+
+        rig.Session.Engine.SetSceneChunk(snapshot);
+        Assert.True(rig.Session.Engine.WaitSceneIdle(TimeSpan.FromSeconds(10)));
+        rig.Session.ListenerBackwardOffset = 0.5f;
+        rig.Session.SetListener(512004, 80.5f, 512016.5f, 1, 0, 0);
+        SteamAudioSound sound = rig.Session.CreateSound(
+            new SoundParams { Location = new AssetLocation("game:sounds/tone.ogg"), ShouldLoop = true, Position = new Vec3f(512020, 80.5f, 512016.5f) },
+            () => rig.Asset,
+            1);
+        sound.Start();
+        rig.Render(0.3);
+        SourceDebugInfo s = Assert.Single(rig.Session.Engine.GetSimulatedSources());
+        Assert.Equal((20f, 16.5f, 16.5f), s.Position);
+        Assert.True(s.Occlusion < 0.05f);
+        Assert.Equal(1, s.Crossings);
+        SimulationStats sim = rig.Session.Engine.GetSimulationStats();
+        Assert.Equal((512000, 64, 512000), sim.Origin);
+        Assert.Equal(4f, sim.Listener.X, 3);  // the eyes, not 0.5 m behind them
+    }
+
     private static double Power(float[] interleaved, int channels, int channel)
     {
         double sum = 0;

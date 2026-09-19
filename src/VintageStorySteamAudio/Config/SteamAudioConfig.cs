@@ -86,6 +86,21 @@ public sealed class SteamAudioConfig
     /// <summary>Main-thread milliseconds per game tick (every 50 ms) spent reading chunks for the scene.</summary>
     public double SceneBudgetMs { get; set; } = 2.0;
 
+    /// <summary>
+    /// Vanilla never plays a sound beyond its range (an anvil stops dead at 16 m); with physical
+    /// fall-off sounds should fade instead. Ranges are multiplied by this (1 = vanilla, up to 16).
+    /// </summary>
+    public float SoundRangeMultiplier { get; set; } = 3f;
+
+    /// <summary>Walls muffle what is behind them (occlusion and transmission by the world scene, Phase 5).</summary>
+    public bool Occlusion { get; set; } = true;
+
+    /// <summary>Rays per sound for occlusion (more: smoother edges, more CPU). 0 = 16.</summary>
+    public int OcclusionSamples { get; set; }
+
+    /// <summary>Occlusion updates per second. 0 = 30.</summary>
+    public int OcclusionRateHz { get; set; }
+
     /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 
@@ -99,6 +114,9 @@ public sealed class SteamAudioConfig
         MaxVoices = MaxVoices,
         MaxRealVoices = MaxRealVoices,
         MaxBinauralVoices = MaxBinauralVoices,
+        DirectSimulation = Occlusion,
+        OcclusionSamples = Math.Clamp(OcclusionSamples, 0, 256),
+        DirectRateHz = Math.Clamp(OcclusionRateHz, 0, 120),
         HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
             : modConfigDirectory is null ? HrtfSofaFile.Trim()
             : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),

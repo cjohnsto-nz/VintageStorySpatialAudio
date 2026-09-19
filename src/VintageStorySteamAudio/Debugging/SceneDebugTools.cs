@@ -23,22 +23,27 @@ internal sealed class SceneDebugTools : IDisposable
         SceneOverlay.Wireframe,
         SceneOverlay.Wireframe | SceneOverlay.Bounds,
         SceneOverlay.Faces | SceneOverlay.Wireframe,
+        SceneOverlay.Sources,
+        SceneOverlay.Sources | SceneOverlay.Wireframe,
     ];
 
     private readonly ICoreClientAPI capi;
     private readonly AudioEngine engine;
     private readonly WorldAcoustics world;
+    private readonly System.Func<ulong, string?> describeVoice;
+    private IReadOnlyList<SourceDebugInfo> sources = [];
     private readonly SceneDebugRenderer renderer;
     private readonly SceneHud hud;
     private readonly long hudListener;
     private SceneRayHit? probe;
     private bool disposed;
 
-    public SceneDebugTools(ICoreClientAPI capi, AudioEngine engine, WorldAcoustics world)
+    public SceneDebugTools(ICoreClientAPI capi, AudioEngine engine, WorldAcoustics world, System.Func<ulong, string?> describeVoice)
     {
         this.capi = capi;
         this.engine = engine;
         this.world = world;
+        this.describeVoice = describeVoice;
         renderer = new SceneDebugRenderer(capi, engine, () => world.Materials, () => world.Status().Centre);
         capi.Event.RegisterRenderer(renderer, EnumRenderStage.Opaque, "vssteamaudio-scene");
         hud = new SceneHud(capi);
@@ -62,6 +67,8 @@ internal sealed class SceneDebugTools : IDisposable
             renderer.Clear();
             probe = null;
             renderer.SetProbe(null);
+            sources = [];
+            renderer.SetSources(sources, default, new Vec3d());
         }
         else
         {
@@ -87,6 +94,9 @@ internal sealed class SceneDebugTools : IDisposable
             case "bounds":
                 SetOverlay(renderer.Overlay ^ SceneOverlay.Bounds);
                 return $"Overlay: {Describe(renderer.Overlay)}";
+            case "sources":
+                SetOverlay(renderer.Overlay ^ SceneOverlay.Sources);
+                return $"Overlay: {Describe(renderer.Overlay)}";
             case "off":
                 SetOverlay(SceneOverlay.None);
                 return "Overlay off.";
@@ -110,7 +120,7 @@ internal sealed class SceneDebugTools : IDisposable
                 renderer.Clear();
                 return world.Reload();
             default:
-                return "Usage: .steamaudio scene [status|wire|faces|bounds|off|radius N|legend|export|reload]";
+                return "Usage: .steamaudio scene [status|wire|faces|bounds|sources|off|radius N|legend|export|reload]";
         }
     }
 
@@ -139,6 +149,7 @@ internal sealed class SceneDebugTools : IDisposable
         try
         {
             UpdateProbe();
+            UpdateSources();
             hud.SetText(StatusText());
         }
         catch (NativeException)
@@ -164,6 +175,70 @@ internal sealed class SceneDebugTools : IDisposable
             64f);
         renderer.SetProbe(probe);
     }
+
+    private void UpdateSources()
+    {
+        if ((renderer.Overlay & SceneOverlay.Sources) == 0 || capi.World.Player?.Entity is not { } player)
+        {
+            sources = [];
+            return;
+        }
+
+        sources = engine.GetSimulatedSources();
+        // From just in front of and below the eyes, so the lines are visible rather than end-on.
+        Vec3d camera = player.CameraPos;
+        Vec3f view = player.Pos.GetViewVector();
+        var from = new Vec3d(camera.X + (view.X * 0.6), camera.Y + (view.Y * 0.6) - 0.35, camera.Z + (view.Z * 0.6));
+        renderer.SetSources(sources, world.Status().Origin, from);
+    }
+
+    private string SourcesText()
+    {
+        SimulationStats sim = engine.GetSimulationStats();
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture, $"Direct simulation: {sim.Sources} sources, tick {sim.LastTickMs:0.00} ms (occlusion {sim.OcclusionMs:0.00}, transmission {sim.TransmissionMs:0.00}), max {sim.MaxTickMs:0.0} ms, {sim.RateHz} Hz, {sim.OcclusionSamples} rays");
+        if (capi.World.Player?.Entity is { } me)
+        {
+            // Frame check: where the simulation listens (world) against the eyes, and both origins.
+            Vec3d eyes = me.Pos.XYZ.Add(me.LocalEyePos);
+            (int X, int Y, int Z) wo = world.Status().Origin;
+            text.Append(CultureInfo.InvariantCulture, $"\n  listens at {sim.Listener.X + sim.Origin.X:0.0},{sim.Listener.Y + sim.Origin.Y:0.0},{sim.Listener.Z + sim.Origin.Z:0.0} (eyes {eyes.X:0.0},{eyes.Y:0.0},{eyes.Z:0.0}); origin {sim.Origin.X},{sim.Origin.Y},{sim.Origin.Z}")
+                .Append(sim.Origin == wo ? string.Empty : string.Create(CultureInfo.InvariantCulture, $" MISMATCH: scene streamer has {wo.X},{wo.Y},{wo.Z}"));
+        }
+        if ((renderer.Overlay & SceneOverlay.Sources) == 0 || capi.World.Player?.Entity is not { } player)
+        {
+            return text.ToString();
+        }
+
+        (int X, int Y, int Z) o = world.Status().Origin;
+        Vec3d eye = player.CameraPos;
+        foreach ((SourceDebugInfo s, double distance) in sources
+            .Select(s => (s, Distance(s, o, eye)))
+            .OrderBy(p => p.Item2)
+            .Take(6))
+        {
+            (float low, float mid, float high) = s.Gain;
+            string name = describeVoice(s.Voice) ?? $"voice {s.Voice}";
+            text.Append(CultureInfo.InvariantCulture, $"\n  {name} {distance:0.0} m: visible {s.Occlusion:0.00}, ")
+                .Append(s.Crossings == 0
+                    ? "clear line"
+                    : string.Create(CultureInfo.InvariantCulture, $"{s.SolidMetres:0.0} m through {s.Crossings} material(s)"))
+                .Append(CultureInfo.InvariantCulture, $" -> {Db(low):0}/{Db(mid):0}/{Db(high):0} dB")
+                .Append(s.Escaped ? " (moved out of its block)" : string.Empty);
+        }
+
+        return text.ToString();
+    }
+
+    private static double Distance(SourceDebugInfo s, (int X, int Y, int Z) o, Vec3d eye)
+    {
+        double dx = s.Position.X + o.X - eye.X;
+        double dy = s.Position.Y + o.Y - eye.Y;
+        double dz = s.Position.Z + o.Z - eye.Z;
+        return Math.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+    }
+
+    private static double Db(float gain) => 20.0 * Math.Log10(Math.Max(gain, 1e-6f));
 
     private string ProbeText()
     {
@@ -201,6 +276,7 @@ internal sealed class SceneDebugTools : IDisposable
         }
 
         text.Append('\n').Append(ProbeText());
+        text.Append('\n').Append(SourcesText());
 
         return text.ToString();
     }

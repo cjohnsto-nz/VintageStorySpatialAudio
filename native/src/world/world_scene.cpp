@@ -53,33 +53,27 @@ double since_ms(std::chrono::steady_clock::time_point start) {
 
 }  // namespace
 
-/// A chunk's Steam Audio objects. Its static mesh is in its own sub-scene; the instance is in the
-/// top-level scene while `in_top`, and must be removed and the top committed before destruction.
+/// A chunk's Steam Audio objects: its static mesh in its own sub-scene, never changed after it is
+/// built. Top-level scenes instance it; it is released only once no top-level scene does.
 struct WorldScene::Built {
     std::shared_ptr<const ChunkMesh> mesh;
     int lod = 0;
     uint32_t version = 0;  // the build number, for caching debug views
     steam::Scene sub;
     steam::StaticMesh static_mesh;
-    steam::InstancedMesh instance;
-    bool in_top = false;
 
     ~Built() {
         if (static_mesh) {
             iplStaticMeshRemove(static_mesh.get(), sub.get());
             iplSceneCommit(sub.get());
         }
-        // Release order: instance (holds the sub-scene), static mesh, sub-scene.
-        instance.reset();
         static_mesh.reset();
         sub.reset();
     }
 };
 
 WorldScene::WorldScene(const steam::SteamContext& steam) : steam_(steam) {
-    IPLSceneSettings settings = steam_.scene_settings();
-    check(iplSceneCreate(steam_.context(), &settings, top_.out()), "iplSceneCreate");
-    iplSceneCommit(top_.get());
+    top_ = build_top({});  // empty
     mesher_ = std::make_shared<Mesher>(std::vector<MaterialKind>{});
     worker_ = std::thread([this] { worker_main(); });
 }
@@ -91,16 +85,94 @@ WorldScene::~WorldScene() {
     }
     wake_.notify_all();
     worker_.join();
-    // Out of the top scene first (one commit), then release everything.
+    // The top-level scene first (it instances the chunks' sub-scenes), then the chunks.
     std::lock_guard scene(scene_mutex_);
-    for (auto& [key, chunk] : chunks_) {
-        if (chunk.built && chunk.built->in_top) {
-            iplInstancedMeshRemove(chunk.built->instance.get(), top_.get());
-            chunk.built->in_top = false;
+    for (IPLSimulator simulator : simulators_) {
+        iplSimulatorSetScene(simulator, nullptr);
+        iplSimulatorCommit(simulator);
+    }
+    retire(top_);
+    chunks_.clear();
+}
+
+void WorldScene::attach(IPLSimulator simulator) {
+    std::lock_guard lock(scene_mutex_);
+    simulators_.push_back(simulator);
+    iplSimulatorSetScene(simulator, top_->scene.get());
+    iplSimulatorCommit(simulator);
+}
+
+void WorldScene::detach(IPLSimulator simulator) {
+    std::lock_guard lock(scene_mutex_);
+    simulators_.erase(std::remove(simulators_.begin(), simulators_.end(), simulator), simulators_.end());
+    iplSimulatorSetScene(simulator, nullptr);
+    iplSimulatorCommit(simulator);
+}
+
+WorldScene::Instances WorldScene::instances_locked() const {
+    Instances instances;
+    instances.reserve(chunks_.size());
+    for (const auto& [key, chunk] : chunks_) {
+        if (chunk.built) {
+            instances.emplace_back(key, chunk.built->sub.get(), transform_locked(key));
         }
     }
-    iplSceneCommit(top_.get());
-    chunks_.clear();
+    return instances;
+}
+
+std::unique_ptr<WorldScene::Top> WorldScene::build_top(const Instances& instances) const {
+    auto top = std::make_unique<Top>();
+    IPLSceneSettings settings = steam_.scene_settings();
+    check(iplSceneCreate(steam_.context(), &settings, top->scene.out()), "iplSceneCreate");
+    for (const auto& [key, sub, transform] : instances) {
+        IPLInstancedMeshSettings instance{};
+        instance.subScene = sub;
+        instance.transform = transform;
+        steam::InstancedMesh mesh;
+        if (iplInstancedMeshCreate(top->scene.get(), &instance, mesh.out()) != IPL_STATUS_SUCCESS) {
+            Log::write(VSA_LOG_ERROR, "scene: iplInstancedMeshCreate failed");
+            continue;
+        }
+        iplInstancedMeshAdd(mesh.get(), top->scene.get());
+        top->live.emplace(key, std::move(mesh));
+    }
+    iplSceneCommit(top->scene.get());
+    return top;
+}
+
+void WorldScene::retire(std::unique_ptr<Top>& top) noexcept {
+    if (!top) {
+        return;
+    }
+    for (auto& [key, mesh] : top->live) {
+        iplInstancedMeshRemove(mesh.get(), top->scene.get());
+    }
+    iplSceneCommit(top->scene.get());
+    top->live.clear();       // instances before the sub-scenes they reference
+    top->graveyard.clear();
+    top->buried.clear();
+    top.reset();
+}
+
+void WorldScene::compact() {
+    Instances instances;
+    {
+        std::lock_guard lock(mutex_);
+        instances = instances_locked();
+    }
+    std::unique_ptr<Top> fresh = build_top(instances);
+    std::unique_ptr<Top> old;
+    {
+        std::lock_guard scene(scene_mutex_);
+        for (IPLSimulator simulator : simulators_) {
+            iplSimulatorSetScene(simulator, fresh->scene.get());
+            iplSimulatorCommit(simulator);
+        }
+        old = std::move(top_);
+        top_ = std::move(fresh);
+    }
+    retire(old);  // no simulator uses it any more
+    commits_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void WorldScene::set_materials(std::vector<AcousticMaterial> materials) {
@@ -119,6 +191,7 @@ void WorldScene::set_materials(std::vector<AcousticMaterial> materials) {
     std::lock_guard lock(mutex_);
     materials_ = std::move(materials);
     ipl_materials_ = std::move(ipl);
+    ++revision_;
     mesher_ = std::make_shared<Mesher>(std::move(kinds));
     for (const auto& [key, chunk] : chunks_) {
         mark_dirty_locked(key);
@@ -135,6 +208,7 @@ void WorldScene::set_origin(int32_t x, int32_t y, int32_t z) {
     origin_[1] = y;
     origin_[2] = z;
     origin_dirty_ = true;
+    ++revision_;
     wake_.notify_all();
 }
 
@@ -146,6 +220,7 @@ void WorldScene::set_chunk(ChunkKey key, std::shared_ptr<const ChunkVoxels> voxe
     chunk.voxels = std::move(voxels);
     chunk.lod = lod > 0 ? 1 : 0;
     ++chunk.version;
+    ++revision_;
     mark_dirty_locked(key);
     if (previous == nullptr || previous_lod != chunk.lod) {
         mark_neighbours_dirty_locked(key);
@@ -170,6 +245,7 @@ void WorldScene::remove_chunk(ChunkKey key) {
     }
     it->second.voxels.reset();
     ++it->second.version;
+    ++revision_;
     mark_dirty_locked(key);
     mark_neighbours_dirty_locked(key);
     wake_.notify_all();
@@ -177,6 +253,7 @@ void WorldScene::remove_chunk(ChunkKey key) {
 
 void WorldScene::clear() {
     std::lock_guard lock(mutex_);
+    ++revision_;
     for (auto& [key, chunk] : chunks_) {
         chunk.voxels.reset();
         ++chunk.version;
@@ -301,59 +378,106 @@ void WorldScene::worker_main() {
             job.ms = since_ms(start);
         }
 
-        // Swap the results in: the top-level scene changes under its lock, with one commit.
-        std::vector<std::unique_ptr<Built>> retired;
-        double commit_ms = 0.0;
+        // Swap the results in, then edit the top-level scene in place: the chunk's old instance
+        // is removed (into the graveyard, with its build) and its new one added. See the class
+        // comment for why nothing removed is released until the scene is compacted.
+        struct Change {
+            ChunkKey key;
+            std::unique_ptr<Built> old;
+            IPLScene sub = nullptr;
+            IPLMatrix4x4 transform{};
+        };
+        std::vector<Change> changes;
+        std::vector<std::pair<ChunkKey, IPLMatrix4x4>> moved;
         {
-            std::scoped_lock both(scene_mutex_, mutex_);
+            std::lock_guard both(mutex_);
             for (Job& job : jobs) {
                 const auto it = chunks_.find(job.key);
                 if (it == chunks_.end() || it->second.version != job.version) {
                     continue;  // changed again meanwhile; a newer job follows
                 }
                 Chunk& chunk = it->second;
-                if (chunk.built && chunk.built->in_top) {
-                    iplInstancedMeshRemove(chunk.built->instance.get(), top_.get());
-                    chunk.built->in_top = false;
-                }
-                retired.push_back(std::move(chunk.built));
-                if (job.built) {
-                    IPLInstancedMeshSettings instance{};
-                    instance.subScene = job.built->sub.get();
-                    instance.transform = transform_locked(job.key);
-                    if (iplInstancedMeshCreate(top_.get(), &instance, job.built->instance.out()) == IPL_STATUS_SUCCESS) {
-                        iplInstancedMeshAdd(job.built->instance.get(), top_.get());
-                        job.built->in_top = true;
-                        chunk.built = std::move(job.built);
-                    } else {
-                        Log::writef(VSA_LOG_ERROR, "scene: chunk %d,%d,%d: iplInstancedMeshCreate failed", job.key.x,
-                                    job.key.y, job.key.z);
-                    }
-                }
                 ++stats_.chunks_built;
-                if (chunk.built) {
-                    chunk.built->version = static_cast<uint32_t>(stats_.chunks_built);
-                }
                 stats_.last_build_ms = job.ms;
                 stats_.max_build_ms = std::max(stats_.max_build_ms, job.ms);
+                if (chunk.built || job.built) {
+                    Change change;
+                    change.key = job.key;
+                    change.old = std::move(chunk.built);
+                    chunk.built = std::move(job.built);
+                    if (chunk.built) {
+                        chunk.built->version = static_cast<uint32_t>(stats_.chunks_built);
+                        change.sub = chunk.built->sub.get();
+                        change.transform = transform_locked(job.key);
+                    }
+                    changes.push_back(std::move(change));
+                }
                 if (chunk.voxels == nullptr) {
-                    retired.push_back(std::move(chunk.built));
                     chunks_.erase(it);
                 }
             }
             if (move_origin) {
                 for (const auto& [key, chunk] : chunks_) {
-                    if (chunk.built && chunk.built->in_top) {
-                        iplInstancedMeshUpdateTransform(chunk.built->instance.get(), top_.get(), transform_locked(key));
+                    if (chunk.built) {
+                        moved.emplace_back(key, transform_locked(key));
                     }
                 }
             }
-            const auto start = std::chrono::steady_clock::now();
-            iplSceneCommit(top_.get());
-            commit_ms = since_ms(start);
-            stats_.last_commit_ms = commit_ms;
         }
-        retired.clear();  // after the commit that dropped them from the top scene
+        if (!changes.empty() || move_origin) {
+            const auto start = std::chrono::steady_clock::now();
+            bool compact_now = false;
+            {
+                std::lock_guard scene(scene_mutex_);
+                Top& top = *top_;
+                for (Change& change : changes) {
+                    if (const auto it = top.live.find(change.key); it != top.live.end()) {
+                        iplInstancedMeshRemove(it->second.get(), top.scene.get());
+                        top.graveyard.push_back(std::move(it->second));
+                        top.live.erase(it);
+                    }
+                    if (change.old) {
+                        top.buried.push_back(std::move(change.old));
+                    }
+                    if (change.sub != nullptr) {
+                        IPLInstancedMeshSettings instance{};
+                        instance.subScene = change.sub;
+                        instance.transform = change.transform;
+                        steam::InstancedMesh mesh;
+                        if (iplInstancedMeshCreate(top.scene.get(), &instance, mesh.out()) == IPL_STATUS_SUCCESS) {
+                            iplInstancedMeshAdd(mesh.get(), top.scene.get());
+                            top.live[change.key] = std::move(mesh);
+                        } else {
+                            Log::writef(VSA_LOG_ERROR, "scene: chunk %d,%d,%d: iplInstancedMeshCreate failed",
+                                        change.key.x, change.key.y, change.key.z);
+                        }
+                    }
+                }
+                for (const auto& [key, transform] : moved) {
+                    if (const auto it = top.live.find(key); it != top.live.end()) {
+                        iplInstancedMeshUpdateTransform(it->second.get(), top.scene.get(), transform);
+                    }
+                }
+                iplSceneCommit(top.scene.get());
+                for (IPLSimulator simulator : simulators_) {
+                    iplSimulatorCommit(simulator);
+                }
+                compact_now = top.graveyard.size() >= std::max<std::size_t>(64, top.live.size() / 4);
+            }
+            commits_.fetch_add(1, std::memory_order_acq_rel);
+            const double edit_ms = since_ms(start);
+            if (compact_now) {
+                try {
+                    compact();
+                } catch (const Error& e) {
+                    Log::writef(VSA_LOG_ERROR, "scene: %s", e.what());
+                }
+            }
+            std::lock_guard both(mutex_);
+            stats_.last_commit_ms = edit_ms;
+        }
+
+
 
         lock.lock();
         busy_ = false;
@@ -519,6 +643,36 @@ bool WorldScene::raycast(const float origin[3], const float direction[3], float 
         }
     }
     return found;
+}
+
+std::shared_ptr<const VoxelView> WorldScene::voxel_view() const {
+    std::lock_guard lock(mutex_);
+    if (view_ && view_revision_ == revision_) {
+        return view_;
+    }
+    VoxelView::Chunks chunks;
+    chunks.reserve(chunks_.size());
+    for (const auto& [key, chunk] : chunks_) {
+        if (chunk.voxels) {
+            chunks.emplace(key, chunk.voxels);
+        }
+    }
+    std::vector<TransmissionMaterial> losses;
+    losses.reserve(materials_.size());
+    for (const AcousticMaterial& m : materials_) {
+        TransmissionMaterial t;
+        t.kind = m.kind;
+        for (int b = 0; b < 3; ++b) {
+            // Surface transmission is an amplitude per crossing.
+            t.crossing_db[b] = -20.0f * std::log10(std::clamp(m.transmission[b], 1e-6f, 1.0f));
+            t.bulk_db_per_metre[b] = std::max(0.0f, m.attenuation_db_per_metre[b]);
+        }
+        losses.push_back(t);
+    }
+    view_ = std::make_shared<const VoxelView>(std::move(chunks), std::move(losses),
+                                              std::array<int32_t, 3>{origin_[0], origin_[1], origin_[2]});
+    view_revision_ = revision_;
+    return view_;
 }
 
 std::size_t WorldScene::material_count() const {

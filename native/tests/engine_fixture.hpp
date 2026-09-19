@@ -146,7 +146,7 @@ struct OfflineEngine : ScopedEngine {
     }
 
     void listener(float px, float py, float pz, float fx, float fy, float fz, float ux = 0.0f, float uy = 1.0f,
-                  float uz = 0.0f) {
+                  float uz = 0.0f, float ox = 0.0f, float oy = 0.0f, float oz = 0.0f) {
         vsa_listener l{};
         l.struct_size = sizeof l;
         l.position[0] = px;
@@ -158,6 +158,9 @@ struct OfflineEngine : ScopedEngine {
         l.up[0] = ux;
         l.up[1] = uy;
         l.up[2] = uz;
+        l.render_offset[0] = ox;
+        l.render_offset[1] = oy;
+        l.render_offset[2] = oz;
         REQUIRE(vsa_listener_set(engine, &l) == VSA_OK);
     }
 

@@ -72,6 +72,19 @@ Engine::Settings validate(const vsa_engine_config& config) {
     if (config.hrtf_sofa_path != nullptr) {
         settings.hrtf_sofa_path = config.hrtf_sofa_path;
     }
+    settings.direct_simulation = (config.flags & VSA_ENGINE_FLAG_NO_DIRECT_SIMULATION) == 0;
+    if (config.occlusion_samples != 0) {
+        if (config.occlusion_samples > 256) {
+            throw invalid("occlusion_samples " + std::to_string(config.occlusion_samples) + " exceeds 256");
+        }
+        settings.occlusion_samples = config.occlusion_samples;
+    }
+    if (config.direct_rate_hz != 0) {
+        if (config.direct_rate_hz > 120) {
+            throw invalid("direct_rate_hz " + std::to_string(config.direct_rate_hz) + " exceeds 120");
+        }
+        settings.direct_rate_hz = config.direct_rate_hz;
+    }
     return settings;
 }
 
@@ -134,9 +147,15 @@ Engine::Engine(const vsa_engine_config& config)
       events_(kEventRingCapacity),
       retired_(settings_.max_voices),
       scene_(std::make_unique<world::WorldScene>(*steam_)),
+      direct_channel_(settings_.direct_simulation ? std::make_unique<world::DirectChannel>(settings_.max_real_voices)
+                                                  : nullptr),
+      direct_sim_(settings_.direct_simulation
+                      ? std::make_unique<world::DirectSimulator>(*steam_, *scene_, *direct_channel_,
+                                                                 settings_.occlusion_samples, settings_.direct_rate_hz)
+                      : nullptr),
       spatial_(*steam_, settings_.max_real_voices, settings_.hrtf_sofa_path),
       mixer_(kernel_, slots_.get(), settings_.max_voices, commands_, events_, retired_, rt_log_, spatial_, listener_,
-             settings_.block_frames, settings_.max_binaural_voices),
+             settings_.block_frames, settings_.max_binaural_voices, direct_channel_.get()),
       stream_history_frames_(static_cast<uint32_t>(kernel_.max_taps_per_side())),
       stream_window_frames_(kernel_.max_span_frames(settings_.block_frames)) {
     free_slots_.reserve(settings_.max_voices);
@@ -478,6 +497,10 @@ void Engine::set_listener(const vsa_listener& listener) {
         pose.position[i] = listener.position[i];
         pose.forward[i] = listener.forward[i];
         pose.up[i] = listener.up[i];
+        pose.render_offset[i] = listener.render_offset[i];
+    }
+    if (!finite3(pose.render_offset[0], pose.render_offset[1], pose.render_offset[2])) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "listener render_offset must be finite");
     }
     if (!finite3(pose.position[0], pose.position[1], pose.position[2]) || !normalise(pose.forward) || !normalise(pose.up)) {
         throw Error(VSA_ERROR_INVALID_ARGUMENT, "listener position must be finite and forward/up non-zero");
@@ -498,6 +521,9 @@ void Engine::set_listener(const vsa_listener& listener) {
     u[2] = r[0] * f[1] - r[1] * f[0];
     std::lock_guard lock(api_mutex_);  // LatestValue has a single writer
     listener_.publish(pose);
+    if (direct_sim_) {
+        direct_sim_->set_listener(pose);
+    }
 }
 
 void Engine::set_render_mode(uint32_t mode) {
@@ -534,7 +560,20 @@ void Engine::prepare_callback(void* user, uint32_t sample_rate, uint32_t channel
     static_cast<Engine*>(user)->mixer_.prepare(sample_rate, channels, speakers);
 }
 
-void Engine::offline_block_hook(void* user) noexcept { static_cast<Engine*>(user)->service_streams(); }
+void Engine::offline_block_hook(void* user) noexcept {
+    auto* engine = static_cast<Engine*>(user);
+    engine->service_streams();
+    // Deterministic offline rendering: the simulation runs on the rendering thread, on the
+    // output's own clock.
+    try {
+        if (engine->direct_sim_) {
+            engine->direct_sim_->offline_tick(engine->offline_seconds_);
+        }
+    } catch (const std::exception& e) {
+        Log::writef(VSA_LOG_ERROR, "direct simulation: %s", e.what());
+    }
+    engine->offline_seconds_ += engine->mixer_.block_period_seconds();
+}
 
 void Engine::open_device_locked(const vsa_device_id* id, uint32_t channels) {
     close_device_locked();
@@ -542,6 +581,9 @@ void Engine::open_device_locked(const vsa_device_id* id, uint32_t channels) {
         try {
             spatial_output_.open(id, &render_callback, &prepare_callback, this);
             output_kind_ = VSA_OUTPUT_SPATIAL;
+            if (direct_sim_) {
+                direct_sim_->set_threaded(true);
+            }
             return;
         } catch (const Error& e) {
             Log::writef(VSA_LOG_INFO, "spatial audio unavailable (%s); opening the device directly", e.what());
@@ -549,11 +591,17 @@ void Engine::open_device_locked(const vsa_device_id* id, uint32_t channels) {
     }
     device_.open(id, channels, &render_callback, &prepare_callback, this);
     output_kind_ = VSA_OUTPUT_DEVICE;
+    if (direct_sim_) {
+        direct_sim_->set_threaded(true);
+    }
 }
 
 void Engine::close_device_locked() noexcept {
     device_.close();
     spatial_output_.close();
+    if (direct_sim_) {
+        direct_sim_->set_threaded(false);
+    }
 }
 
 void Engine::open_output(const vsa_output_desc& desc) {

@@ -40,6 +40,7 @@ add_library(vsaudio_core STATIC
     src/audio/asset.cpp
     src/audio/asset.hpp
     src/audio/channel_layout.hpp
+    src/audio/listener_pose.hpp
     src/audio/mixer.cpp
     src/audio/mixer.hpp
     src/audio/spatial.cpp
@@ -76,8 +77,13 @@ add_library(vsaudio_core STATIC
     src/steam/self_test.hpp
     src/steam/steam_context.cpp
     src/steam/steam_context.hpp
+    src/world/direct_channel.hpp
+    src/world/direct_sim.cpp
+    src/world/direct_sim.hpp
     src/world/mesher.cpp
     src/world/mesher.hpp
+    src/world/transmission.cpp
+    src/world/transmission.hpp
     src/world/voxel.hpp
     src/world/world_scene.cpp
     src/world/world_scene.hpp)

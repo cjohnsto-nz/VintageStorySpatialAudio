@@ -139,23 +139,51 @@ internal static class PlatformPatches
     /// Removes vanilla's fixed cap of 250 concurrent sounds in PlaySoundAtInternal: the constant
     /// becomes int.MaxValue. Virtualisation in the engine handles load instead.
     /// </summary>
+    /// <para>
+    /// Also widens vanilla's range check there (a sound further away than its range is never
+    /// created): <c>distance² &gt; range * range</c> becomes <c>distance² &gt; range * range * scale²</c>.
+    /// With physical fall-off a sound fades with distance rather than vanishing at its range.
+    /// </para>
     public static IEnumerable<CodeInstruction> RemoveSoundCap(IEnumerable<CodeInstruction> instructions)
     {
         ArgumentNullException.ThrowIfNull(instructions);
+        CodeInstruction[] code = [.. instructions];
         int replaced = 0;
-        foreach (CodeInstruction instruction in instructions)
+        int scaled = 0;
+        var result = new List<CodeInstruction>(code.Length + 2);
+        for (int i = 0; i < code.Length; i++)
         {
+            CodeInstruction instruction = code[i];
             if (replaced == 0 && instruction.opcode == OpCodes.Ldc_I4 && instruction.operand is int value && value == VanillaSoundCap)
             {
                 instruction.operand = int.MaxValue;
                 replaced++;
             }
 
-            yield return instruction;
+            result.Add(instruction);
+            // range * range: ldarg range, ldarg range, mul.
+            if (scaled == 0 && i >= 2 && instruction.opcode == OpCodes.Mul
+                && code[i - 1].IsLdarg(RangeArgument) && code[i - 2].IsLdarg(RangeArgument))
+            {
+                result.Add(new CodeInstruction(OpCodes.Ldsfld, AccessTools.Field(typeof(PlatformPatches), nameof(RangeScaleSquared))));
+                result.Add(new CodeInstruction(OpCodes.Mul));
+                scaled++;
+            }
         }
 
         SoundCapRemoved = replaced == 1;
+        RangeWidened = scaled == 1;
+        return result;
     }
+
+    /// <summary>PlaySoundAtInternal's range parameter (argument 0 is the instance).</summary>
+    internal const int RangeArgument = 7;
+
+    /// <summary>The range multiplier, squared (the check compares squared distances).</summary>
+    public static float RangeScaleSquared = 9f;
+
+    /// <summary>Whether the last <see cref="RemoveSoundCap"/> found and widened the range check.</summary>
+    internal static bool RangeWidened { get; private set; }
 
     internal const int VanillaSoundCap = 250;
 

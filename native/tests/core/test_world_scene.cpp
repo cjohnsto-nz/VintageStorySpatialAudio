@@ -7,6 +7,8 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -50,8 +52,7 @@ public:
         settings.samplingRate = 48000;
         settings.frameSize = 256;
         REQUIRE(iplSimulatorCreate(steam.context(), &settings, simulator_.out()) == IPL_STATUS_SUCCESS);
-        iplSimulatorSetScene(simulator_.get(), scene.top());
-        iplSimulatorCommit(simulator_.get());
+        scene.attach(simulator_.get());
         IPLSourceSettings source_settings{};
         source_settings.flags = IPL_SIMULATIONFLAGS_DIRECT;
         REQUIRE(iplSourceCreate(simulator_.get(), &source_settings, source_.out()) == IPL_STATUS_SUCCESS);
@@ -61,13 +62,13 @@ public:
     ~Probe() {
         iplSourceRemove(source_.get(), simulator_.get());
         iplSimulatorCommit(simulator_.get());
+        scene_.detach(simulator_.get());
     }
     Probe(const Probe&) = delete;
     Probe& operator=(const Probe&) = delete;
 
     float occlusion(IPLVector3 listener, IPLVector3 source) {
         std::lock_guard lock(scene_.scene_lock());
-        iplSimulatorCommit(simulator_.get());  // picks up the scene's latest commit
         IPLSimulationSharedInputs shared{};
         shared.listener = pose(listener);
         iplSimulatorSetSharedInputs(simulator_.get(), IPL_SIMULATIONFLAGS_DIRECT, &shared);
@@ -200,4 +201,33 @@ TEST_CASE("world scene: new materials re-mesh everything, and the destructor rel
         scene->set_chunk({x, 0, 0}, wall_chunk(), 0);
     }
     scene.reset();  // mid-work: must stop cleanly, releasing everything (ASan/LSan in CI)
+}
+
+TEST_CASE("world scene: rebuilding the top-level scene stays cheap with a realistic chunk count") {
+    vsa::steam::SteamContext steam({VSA_RAY_TRACER_AUTO, false});
+    WorldScene scene(steam);
+    scene.set_materials(materials());
+    for (int x = 0; x < 9; ++x) {
+        for (int z = 0; z < 9; ++z) {
+            for (int y = 0; y < 5; ++y) {
+                scene.set_chunk({x, y, z}, wall_chunk(), (std::abs(x - 4) > 2 || std::abs(z - 4) > 2) ? 1 : 0);
+            }
+        }
+    }
+    REQUIRE(scene.wait_idle(60s));
+    const SceneStats before = scene.stats();
+    CHECK(before.meshed_chunks == 405);
+    // One edit at a time (a door): the top-level scene is edited in place, not rebuilt.
+    std::vector<double> times;
+    for (int i = 0; i < 100; ++i) {  // past the compaction threshold, too
+        scene.set_chunk({4, 2, 4}, wall_chunk(), 0);
+        REQUIRE(scene.wait_idle(10s));
+        times.push_back(scene.stats().last_commit_ms);
+    }
+    std::sort(times.begin(), times.end());
+    const double worst = times.back();
+    const SceneStats after = scene.stats();
+    MESSAGE("in-place edits of a " << after.meshed_chunks << "-chunk scene: median " << times[50] << " ms, worst " << worst << " ms");
+    CHECK(after.meshed_chunks == 405);
+    CHECK(worst < 20.0);
 }

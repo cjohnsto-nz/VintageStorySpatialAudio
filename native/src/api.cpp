@@ -25,8 +25,12 @@
 static_assert(sizeof(vsa_result) == 4 && sizeof(vsa_log_level) == 4, "vsaudio enums must be 32-bit");
 static_assert(std::is_standard_layout_v<vsa_engine_config> && std::is_standard_layout_v<vsa_self_test_report>);
 // Layouts the managed bindings mirror (tests/.../NativeLayoutTests.cs). 64-bit targets only.
-static_assert(sizeof(vsa_engine_config) == 72 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
-              offsetof(vsa_engine_config, hrtf_sofa_path) == 64);
+static_assert(sizeof(vsa_engine_config) == 80 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
+              offsetof(vsa_engine_config, hrtf_sofa_path) == 64 && offsetof(vsa_engine_config, direct_rate_hz) == 76);
+static_assert(sizeof(vsa_source_debug) == 64 && offsetof(vsa_source_debug, position) == 16 &&
+              offsetof(vsa_source_debug, crossings) == 60);
+static_assert(sizeof(vsa_simulation_stats) == 80 && offsetof(vsa_simulation_stats, rate_hz) == 48 &&
+              offsetof(vsa_simulation_stats, origin) == 68);
 static_assert(sizeof(vsa_asset_desc) == 48 && offsetof(vsa_asset_desc, storage) == 32);
 static_assert(sizeof(vsa_asset_info) == 40);
 static_assert(sizeof(vsa_voice_desc) == 48 && offsetof(vsa_voice_desc, gain) == 16 && offsetof(vsa_voice_desc, position) == 32);
@@ -35,7 +39,7 @@ static_assert(sizeof(vsa_device_info) == 776 && offsetof(vsa_device_info, id) ==
 static_assert(sizeof(vsa_output_desc) == 24);
 static_assert(sizeof(vsa_engine_stats) == 360 && offsetof(vsa_engine_stats, real_voices) == 40 &&
               offsetof(vsa_engine_stats, blocks_rendered) == 48 && offsetof(vsa_engine_stats, device_name) == 104);
-static_assert(sizeof(vsa_listener) == 40);
+static_assert(sizeof(vsa_listener) == 52 && offsetof(vsa_listener, render_offset) == 40);
 static_assert(sizeof(vsa_acoustic_material) == 56 && offsetof(vsa_acoustic_material, name) == 48);
 static_assert(sizeof(vsa_box) == 24 && sizeof(vsa_partial_block) == 16);
 static_assert(sizeof(vsa_chunk_desc) == 56 && offsetof(vsa_chunk_desc, materials) == 24 &&
@@ -491,6 +495,7 @@ VSA_API vsa_result VSA_CALL vsa_scene_set_chunk(vsa_engine* engine, const vsa_ch
             }
             voxels->partials.push_back(std::move(block));
         }
+        vsa::world::sort_partials(*voxels);
         scene.set_chunk({desc.x, desc.y, desc.z}, std::move(voxels), static_cast<int>(desc.lod));
         return VSA_OK;
     });
@@ -636,6 +641,59 @@ VSA_API vsa_result VSA_CALL vsa_scene_save_obj(vsa_engine* engine, const char* p
             throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "path must not be empty");
         }
         engine_of(engine).scene().save_obj(path);
+        return VSA_OK;
+    });
+}
+
+// ---- Direct simulation ----
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_sources(vsa_engine* engine, vsa_source_debug* out, uint32_t capacity,
+                                                   uint32_t* out_count) {
+    return guarded([&] {
+        if (out_count == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "out_count must not be null");
+        }
+        *out_count = 0;
+        check_out_array(out, capacity, "vsa_source_debug");
+        vsa::world::DirectSimulator* direct = engine_of(engine).direct();
+        const std::vector<vsa::world::SourceDebug> sources = direct != nullptr ? direct->sources() : std::vector<vsa::world::SourceDebug>{};
+        *out_count = static_cast<uint32_t>(sources.size());
+        for (std::size_t i = 0; i < capacity && i < sources.size(); ++i) {
+            const vsa::world::SourceDebug& s = sources[i];
+            vsa_source_debug d{};
+            d.struct_size = sizeof d;
+            d.flags = s.escaped ? VSA_SOURCE_ESCAPED : 0u;
+            d.voice = s.voice;
+            std::copy_n(s.position, 3, d.position);
+            std::copy_n(s.simulated_position, 3, d.simulated_position);
+            d.occlusion = s.occlusion;
+            std::copy_n(s.transmission, 3, d.transmission);
+            d.solid_metres = s.solid_metres;
+            d.crossings = s.crossings;
+            out[i] = d;
+        }
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, vsa_simulation_stats* out) {
+    return guarded([&] {
+        check_out_struct(out, "vsa_simulation_stats");
+        vsa::world::DirectSimulator* direct = engine_of(engine).direct();
+        const vsa::world::SimulationStats s = direct != nullptr ? direct->stats() : vsa::world::SimulationStats{};
+        vsa_simulation_stats stats{};
+        stats.struct_size = sizeof stats;
+        stats.sources = s.sources;
+        stats.ticks = s.ticks;
+        stats.last_tick_ms = s.last_tick_ms;
+        stats.max_tick_ms = s.max_tick_ms;
+        stats.occlusion_ms = s.occlusion_ms;
+        stats.transmission_ms = s.transmission_ms;
+        stats.rate_hz = s.rate_hz;
+        stats.occlusion_samples = s.occlusion_samples;
+        std::copy_n(s.listener, 3, stats.listener);
+        std::copy_n(s.origin, 3, stats.origin);
+        *out = stats;
         return VSA_OK;
     });
 }

@@ -47,6 +47,25 @@ public sealed class GameIntegrationTests
     }
 
     [Fact]
+    public void The_installed_PlaySoundAtInternal_has_the_cap_and_the_range_check_the_transpiler_changes()
+    {
+        GameAssemblies? game = GameInstall.Value;
+        if (game is null)
+        {
+            Assert.Skip("VINTAGE_STORY is not set to a game install");
+        }
+
+        Type clientMain = game.Lib.GetType("Vintagestory.Client.NoObf.ClientMain", throwOnError: true)!;
+        MethodInfo method = HarmonyLib.AccessTools.Method(clientMain, "PlaySoundAtInternal");
+        Assert.Equal("range", method.GetParameters()[VintageStorySteamAudio.Takeover.PlatformPatches.RangeArgument - 1].Name);
+        List<HarmonyLib.CodeInstruction> original = HarmonyLib.PatchProcessor.GetOriginalInstructions(method);
+        HarmonyLib.CodeInstruction[] patched = [.. VintageStorySteamAudio.Takeover.PlatformPatches.RemoveSoundCap(original)];
+        Assert.True(VintageStorySteamAudio.Takeover.PlatformPatches.SoundCapRemoved);
+        Assert.True(VintageStorySteamAudio.Takeover.PlatformPatches.RangeWidened);
+        Assert.Equal(original.Count + 2, patched.Length);
+    }
+
+    [Fact]
     public void Native_engine_loads_and_passes_its_self_test()
     {
         NativeTestEnvironment.RequireNatives();

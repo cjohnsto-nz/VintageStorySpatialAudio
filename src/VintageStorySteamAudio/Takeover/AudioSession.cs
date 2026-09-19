@@ -190,17 +190,24 @@ public sealed class AudioSession : IDisposable
         }
     }
 
-    /// <summary>Listener at the eye position (moved back by <see cref="ListenerBackwardOffset"/>), facing along the (unflattened) view vector.</summary>
+    /// <summary>
+    /// Listener at the eye position, facing along the (unflattened) view vector; rendering listens
+    /// from <see cref="ListenerBackwardOffset"/> behind it.
+    /// </summary>
     public void SetListener(float x, float y, float z, float viewX, float viewY, float viewZ)
     {
         lastListener = (x, y, z, viewX, viewY, viewZ);
         basis.Update(viewX, viewY, viewZ);
         float back = ListenerBackwardOffset;
         SceneOrigin o = origin;
-        float lx = (float)(x - (basis.HeadingX * back) - o.X);
+        float lx = (float)((double)x - o.X);
         float ly = (float)((double)y - o.Y);
-        float lz = (float)(z - (basis.HeadingZ * back) - o.Z);
-        Guard(() => Engine.SetListener(lx, ly, lz, basis.ForwardX, basis.ForwardY, basis.ForwardZ, basis.UpX, basis.UpY, basis.UpZ));
+        float lz = (float)((double)z - o.Z);
+        // Rendering listens from behind the eyes; the simulation (walls) from the eyes themselves,
+        // so standing with your back to a wall does not put the listener inside it.
+        float ox = -basis.HeadingX * back;
+        float oz = -basis.HeadingZ * back;
+        Guard(() => Engine.SetListener(lx, ly, lz, basis.ForwardX, basis.ForwardY, basis.ForwardZ, basis.UpX, basis.UpY, basis.UpZ, ox, 0f, oz));
     }
 
     /// <summary>Applies the game's volume sliders and HRTF setting (cheap when nothing changed).</summary>
@@ -226,6 +233,15 @@ public sealed class AudioSession : IDisposable
 
             Engine.SetRenderMode(levels.Headphones ? RenderMode.Headphones : RenderMode.Speakers);
         });
+    }
+
+    /// <summary>The asset a voice plays (for debug views), or null if it is not one of the session's.</summary>
+    public string? DescribeVoice(ulong voice)
+    {
+        lock (gate)
+        {
+            return byVoice.TryGetValue(voice, out SteamAudioSound? sound) ? sound.Params.Location?.ToShortString() : null;
+        }
     }
 
     /// <summary>Stops every sound and releases the session's voices and assets.</summary>
