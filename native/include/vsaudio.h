@@ -848,12 +848,17 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, 
  * Reflections (Phase 6): reverb simulated from the world scene.
  *
  * Steam Audio traces rays from the listener through the scene (its surfaces' absorption and
- * scattering) several times a second, for a pool of sources: one at the listener, whose reverb
- * every world sound without a source of its own shares (at a level falling gently with distance),
- * and one each for the loudest world sounds that last (looping, streamed, or 0.75 s and longer;
- * ranked without walls). Each source's early reflections are convolved (directional, Ambisonic);
- * its tail is a diffuse reverb at the simulated decay time per band, around the listener. Decoded
- * with the world's Ambisonic bus (headphones) or to the speaker layout, heights included.
+ * scattering) several times a second, for a pool of sources:
+ *   - one each for the loudest world sounds that last (looping, streamed, or 0.75 s and longer;
+ *     ranked without walls);
+ *   - "spots" where short sounds happen: the next short sounds within 4 m share its reflections,
+ *     so an animal's calls ring in its own room (a spot is let go 20 s after its last sound);
+ *   - one at the listener: the room around the listener ringing with what reaches it. Sounds with
+ *     no source of their own or nearby feed it at their direct path's level, walls included.
+ * Sources behind walls reach the listener only by the paths Steam Audio finds. Early reflections
+ * are convolved (directional, Ambisonic; not the listener's own, which would comb against every
+ * sound); the tail is a diffuse reverb at the simulated decay time per band, around the listener.
+ * Decoded with the world's Ambisonic bus (headphones) or to the speaker layout, heights included.
  * ============================================================================================= */
 
 typedef struct vsa_reflection_stats {

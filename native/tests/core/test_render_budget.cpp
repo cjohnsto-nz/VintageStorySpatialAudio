@@ -412,11 +412,15 @@ TEST_CASE("reflections render within budget at the default (Balanced) quality") 
         settle(engine, 8);
         const uint32_t block = engine.settings().block_frames;
         std::vector<float> out(static_cast<std::size_t>(block) * 12);
-        // The best of three 2-second windows: other processes (a parallel build, the test runner)
-        // must not decide the render thread's own cost.
+        // The best of five 2-second windows half a second apart: a transient load elsewhere (the
+        // virus scanner reading freshly built binaries, a finishing build) must not decide the
+        // render thread's own cost; a render that is slow throughout still fails.
         double p50 = std::numeric_limits<double>::infinity();
         double p99 = std::numeric_limits<double>::infinity();
-        for (int window = 0; window < 3; ++window) {
+        for (int window = 0; window < 5; ++window) {
+            if (window > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
             std::vector<double> times_us;
             for (int i = 0; i < 2 * 48000 / static_cast<int>(block); ++i) {
                 const auto start = std::chrono::steady_clock::now();

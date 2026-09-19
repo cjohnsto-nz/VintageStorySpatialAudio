@@ -267,7 +267,7 @@ internal sealed class SceneDebugTools : IDisposable
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture, $"Reflections: RT60 here {r.ListenerReverbTimes.Low:0.00}/{r.ListenerReverbTimes.Mid:0.00}/{r.ListenerReverbTimes.High:0.00} s ({DescribeSpace(r.ListenerReverbTimes.Mid)}), ")
             .Append(CultureInfo.InvariantCulture, $"level {r.OutputDb:0} dB, gain {r.Gain:0.##}\n")
-            .Append(CultureInfo.InvariantCulture, $"  {r.LiveSlots}/{r.Slots} voices with their own ({r.WaitingSlots} waiting, {r.DrainingSlots} fading); ")
+            .Append(CultureInfo.InvariantCulture, $"  {r.LiveSlots}/{r.Slots} sounds or spots with their own ({r.WaitingSlots} waiting, {r.DrainingSlots} fading); ")
             .Append(CultureInfo.InvariantCulture, $"simulation {r.LastTickMs:0} ms (max {r.MaxTickMs:0}), {r.Rays} rays x {r.Bounces} bounces, {r.DurationSeconds:0.0} s, order {r.Order}, up to {r.RateHz} Hz on {r.Threads} threads");
         if (!detailed && (renderer.Overlay & SceneOverlay.Reflections) == 0)
         {
@@ -277,7 +277,7 @@ internal sealed class SceneDebugTools : IDisposable
         foreach (ReflectionSourceInfo s in engine.GetReflectionSources().Where(s => s.Slot > 0).Take(8))
         {
             string name = describeVoice(s.Voice) ?? $"voice {s.Voice}";
-            text.Append(CultureInfo.InvariantCulture, $"\n  {name}: RT60 {s.ReverbTimes.Mid:0.00} s ({DescribeSpace(s.ReverbTimes.Mid)})");
+            text.Append(CultureInfo.InvariantCulture, $"\n  {name} (or near it): RT60 {s.ReverbTimes.Mid:0.00} s ({DescribeSpace(s.ReverbTimes.Mid)})");
         }
 
         return text.ToString();

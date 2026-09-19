@@ -119,6 +119,8 @@ private:
     void update_reflection_slots() noexcept;
     [[nodiscard]] bool reflection_candidate(const VoiceSlot& s) const noexcept;
     void release_reflections(RenderVoice& v) noexcept;
+    /// A short sound's spot: the nearest slot simulated within kSpotRadius, or a request for one.
+    void find_spot(VoiceSlot& s) noexcept;
     /// Feeds a positioned voice's signal (all gains but distance applied) to its reflections.
     void send_reflections(VoiceSlot& s, const SpatialParams& params, const float* mono) noexcept;
     /// Renders the reflections and adds them to the output (before the world bus is decoded).
@@ -158,6 +160,24 @@ private:
     };
     world::DirectChannel* direct_;
     ReflectionRenderer* reflections_;
+    // Who holds each reflection slot: a voice (its own reflections), or a spot where short sounds
+    // happen, kept while sounds keep happening there (ADR 0010).
+    struct SlotOwner {
+        enum class Kind : uint8_t { None, Voice, Spot };
+        Kind kind = Kind::None;
+        float position[3] = {};
+        float level = 0.0f;      // a spot's loudest recent sound, fading
+        uint64_t last_used = 0;  // a spot's latest sound (block)
+    };
+    std::vector<SlotOwner> owners_;
+    uint64_t block_index_ = 0;
+    // The loudest short sound this block that found no spot: next block's spot, if a slot is free.
+    bool spot_wanted_ = false;
+    float spot_position_[3] = {};
+    float spot_level_ = 0.0f;
+    vsa_voice spot_voice_ = 0;
+    float spot_fade_ = 1.0f;
+    uint64_t spot_hold_blocks_ = 0;
     dsp::GainRamp reflection_gain_;
     std::vector<float> reflection_gain_buf_;
     std::vector<uint32_t> set_generation_;

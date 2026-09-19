@@ -92,7 +92,13 @@ struct RenderVoice {
     float open_level = 0.0f;
     /// Reflection slot of its own (>= 1), or -1: its reflections come from the listener's reverb.
     int reflection_slot = -1;
-    /// 0 = sends to the listener's reverb, 1 = to its own slot (cross-fades when that is ready).
+    /// Otherwise, a slot simulated near it (a spot where short sounds happen, or a nearby voice's)
+    /// whose reflections it shares, and that slot's generation when it was chosen.
+    int spot_slot = -1;
+    uint32_t spot_generation = 0;
+    bool spot_searched = false;
+    /// 0 = sends to the listener's reverb, 1 = to its own or its spot's slot (cross-fades when
+    /// that is ready).
     float reverb_own = 0.0f;
     /// Panned (speakers), its own HRTF (headphones, within the binaural budget) or the world
     /// ambisonic bus (headphones, beyond it).

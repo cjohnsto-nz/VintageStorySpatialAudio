@@ -115,6 +115,29 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
   - with the overlay on, each voice with its own reflections and its RT60.
 - **Vanilla's `SetReverb`** is recorded and ignored. There is no fallback reverb when reflections are off.
 
+### After Chris's first test (ADR 0010)
+
+- **What Chris found:**
+  - reverb far too strong even at gain 0.1;
+  - phasing from early reflections;
+  - a wooden house sounding like a cave;
+  - far animals reverberating in his room, as if through walls.
+- **Causes:**
+  - the listener's shared reverb was fed by distance alone, ignoring walls;
+  - every send was scaled by vanilla's reference distance (3 m and more, so +10 dB);
+  - the listener's reverb had early reflections;
+  - Steam Audio's bare-panel wood preset.
+- **Fixes:**
+  - the listener's reverb gets each sound at its direct path's level (walls included) and has only a tail;
+  - sends are scaled by `clamp(distance, 1, min_distance)`;
+  - short sounds share "spots" simulated where they happen (4 m, kept 20 s after the last sound), so an animal's calls ring in its own room with walls respected by Steam Audio;
+  - building materials absorb more and rough ones scatter more.
+- **Tests:**
+  - a sound outside a closed room adds nothing to the listener's reverb;
+  - reverb keeps the direct sound's ratio for any reference distance;
+  - spots are made, shared and let go.
+- **Open:** the direct sound has no propagation delay, so far sounds' reflections come late after it (58 ms at 20 m). A physical propagation delay would fix that.
+
 ### To check in game (Chris)
 
 - **Reverb that follows the space:** walk from outdoors into a small stone room, a big hall, a cave. The HUD's RT60 and space name should follow; outdoors should be nearly dry.

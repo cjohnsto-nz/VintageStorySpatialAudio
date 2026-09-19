@@ -33,6 +33,12 @@ constexpr double kReflectionMinSeconds = 0.75;
 constexpr float kReflectionSteal = 2.0f;
 // A voice's reverb moves to its own slot over this many blocks.
 constexpr float kReverbSwitchBlocks = 8.0f;
+// Short sounds share the reflections of a slot simulated within this distance of them; a spot
+// with no sound for kSpotHoldSeconds is let go, and its level (for ranking) halves every
+// kSpotHalfLifeSeconds.
+constexpr float kSpotRadius = 4.0f;
+constexpr double kSpotHoldSeconds = 20.0;
+constexpr double kSpotHalfLifeSeconds = 5.0;
 
 template <typename T>
 void store_max(std::atomic<T>& target, T value) noexcept {
@@ -114,6 +120,10 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
     const double block_seconds = static_cast<double>(block_frames_) / sample_rate;
     direct_alpha_ = static_cast<float>(1.0 - std::exp(-block_seconds / kDirectSmoothSeconds));
     direct_max_hold_ = static_cast<uint32_t>(std::ceil(kDirectMaxHoldSeconds / block_seconds));
+    spot_fade_ = static_cast<float>(std::exp2(-block_seconds / kSpotHalfLifeSeconds));
+    spot_hold_blocks_ = static_cast<uint64_t>(std::ceil(kSpotHoldSeconds / block_seconds));
+    owners_.assign(reflections_ != nullptr && reflections_->enabled() ? reflections_->slot_count() : 0, SlotOwner{});
+    spot_wanted_ = false;
     limiter_.prepare(sample_rate);
     block_out_.assign(static_cast<std::size_t>(block_frames_) * channels, 0.0f);
     block_read_ = block_frames_;  // empty: the next render() starts a block
@@ -125,6 +135,8 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* devi
         v.effect_set = -1;
         v.is_virtual = false;
         v.reflection_slot = -1;  // the reflection renderer was prepared afresh
+        v.spot_slot = -1;
+        v.spot_searched = false;
         v.reverb_own = 0.0f;
     }
 }
@@ -372,6 +384,7 @@ void Mixer::start(VoiceSlot& s) noexcept {
     v.pending = static_cast<uint8_t>(v.pending & ~RenderVoice::kPause);
     v.state = VSA_VOICE_PLAYING;
     v.sounded = false;
+    v.spot_searched = false;  // a restarted sound looks for a spot again
     v.env_target = 1.0f;  // env == 1 after a clean stop (instant start), 0 after pause/seek (ramp in)
 }
 
@@ -590,6 +603,7 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
         }
         if (v.reflection_slot > 0) {
             reflections_->set_position(v.reflection_slot, v.position);
+            std::copy_n(v.position, 3, owners_[static_cast<std::size_t>(v.reflection_slot)].position);
         }
     }
 
@@ -888,8 +902,11 @@ bool Mixer::reflection_candidate(const VoiceSlot& s) const noexcept {
 void Mixer::release_reflections(RenderVoice& v) noexcept {
     if (v.reflection_slot > 0 && reflections_ != nullptr) {
         reflections_->release(v.reflection_slot);
+        owners_[static_cast<std::size_t>(v.reflection_slot)] = SlotOwner{};
     }
     v.reflection_slot = -1;
+    v.spot_slot = -1;
+    v.spot_searched = false;  // it may share a spot now
     v.reverb_own = 0.0f;
 }
 
@@ -897,11 +914,24 @@ void Mixer::update_reflection_slots() noexcept {
     if (reflections_ == nullptr || !reflections_->enabled()) {
         return;
     }
-    // Ranked by level without walls: reflections carry sound around them, so a voice behind a
-    // wall is exactly one that needs its own.
+    ++block_index_;
+    // Spots fade from ranking, and are let go once nothing has sounded there for a while.
+    for (std::size_t i = 1; i < owners_.size(); ++i) {
+        SlotOwner& o = owners_[i];
+        if (o.kind == SlotOwner::Kind::Spot) {
+            o.level *= spot_fade_;
+            if (block_index_ - o.last_used > spot_hold_blocks_) {
+                reflections_->release(static_cast<int>(i));
+                o = SlotOwner{};
+            }
+        }
+    }
+
+    // Lasting voices first. Ranked by level without walls: reflections carry sound around them,
+    // so a voice behind a wall is exactly one that needs its own.
     uint32_t best = slot_count_;
     float best_level = kVirtualBelow;
-    uint32_t worst = slot_count_;
+    int worst = -1;  // the quietest holder, voice or spot
     float worst_level = std::numeric_limits<float>::infinity();
     for (uint32_t i = 0; i < active_count_; ++i) {
         const uint32_t index = active_[i];
@@ -913,28 +943,97 @@ void Mixer::update_reflection_slots() noexcept {
                 release_reflections(v);
             } else if (v.open_level < worst_level) {
                 worst_level = v.open_level;
-                worst = index;
+                worst = static_cast<int>(index);
             }
         } else if (candidate && v.open_level > best_level) {
             best_level = v.open_level;
             best = index;
         }
     }
-    if (best == slot_count_) {
-        return;
+    int worst_spot = -1;
+    for (std::size_t i = 1; i < owners_.size(); ++i) {
+        if (owners_[i].kind == SlotOwner::Kind::Spot && owners_[i].level < worst_level) {
+            worst_level = owners_[i].level;
+            worst_spot = static_cast<int>(i);
+        }
     }
-    if (reflections_->free_slots() == 0) {
-        if (worst != slot_count_ && best_level > kReflectionSteal * worst_level) {
-            release_reflections(slots_[worst].render);  // its slot drains, then goes to the louder one
+    if (best != slot_count_) {
+        if (reflections_->free_slots() == 0) {
+            if (best_level > kReflectionSteal * worst_level) {
+                // Its slot drains, then goes to the louder one.
+                if (worst_spot > 0) {
+                    reflections_->release(worst_spot);
+                    owners_[static_cast<std::size_t>(worst_spot)] = SlotOwner{};
+                } else if (worst >= 0) {
+                    release_reflections(slots_[static_cast<std::size_t>(worst)].render);
+                }
+            }
+            return;
+        }
+        VoiceSlot& s = slots_[best];
+        const int slot = reflections_->acquire(s.handle);
+        if (slot > 0) {
+            s.render.reflection_slot = slot;
+            s.render.spot_slot = -1;
+            s.render.reverb_own = 0.0f;
+            reflections_->set_position(slot, s.render.position);
+            SlotOwner& o = owners_[static_cast<std::size_t>(slot)];
+            o = SlotOwner{};
+            o.kind = SlotOwner::Kind::Voice;
+            std::copy_n(s.render.position, 3, o.position);
         }
         return;
     }
-    VoiceSlot& s = slots_[best];
-    const int slot = reflections_->acquire(s.handle);
-    if (slot > 0) {
-        s.render.reflection_slot = slot;
-        s.render.reverb_own = 0.0f;
-        reflections_->set_position(slot, s.render.position);
+
+    // Then a spot for last block's loudest short sound without one, if a slot is free.
+    if (spot_wanted_ && reflections_->free_slots() > 0) {
+        const int slot = reflections_->acquire(spot_voice_);
+        if (slot > 0) {
+            reflections_->set_position(slot, spot_position_);
+            SlotOwner& o = owners_[static_cast<std::size_t>(slot)];
+            o = SlotOwner{};
+            o.kind = SlotOwner::Kind::Spot;
+            std::copy_n(spot_position_, 3, o.position);
+            o.level = spot_level_;
+            o.last_used = block_index_;
+        }
+    }
+    spot_wanted_ = false;
+    spot_level_ = 0.0f;
+}
+
+void Mixer::find_spot(VoiceSlot& s) noexcept {
+    RenderVoice& v = s.render;
+    v.spot_searched = true;
+    int nearest = -1;
+    float nearest_d2 = kSpotRadius * kSpotRadius;
+    for (std::size_t i = 1; i < owners_.size(); ++i) {
+        const SlotOwner& o = owners_[i];
+        if (o.kind == SlotOwner::Kind::None) {
+            continue;
+        }
+        float d2 = 0.0f;
+        for (int k = 0; k < 3; ++k) {
+            const float d = o.position[k] - v.position[k];
+            d2 += d * d;
+        }
+        if (d2 <= nearest_d2) {
+            nearest_d2 = d2;
+            nearest = static_cast<int>(i);
+        }
+    }
+    if (nearest > 0) {
+        v.spot_slot = nearest;
+        v.spot_generation = reflections_->generation(nearest);
+        return;
+    }
+    // Nothing simulated here yet: this sound shares the listener's reverb; the next ones from
+    // this place will have their own room's. (Lasting sounds get slots of their own instead.)
+    if (!reflection_candidate(s) && v.open_level > spot_level_) {
+        spot_wanted_ = true;
+        std::copy_n(v.position, 3, spot_position_);
+        spot_level_ = v.open_level;
+        spot_voice_ = s.handle;
     }
 }
 
@@ -945,26 +1044,49 @@ void Mixer::send_reflections(VoiceSlot& s, const SpatialParams& params, const fl
     RenderVoice& v = s.render;
     const uint32_t frames = block_frames_;
     const float* bus_gain = bus_gains_[s.bus];
-    // Steam Audio simulates a source that is 1 m loud at 1 m; ours is at `min_distance`.
-    const float loudness = std::max(v.min_distance, 0.0f);
-    const bool own = v.reflection_slot > 0 && reflections_->ready(v.reflection_slot);
+
+    // Which simulated slot this sound's reflections come from: its own, or a spot near it.
+    int target = v.reflection_slot;
+    if (target <= 0 && v.spatial == VSA_SPATIAL_WORLD) {
+        if (!v.spot_searched) {
+            find_spot(s);
+        }
+        if (v.spot_slot > 0) {
+            SlotOwner& o = owners_[static_cast<std::size_t>(v.spot_slot)];
+            if (o.kind == SlotOwner::Kind::None || reflections_->generation(v.spot_slot) != v.spot_generation) {
+                v.spot_slot = -1;  // the slot went to something else
+            } else {
+                if (o.kind == SlotOwner::Kind::Spot) {
+                    o.last_used = block_index_;
+                    o.level = std::max(o.level, v.open_level);
+                }
+                target = v.spot_slot;
+            }
+        }
+    }
+    const bool own = target > 0 && reflections_->ready(target);
     const float from = v.reverb_own;
     const float to = own ? std::min(1.0f, from + 1.0f / kReverbSwitchBlocks) : 0.0f;
     v.reverb_own = to;
     const float step = (to - from) / static_cast<float>(frames);
 
     if (from < 1.0f || to < 1.0f) {
-        // The listener's reverb stands in: a diffuse field hardly falls with distance inside a
-        // room, while a far sound elsewhere should hardly excite it; halfway, -3 dB per doubling.
-        const float shared = loudness / std::sqrt(std::max(1.0f, params.distance));
+        // The listener's reverb: the room around you ringing with what reaches you, so it gets
+        // exactly the direct path's level, walls and distance included.
+        const float arriving =
+            params.distance_gain * (params.occlusion + (1.0f - params.occlusion) * params.transmission[1]);
         float* send = reflections_->send(0);
         for (uint32_t j = 0; j < frames; ++j) {
             const float w = from + step * static_cast<float>(j + 1);
-            send[j] += mono[j] * bus_gain[j] * shared * (1.0f - w);
+            send[j] += mono[j] * bus_gain[j] * arriving * (1.0f - w);
         }
     }
     if (own && (from > 0.0f || to > 0.0f)) {
-        float* send = reflections_->send(v.reflection_slot);
+        // Steam Audio simulates a source that plays at 1 at 1 m (1 / distance beyond); our direct
+        // path plays at 1 within min_distance (min_distance / distance beyond). The ratio of the
+        // two scales its reflections to this sound.
+        const float loudness = std::clamp(params.distance, 1.0f, std::max(1.0f, v.min_distance));
+        float* send = reflections_->send(target);
         for (uint32_t j = 0; j < frames; ++j) {
             const float w = from + step * static_cast<float>(j + 1);
             send[j] += mono[j] * bus_gain[j] * loudness * w;

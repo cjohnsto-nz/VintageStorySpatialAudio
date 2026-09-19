@@ -31,13 +31,16 @@ struct ReflectionMeter {
     std::atomic<uint32_t> draining_slots{0};
 };
 
-/// The render side of the reflections (Phase 6, ADR 0009). One slot per simulated source: slot 0
-/// is the listener's reverb, fed by every world sound without a slot of its own; slots 1.. are
-/// given to single voices by the mixer. Each slot renders
+/// The render side of the reflections (Phase 6, ADRs 0009 and 0010). One slot per simulated
+/// source: slot 0 is the listener's reverb, fed by every world sound without a slot of its own;
+/// slots 1.. are given by the mixer to single voices or to spots where short sounds happen. Each
+/// slot renders
 ///  - the early part of its simulated impulse response by convolution (Steam Audio's reflection
-///    effect, Ambisonic, reading the simulator's impulse response for the slot), and
+///    effect, Ambisonic, reading the simulator's impulse response for the slot), except the
+///    listener's: its early reflections are those of a sound at the listener's head, wrong in time
+///    for every other sound, and they comb against the direct sound; and
 ///  - the diffuse tail with our own LateReverb, from the simulated RT60 and level, as plane
-///    waves around the listener.
+///    waves around the listener (the listener's starting sooner, where its early part would be).
 /// Everything is summed into a world-space Ambisonic bus, which the mixer decodes: binaurally
 /// with the world bus (headphones) or with a SpeakerDecoder.
 ///
@@ -72,6 +75,10 @@ public:
     void set_position(int slot, const float position[3]) noexcept;
     /// Whether the slot has results for its current voice (its own reflections can be heard).
     [[nodiscard]] bool ready(int slot) const noexcept;
+    /// The slot's current generation: it changes whenever the slot is given to someone else.
+    [[nodiscard]] uint32_t generation(int slot) const noexcept {
+        return slots_[static_cast<std::size_t>(slot)].generation;
+    }
     /// The slot's input for this block (block_frames samples, accumulated into).
     [[nodiscard]] float* send(int slot) noexcept;
     [[nodiscard]] uint32_t free_slots() const noexcept;
@@ -106,7 +113,7 @@ private:
     bool take_results(uint32_t index, Slot& slot) noexcept;
     /// Convolves (and, for the late part, reverberates) the slot's input into the bus. `flush`
     /// runs the convolution even when it has stopped ringing (to take a pending response).
-    void render_slot(Slot& slot, bool input, bool flush) noexcept;
+    void render_slot(Slot& slot, bool input, bool flush, bool listener) noexcept;
 
     const steam::SteamContext& steam_;
     world::ReflectionChannel* channel_;
@@ -115,6 +122,7 @@ private:
     uint32_t sample_rate_ = 48000;
     uint32_t channels_ = 0;       // Ambisonic channels of the bus
     uint32_t early_blocks_ = 0;   // blocks the convolution rings after its input stops
+    uint32_t listener_predelay_ = 0;  // where the listener's tail starts (samples)
     std::vector<Slot> slots_;
     // Each slot's latest generation, kept across prepare(): after a reopen, results published for
     // a voice from before it can never match a new voice.

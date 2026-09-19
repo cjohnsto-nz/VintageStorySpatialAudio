@@ -236,7 +236,7 @@ TEST_CASE("reflections: the rendered reverb decays at the simulated decay time")
         const auto simulated = static_cast<double>(stats(e).listener_reverb_times[1]);
         MESSAGE("room " << room.w << "x" << room.h << "x" << room.d << ": rendered RT60 " << rt << " s, simulated " << simulated
                         << " s");
-        CHECK(rt == doctest::Approx(simulated).epsilon(0.35));
+        CHECK(rt == doctest::Approx(simulated).epsilon(0.2));
         measured[i] = rt;
     }
     CHECK(measured[1] > 2.0 * measured[0]);
@@ -271,7 +271,7 @@ TEST_CASE("reflections: nothing is added when they are off") {
     CHECK(late[0] > 1e-4);
 }
 
-TEST_CASE("reflections: long sounds get their own, short ones share the listener's") {
+TEST_CASE("reflections: long sounds get their own; short ones share a spot simulated where they happen") {
     const Room room{12, 6, 12};
     OfflineEngine e(reflection_config());
     set_materials(e);
@@ -280,20 +280,87 @@ TEST_CASE("reflections: long sounds get their own, short ones share the listener
     const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
     const AssetPtr blip = e.pcm(burst(0.2), 1, kRate);
     const vsa_voice looping = e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(), room.cz());
-    const vsa_voice short_one = one_shot(e, blip, room.cx() - 3.0f, room.cy(), room.cz());
     REQUIRE(vsa_voice_start(e.engine, looping) == VSA_OK);
-    REQUIRE(vsa_voice_start(e.engine, short_one) == VSA_OK);
+    REQUIRE(vsa_voice_start(e.engine, one_shot(e, blip, room.cx() - 4.0f, room.cy(), room.cz())) == VSA_OK);
     e.render(kRate / 2);
-    const vsa_reflection_stats s = stats(e);
-    CHECK(s.live_slots == 1);
-    const std::vector<vsa_reflection_source> list = sources(e);
-    REQUIRE(list.size() == 2);
+    CHECK(stats(e).live_slots == 2);  // the looping voice's own, and the short one's spot
+    std::vector<vsa_reflection_source> list = sources(e);
+    REQUIRE(list.size() == 3);
     CHECK(list[0].slot == 0);
     CHECK(list[0].voice == 0);
-    CHECK(list[1].slot >= 1);
-    CHECK(list[1].voice == looping);
-    CHECK(static_cast<double>(list[1].position[0]) == doctest::Approx(static_cast<double>(room.cx() + 3.0f)));
-    CHECK(list[1].reverb_times[1] > 0.3f);
+    const auto own = std::find_if(list.begin(), list.end(), [&](const vsa_reflection_source& s) { return s.voice == looping; });
+    REQUIRE(own != list.end());
+    CHECK(static_cast<double>(own->position[0]) == doctest::Approx(static_cast<double>(room.cx() + 3.0f)));
+    CHECK(own->reverb_times[1] > 0.3f);
+    const auto spot = std::find_if(list.begin(), list.end(), [&](const vsa_reflection_source& s) {
+        return s.slot > 0 && s.voice != looping;
+    });
+    REQUIRE(spot != list.end());
+    CHECK(static_cast<double>(spot->position[0]) == doctest::Approx(static_cast<double>(room.cx() - 4.0f)));
+
+    // More short sounds nearby share that spot; none makes another.
+    for (int i = 0; i < 3; ++i) {
+        REQUIRE(vsa_voice_start(e.engine, one_shot(e, blip, room.cx() - 4.0f + static_cast<float>(i), room.cy(),
+                                                   room.cz() + 1.0f)) == VSA_OK);
+        e.render(kRate / 4);
+    }
+    CHECK(stats(e).live_slots == 2);
+    CHECK(sources(e).size() == 3);
+
+    // Once nothing has sounded there for a while, the spot is let go.
+    e.render(static_cast<std::size_t>(kRate) * 22);
+    CHECK(stats(e).live_slots == 1);
+}
+
+TEST_CASE("reflections: a sound behind walls reverberates only as much as reaches the listener") {
+    // The listener in a closed stone room; a short sound inside it, or outside it.
+    // Its first play has no spot yet and excites the listener's reverb: by what arrives, walls
+    // included. (Its spot outside, simulated by Steam Audio, finds no way in either.)
+    const Room room{8, 4, 8};
+    double peak_db[2] = {};
+    for (const bool outside : {false, true}) {
+        vsa_engine_config config = reflection_config();
+        config.flags = 0;  // the direct simulation too: occlusion and transmission
+        OfflineEngine e(config);
+        set_materials(e);
+        build(e, &room);
+        e.listener(room.cx() - 2.0f, room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+        e.render(kRate / 2);
+        const AssetPtr blip = e.pcm(burst(0.5), 1, kRate);
+        // 4 m away inside the room, or 9 m away beyond its east wall (x 10..11).
+        const float x = outside ? room.cx() - 2.0f + 9.0f : room.cx() + 2.0f;
+        REQUIRE(vsa_voice_start(e.engine, one_shot(e, blip, x, room.cy(), room.cz())) == VSA_OK);
+        double peak = -200.0;
+        for (int i = 0; i < 10; ++i) {
+            e.render(kRate / 10);
+            peak = std::max(peak, static_cast<double>(stats(e).output_db));
+        }
+        peak_db[outside ? 1 : 0] = peak;
+    }
+    MESSAGE("listener's reverb from a sound inside the room " << peak_db[0] << " dB, from one outside its stone walls "
+                                                              << peak_db[1] << " dB");
+    CHECK(peak_db[1] < peak_db[0] - 30.0);
+}
+
+TEST_CASE("reflections: a sound's reverb scales with its direct sound, whatever its reference distance") {
+    // Game sounds keep full level within a reference distance (3 m and more): the same sound at
+    // 3 m with a reference of 1 m is 9.5 dB quieter than with 8 m, direct and reflected alike.
+    const Room room{12, 6, 12};
+    double level_db[2] = {};
+    for (const float reference : {1.0f, 8.0f}) {
+        OfflineEngine e(reflection_config());
+        set_materials(e);
+        build(e, &room);
+        e.listener(room.cx(), room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+        const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
+        REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, room.cx() + 3.0f, room.cy(), room.cz(),
+                                                        reference)) == VSA_OK);
+        e.render(static_cast<std::size_t>(kRate) * 2);
+        REQUIRE(stats(e).live_slots == 1);
+        level_db[reference > 1.0f ? 1 : 0] = static_cast<double>(stats(e).output_db);
+    }
+    MESSAGE("reflections " << level_db[1] - level_db[0] << " dB louder with an 8 m reference (direct: 9.5 dB)");
+    CHECK(level_db[1] - level_db[0] == doctest::Approx(9.54).epsilon(0.15));
 }
 
 TEST_CASE("reflections: slots are handed on as voices come and go") {

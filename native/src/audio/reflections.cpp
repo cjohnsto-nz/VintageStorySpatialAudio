@@ -29,6 +29,9 @@ constexpr float kLateDirections[dsp::LateReverb::kOutputs][3] = {
 
 constexpr double kMeterSeconds = 0.3;
 
+// The listener's reverb has no early part: its tail starts this soon after the sound.
+constexpr double kListenerTailSeconds = 0.02;
+
 }  // namespace
 
 ReflectionRenderer::ReflectionRenderer(const steam::SteamContext& steam, world::ReflectionChannel* channel,
@@ -55,6 +58,7 @@ void ReflectionRenderer::prepare(uint32_t sample_rate, uint32_t channels, world:
     const auto early_samples = static_cast<uint32_t>(
         std::ceil(static_cast<double>(simulator->settings().transition) * sample_rate));
     early_blocks_ = (early_samples + frames_ - 1) / frames_ + 1;
+    listener_predelay_ = static_cast<uint32_t>(std::lround(kListenerTailSeconds * sample_rate));
 
     IPLAudioSettings audio{};
     audio.samplingRate = static_cast<IPLint32>(sample_rate);
@@ -188,10 +192,10 @@ bool ReflectionRenderer::take_results(uint32_t index, Slot& slot) noexcept {
     return true;
 }
 
-void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush) noexcept {
+void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush, bool listener) noexcept {
     const float* in = input ? slot.send.data() : silence_.data();
     const auto frames = static_cast<IPLint32>(frames_);
-    if (input || slot.early_tail > 0 || flush) {
+    if (!listener && (input || slot.early_tail > 0 || flush)) {
         float* in_channels[1] = {const_cast<float*>(in)};
         IPLAudioBuffer in_buffer{1, frames, in_channels};
         IPLAudioBuffer out_buffer{static_cast<IPLint32>(channels_), frames, early_out_.data()};
@@ -217,7 +221,9 @@ void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush) noexcep
     }
 
     std::fill(late_storage_.begin(), late_storage_.end(), 0.0f);
-    const uint32_t predelay = static_cast<uint32_t>(std::max(0, slot.delay));
+    const uint32_t predelay =
+        listener ? std::min(listener_predelay_, static_cast<uint32_t>(std::max(0, slot.delay)))
+                 : static_cast<uint32_t>(std::max(0, slot.delay));
     slot.late_sounding = slot.late.process(in, frames_, slot.reverb_times, slot.eq, predelay, late_out_.data());
     if (slot.late_sounding) {
         for (int k = 0; k < dsp::LateReverb::kOutputs; ++k) {
@@ -260,7 +266,7 @@ bool ReflectionRenderer::render(const float* gain) noexcept {
                     break;
                 }
                 if (slot.sent || slot.early_tail > 0 || slot.late_sounding) {
-                    render_slot(slot, slot.sent, false);
+                    render_slot(slot, slot.sent, false, i == 0);
                 }
                 live += i > 0 ? 1u : 0u;  // voices' own, not the listener's
                 break;
@@ -270,7 +276,7 @@ bool ReflectionRenderer::render(const float* gain) noexcept {
                 const bool acknowledged = channel_->output(i).observed.load(std::memory_order_acquire) == 0;
                 const bool flush = acknowledged && !slot.flushed;
                 if (slot.early_tail > 0 || slot.late_sounding || flush) {
-                    render_slot(slot, false, flush);
+                    render_slot(slot, false, flush, false);
                     slot.flushed = slot.flushed || flush;
                 }
                 if (slot.flushed && slot.early_tail == 0 && !slot.late_sounding) {
