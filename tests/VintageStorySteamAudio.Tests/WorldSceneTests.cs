@@ -44,6 +44,7 @@ public sealed class WorldSceneTests
         Assert.Equal("cloth", table.NameOf(table.Resolve("game:hay-normal-ud", "Plant")));  // rule beats the block material
         Assert.Equal("glass", table.NameOf(table.Resolve("game:glasspane-leaded-oak-ns", "Wood")));
         Assert.Equal("air", table.NameOf(table.Resolve("game:tallgrass-eaten-free", "Plant")));
+        Assert.Equal("air", table.NameOf(table.Resolve("game:groundstorage", "Ceramic")));
         Assert.Equal("generic", table.NameOf(table.Resolve("othermod:thing", "Unobtainium")));
 
         var custom = new AcousticMaterialConfig

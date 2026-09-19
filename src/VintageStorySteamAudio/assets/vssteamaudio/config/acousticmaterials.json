@@ -42,6 +42,9 @@
   // Block code rules, checked first; the first match wins. "*" matches anything; a pattern
   // without a domain matches any domain.
   "byCode": [
+    // Items placed on the ground (pots, ingots, planks): small and transient, and their collision
+    // box can be a full cube. Kept out of the scene.
+    { "code": "game:groundstorage*", "material": "air" },
     { "code": "game:hay*", "material": "cloth" },
     { "code": "game:glasspane*", "material": "glass" }
   ]
