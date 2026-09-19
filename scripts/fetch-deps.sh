@@ -39,10 +39,12 @@ python3 - "$MANIFEST" > "$DOWNLOADS/manifest.records" <<'PY'
 import json, sys
 FIELDS = ["name", "url", "sha256", "kind", "archiveRoot", "destination"]
 for d in json.load(open(sys.argv[1]))["dependencies"]:
-    if d["kind"] not in ("zip", "file"):
+    if d["kind"] not in ("zip", "tar.gz", "file"):
         sys.exit(f"unknown kind {d['kind']!r} for {d['name']}")
-    if d["kind"] == "zip" and not d.get("archiveRoot"):
-        sys.exit(f"zip dependency {d['name']} needs archiveRoot")
+    if d["kind"] in ("zip", "tar.gz") and not d.get("archiveRoot"):
+        sys.exit(f"{d['kind']} dependency {d['name']} needs archiveRoot")
+    if "/" in d.get("archiveRoot", "") or ".." in d.get("archiveRoot", ""):
+        sys.exit(f"archiveRoot of {d['name']} must be a single folder name")
     if not d.get("destination", "").startswith("third_party/"):
         sys.exit(f"destination of {d['name']} must be under third_party/")
     sys.stdout.write("".join(str(d.get(f, "")) + "\0" for f in FIELDS))
@@ -75,6 +77,14 @@ while IFS= read -r -d '' name && IFS= read -r -d '' url && IFS= read -r -d '' sh
       tmp="$DOWNLOADS/$name.extract"
       rm -rf "$tmp" && mkdir -p "$tmp"
       unzip -q "$file" -d "$tmp" </dev/null
+      mv "$tmp/$root" "$dest_abs"
+      rm -rf "$tmp"
+      ;;
+    tar.gz)
+      tmp="$DOWNLOADS/$name.extract"
+      rm -rf "$tmp" && mkdir -p "$tmp"
+      tar -xzf "$file" -C "$tmp" </dev/null
+      [[ -d "$tmp/$root" ]] || { echo "error: $name archive has no '$root' folder" >&2; exit 1; }
       mv "$tmp/$root" "$dest_abs"
       rm -rf "$tmp"
       ;;

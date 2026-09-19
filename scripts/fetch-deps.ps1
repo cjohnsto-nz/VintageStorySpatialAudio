@@ -26,7 +26,10 @@ function Assert-SafeDestination([string]$Path) {
 }
 
 foreach ($dep in $Manifest.dependencies) {
-    if ($dep.kind -notin @('zip', 'file')) { throw "Unknown kind '$($dep.kind)' for $($dep.name)" }
+    if ($dep.kind -notin @('zip', 'tar.gz', 'file')) { throw "Unknown kind '$($dep.kind)' for $($dep.name)" }
+    if ($dep.kind -ne 'file' -and ([string]::IsNullOrEmpty($dep.archiveRoot) -or $dep.archiveRoot -match '[\\/]|\.\.')) {
+        throw "$($dep.name): archiveRoot must be a single folder name"
+    }
     $dest = Assert-SafeDestination (Join-Path $Root $dep.destination)
     $stamp = Join-Path $Downloads "$($dep.name).sha256"
     if ((Test-Path $stamp) -and ((Get-Content -Raw $stamp).Trim() -eq $dep.sha256) -and (Test-Path $dest)) {
@@ -45,11 +48,23 @@ foreach ($dep in $Manifest.dependencies) {
 
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
     New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
-    if ($dep.kind -eq 'zip') {
+    if ($dep.kind -in @('zip', 'tar.gz')) {
         $tmp = Join-Path $Downloads "$($dep.name).extract"
         if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
-        Expand-Archive -Path $file -DestinationPath $tmp
-        Move-Item (Join-Path $tmp $dep.archiveRoot) $dest
+        if ($dep.kind -eq 'zip') {
+            Expand-Archive -Path $file -DestinationPath $tmp
+        }
+        else {
+            New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+            # On Windows use the system bsdtar explicitly: a GNU tar from Git for Windows earlier
+            # on PATH reads 'C:\...' as a remote host.
+            $tar = if ($IsWindows) { Join-Path $env:SystemRoot 'System32/tar.exe' } else { 'tar' }
+            & $tar -xzf $file -C $tmp
+            if ($LASTEXITCODE -ne 0) { throw "Extracting $($dep.name) failed (tar exit code $LASTEXITCODE)" }
+        }
+        $extracted = Join-Path $tmp $dep.archiveRoot
+        if (-not (Test-Path $extracted)) { throw "$($dep.name): archive has no '$($dep.archiveRoot)' folder" }
+        Move-Item $extracted $dest
         Remove-Item -Recurse -Force $tmp
     }
     else {

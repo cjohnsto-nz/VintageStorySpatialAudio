@@ -17,6 +17,32 @@
       "sha256": "94029a7d32da24a56249658147dbd2b33ff0b9ed665295cbbaf19aafff5b0ced",
       "kind": "file",
       "destination": "third_party/doctest/doctest/doctest.h"
+    },
+    {
+      "name": "miniaudio",
+      "version": "0.11.25",
+      "url": "https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h",
+      "sha256": "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89",
+      "kind": "file",
+      "destination": "third_party/miniaudio/miniaudio.h"
+    },
+    {
+      "name": "libogg",
+      "version": "1.3.6",
+      "url": "https://github.com/xiph/ogg/releases/download/v1.3.6/libogg-1.3.6.tar.gz",
+      "sha256": "83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638",
+      "kind": "tar.gz",
+      "archiveRoot": "libogg-1.3.6",
+      "destination": "third_party/libogg"
+    },
+    {
+      "name": "libvorbis",
+      "version": "1.3.7",
+      "url": "https://github.com/xiph/vorbis/releases/download/v1.3.7/libvorbis-1.3.7.tar.gz",
+      "sha256": "0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab",
+      "kind": "tar.gz",
+      "archiveRoot": "libvorbis-1.3.7",
+      "destination": "third_party/libvorbis"
     }
   ]
 }

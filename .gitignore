@@ -17,6 +17,9 @@ compile_commands.json
 # Fetched third-party SDKs (see scripts/fetch-deps.*; hashes pinned in third_party/deps.json)
 /third_party/steamaudio/
 /third_party/doctest/
+/third_party/miniaudio/
+/third_party/libogg/
+/third_party/libvorbis/
 /third_party/.downloads/
 
 # Packaging output
