@@ -1,0 +1,183 @@
+using System.Globalization;
+using System.Text;
+using Vintagestory.API.Client;
+using Vintagestory.API.Common;
+using VintageStorySteamAudio.Native;
+using VintageStorySteamAudio.World;
+
+namespace VintageStorySteamAudio.Debugging;
+
+/// <summary>
+/// The world scene's debugging tools: the overlay (<see cref="SceneDebugRenderer"/>), its HUD, a
+/// hotkey that cycles the overlay (Ctrl+F7 by default, rebindable in the controls), and the
+/// .steamaudio scene commands.
+/// </summary>
+internal sealed class SceneDebugTools : IDisposable
+{
+    public const string HotkeyCode = "vssteamaudio-scene-overlay";
+
+    private static readonly SceneOverlay[] Cycle =
+    [
+        SceneOverlay.None,
+        SceneOverlay.Wireframe,
+        SceneOverlay.Wireframe | SceneOverlay.Bounds,
+        SceneOverlay.Faces | SceneOverlay.Wireframe,
+    ];
+
+    private readonly ICoreClientAPI capi;
+    private readonly AudioEngine engine;
+    private readonly WorldAcoustics world;
+    private readonly SceneDebugRenderer renderer;
+    private readonly SceneHud hud;
+    private readonly long hudListener;
+    private bool disposed;
+
+    public SceneDebugTools(ICoreClientAPI capi, AudioEngine engine, WorldAcoustics world)
+    {
+        this.capi = capi;
+        this.engine = engine;
+        this.world = world;
+        renderer = new SceneDebugRenderer(capi, engine, () => world.Materials, () => world.Status().Centre);
+        capi.Event.RegisterRenderer(renderer, EnumRenderStage.Opaque, "vssteamaudio-scene");
+        hud = new SceneHud(capi);
+        hudListener = capi.Event.RegisterGameTickListener(_ => UpdateHud(), 250);
+        capi.Input.RegisterHotKey(HotkeyCode, "Steam Audio: cycle the acoustic scene overlay", GlKeys.F7, HotkeyType.DevTool, ctrlPressed: true);
+        capi.Input.SetHotKeyHandler(HotkeyCode, _ =>
+        {
+            int next = (Array.IndexOf(Cycle, renderer.Overlay) + 1) % Cycle.Length;
+            SetOverlay(Cycle[next]);
+            capi.ShowChatMessage($"Acoustic scene overlay: {Describe(renderer.Overlay)}");
+            return true;
+        });
+    }
+
+    public void SetOverlay(SceneOverlay overlay)
+    {
+        renderer.Overlay = overlay;
+        if (overlay == SceneOverlay.None)
+        {
+            hud.TryClose();
+            renderer.Clear();
+        }
+        else
+        {
+            hud.TryOpen();
+            UpdateHud();
+        }
+    }
+
+    /// <summary>".steamaudio scene [wire|faces|bounds|off|hud|radius N|legend|export|reload]".</summary>
+    public string Command(string? action, string? argument)
+    {
+        switch ((action ?? string.Empty).ToLowerInvariant())
+        {
+            case "":
+            case "status":
+                return StatusText();
+            case "wire":
+                SetOverlay(renderer.Overlay ^ SceneOverlay.Wireframe);
+                return $"Overlay: {Describe(renderer.Overlay)}";
+            case "faces":
+                SetOverlay(renderer.Overlay ^ SceneOverlay.Faces);
+                return $"Overlay: {Describe(renderer.Overlay)}";
+            case "bounds":
+                SetOverlay(renderer.Overlay ^ SceneOverlay.Bounds);
+                return $"Overlay: {Describe(renderer.Overlay)}";
+            case "off":
+                SetOverlay(SceneOverlay.None);
+                return "Overlay off.";
+            case "radius":
+                if (!int.TryParse(argument, NumberStyles.Integer, CultureInfo.InvariantCulture, out int radius) || radius < 0 || radius > 4)
+                {
+                    return "Usage: .steamaudio scene radius <0-4> (chunks drawn around yours)";
+                }
+
+                renderer.Radius = radius;
+                renderer.Clear();
+                return $"Overlay radius: {radius} chunk(s).";
+            case "legend":
+                return Legend();
+            case "export":
+                string folder = capi.GetOrCreateDataPath("Logs");
+                string path = Path.Combine(folder, $"vssteamaudio-scene-{DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}.obj");
+                engine.SaveSceneObj(path);
+                return $"Scene written to {path} (world block coordinates; open it in Blender or MeshLab).";
+            case "reload":
+                renderer.Clear();
+                return world.Reload();
+            default:
+                return "Usage: .steamaudio scene [status|wire|faces|bounds|off|radius N|legend|export|reload]";
+        }
+    }
+
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        disposed = true;
+        capi.Event.UnregisterGameTickListener(hudListener);
+        capi.Event.UnregisterRenderer(renderer, EnumRenderStage.Opaque);
+        renderer.Dispose();
+        hud.TryClose();
+        hud.Dispose();
+    }
+
+    private void UpdateHud()
+    {
+        if (renderer.Overlay == SceneOverlay.None || !hud.IsOpened())
+        {
+            return;
+        }
+
+        try
+        {
+            hud.SetText(StatusText());
+        }
+        catch (NativeException)
+        {
+            // The engine is shutting down.
+        }
+    }
+
+    private string StatusText()
+    {
+        SceneStats s = engine.GetSceneStats();
+        WorldStatus w = world.Status();
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture, $"Acoustic scene: {s.Chunks} chunks ({s.MeshedChunks} meshed, {s.PendingChunks} pending), ")
+            .Append(CultureInfo.InvariantCulture, $"{s.Triangles / 1000.0:0.#}k triangles, {s.MemoryBytes / (1024.0 * 1024.0):0.#} MB\n")
+            .Append(CultureInfo.InvariantCulture, $"Meshing: last {s.LastBuildMs:0.0} ms, max {s.MaxBuildMs:0.0} ms, commit {s.LastCommitMs:0.00} ms, {s.ChunksBuilt} builds\n")
+            .Append(CultureInfo.InvariantCulture, $"Streaming: {w.Sent}/{w.Desired} chunks, {w.Dirty} dirty, {w.ChunksRead} read, {w.ChunksSent} sent, tick {w.LastTickMs:0.0} ms (read max {w.MaxReadMs:0.0} ms)\n")
+            .Append(CultureInfo.InvariantCulture, $"Centre chunk {w.Centre?.X},{w.Centre?.Y},{w.Centre?.Z}, origin {w.Origin.X},{w.Origin.Y},{w.Origin.Z}; overlay {Describe(renderer.Overlay)}, radius {renderer.Radius}, {renderer.TrianglesShown / 1000.0:0.#}k triangles shown\n")
+            .Append(CultureInfo.InvariantCulture, $"Materials: {w.MaterialCount} from {w.MaterialSource}");
+        if (capi.World.Player?.CurrentBlockSelection?.Position is { } pos)
+        {
+            text.Append("\nLooking at: ").Append(world.DescribeBlock(pos));
+        }
+
+        return text.ToString();
+    }
+
+    private string Legend()
+    {
+        if (world.Materials is not { } table)
+        {
+            return "No materials loaded yet.";
+        }
+
+        var text = new StringBuilder("Acoustic materials:");
+        for (int id = 1; id < table.Count; id++)
+        {
+            int rgb = table.Colors[id] & 0xFFFFFF;
+            AcousticMaterialDesc m = table.Materials[id];
+            text.Append(CultureInfo.InvariantCulture, $"\n<font color=\"#{rgb:x6}\">■■■</font> {m.Name} ({m.Kind})");
+        }
+
+        return text.ToString();
+    }
+
+    private static string Describe(SceneOverlay overlay) => overlay == SceneOverlay.None ? "off" : overlay.ToString().ToLowerInvariant();
+}

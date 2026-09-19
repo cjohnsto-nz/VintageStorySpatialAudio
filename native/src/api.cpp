@@ -555,14 +555,17 @@ VSA_API vsa_result VSA_CALL vsa_scene_get_chunk_mesh(vsa_engine* engine, int32_t
         check_out_struct(mesh, "vsa_chunk_mesh");
         std::shared_ptr<const vsa::world::ChunkMesh> found;
         int lod = 0;
+        uint32_t version = 0;
         mesh->found = 0;
         mesh->lod = 0;
+        mesh->version = 0;
         mesh->vertex_count = 0;
         mesh->triangle_count = 0;
-        if (!engine_of(engine).scene().chunk_mesh({x, y, z}, found, lod)) {
+        if (!engine_of(engine).scene().chunk_mesh({x, y, z}, found, lod, version)) {
             return VSA_OK;
         }
         mesh->found = 1;
+        mesh->version = version;
         mesh->lod = static_cast<uint32_t>(lod);
         mesh->vertex_count = static_cast<uint32_t>(found->vertex_count());
         mesh->triangle_count = static_cast<uint32_t>(found->triangle_count());

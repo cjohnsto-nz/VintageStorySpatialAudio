@@ -134,4 +134,22 @@ public sealed class NativeLayoutTests
     [InlineData(RayTracer.Embree, 1u)]
     [InlineData(RayTracer.Steam, 2u)]
     public void RayTracer_values_match_header(RayTracer value, uint expected) => Assert.Equal(expected, (uint)value);
+
+    [Fact]
+    public unsafe void Scene_structs_match_header()
+    {
+        Assert.Equal(56, sizeof(VsaAcousticMaterial));
+        Assert.Equal(48, (int)Marshal.OffsetOf<VsaAcousticMaterial>(nameof(VsaAcousticMaterial.Name)));
+        Assert.Equal(24, sizeof(VsaBox));
+        Assert.Equal(16, sizeof(VsaPartialBlock));
+        Assert.Equal(56, sizeof(VsaChunkDesc));
+        Assert.Equal(24, (int)Marshal.OffsetOf<VsaChunkDesc>(nameof(VsaChunkDesc.Materials)));
+        Assert.Equal(48, (int)Marshal.OffsetOf<VsaChunkDesc>(nameof(VsaChunkDesc.Boxes)));
+        Assert.Equal(88, sizeof(VsaSceneStats));
+        Assert.Equal(48, (int)Marshal.OffsetOf<VsaSceneStats>(nameof(VsaSceneStats.LastBuildMs)));
+        Assert.Equal(72, (int)Marshal.OffsetOf<VsaSceneStats>(nameof(VsaSceneStats.Origin)));
+        Assert.Equal(56, sizeof(VsaChunkMesh));
+        Assert.Equal(32, (int)Marshal.OffsetOf<VsaChunkMesh>(nameof(VsaChunkMesh.Vertices)));
+        Assert.Equal(3u, (uint)MaterialKind.Solid);
+    }
 }

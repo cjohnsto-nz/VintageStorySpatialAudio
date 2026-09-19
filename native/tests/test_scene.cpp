@@ -70,6 +70,7 @@ TEST_CASE("scene ABI: a chunk becomes a mesh that can be read back and listed") 
     REQUIRE(vsa_scene_get_chunk_mesh(e.engine, 100, 3, -7, &mesh) == VSA_OK);  // query the sizes
     CHECK(mesh.found == 1);
     CHECK(mesh.triangle_count == 24);
+    CHECK(mesh.version > 0);
     std::vector<float> vertices(mesh.vertex_count * 3);
     std::vector<int32_t> triangles(mesh.triangle_count * 3);
     std::vector<uint16_t> ids(mesh.triangle_count);

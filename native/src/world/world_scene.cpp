@@ -56,6 +56,7 @@ double since_ms(std::chrono::steady_clock::time_point start) {
 struct WorldScene::Built {
     std::shared_ptr<const ChunkMesh> mesh;
     int lod = 0;
+    uint32_t version = 0;  // the build number, for caching debug views
     steam::Scene sub;
     steam::StaticMesh static_mesh;
     steam::InstancedMesh instance;
@@ -328,6 +329,9 @@ void WorldScene::worker_main() {
                     }
                 }
                 ++stats_.chunks_built;
+                if (chunk.built) {
+                    chunk.built->version = static_cast<uint32_t>(stats_.chunks_built);
+                }
                 stats_.last_build_ms = job.ms;
                 stats_.max_build_ms = std::max(stats_.max_build_ms, job.ms);
                 if (chunk.voxels == nullptr) {
@@ -385,6 +389,11 @@ SceneStats WorldScene::stats() const {
 }
 
 bool WorldScene::chunk_mesh(ChunkKey key, std::shared_ptr<const ChunkMesh>& mesh, int& lod) const {
+    uint32_t version = 0;
+    return chunk_mesh(key, mesh, lod, version);
+}
+
+bool WorldScene::chunk_mesh(ChunkKey key, std::shared_ptr<const ChunkMesh>& mesh, int& lod, uint32_t& version) const {
     std::lock_guard lock(mutex_);
     const auto it = chunks_.find(key);
     if (it == chunks_.end() || !it->second.built) {
@@ -392,6 +401,7 @@ bool WorldScene::chunk_mesh(ChunkKey key, std::shared_ptr<const ChunkMesh>& mesh
     }
     mesh = it->second.built->mesh;
     lod = it->second.built->lod;
+    version = it->second.built->version;
     return true;
 }
 

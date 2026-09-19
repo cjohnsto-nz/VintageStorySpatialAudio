@@ -28,6 +28,8 @@ public sealed class AudioSession : IDisposable
     private readonly List<SteamAudioSound> pending = [];
     private readonly EngineEvent[] events = new EngineEvent[256];
     private readonly ListenerBasis basis = new();
+    private volatile SceneOrigin origin = SceneOrigin.Zero;
+    private (float X, float Y, float Z, float ViewX, float ViewY, float ViewZ)? lastListener;
     private AudioLevels? lastLevels;
     private long lastFailureLog;
     private int suppressedFailures;
@@ -151,14 +153,54 @@ public sealed class AudioSession : IDisposable
     /// </summary>
     public float ListenerBackwardOffset { get; set; }
 
+    /// <summary>
+    /// The block position every position sent to the engine is relative to (the world scene's
+    /// origin, ADR 0007): Vintage Story's coordinates are ~500 000, where floats are coarse.
+    /// </summary>
+    public SceneOrigin Origin => origin;
+
+    /// <summary>
+    /// Moves the origin: tells the engine, then re-sends the listener and every positioned sound
+    /// relative to the new one.
+    /// </summary>
+    public void SetOrigin(int x, int y, int z)
+    {
+        var next = new SceneOrigin(x, y, z);
+        if (next == origin)
+        {
+            return;
+        }
+
+        origin = next;
+        Guard(() => Engine.SetSceneOrigin(x, y, z));
+        if (lastListener is { } l)
+        {
+            SetListener(l.X, l.Y, l.Z, l.ViewX, l.ViewY, l.ViewZ);
+        }
+
+        SteamAudioSound[] sounds;
+        lock (gate)
+        {
+            sounds = [.. byVoice.Values];
+        }
+
+        foreach (SteamAudioSound sound in sounds)
+        {
+            sound.Reposition();
+        }
+    }
+
     /// <summary>Listener at the eye position (moved back by <see cref="ListenerBackwardOffset"/>), facing along the (unflattened) view vector.</summary>
     public void SetListener(float x, float y, float z, float viewX, float viewY, float viewZ)
     {
+        lastListener = (x, y, z, viewX, viewY, viewZ);
         basis.Update(viewX, viewY, viewZ);
         float back = ListenerBackwardOffset;
-        x -= basis.HeadingX * back;
-        z -= basis.HeadingZ * back;
-        Guard(() => Engine.SetListener(x, y, z, basis.ForwardX, basis.ForwardY, basis.ForwardZ, basis.UpX, basis.UpY, basis.UpZ));
+        SceneOrigin o = origin;
+        float lx = (float)(x - (basis.HeadingX * back) - o.X);
+        float ly = (float)((double)y - o.Y);
+        float lz = (float)(z - (basis.HeadingZ * back) - o.Z);
+        Guard(() => Engine.SetListener(lx, ly, lz, basis.ForwardX, basis.ForwardY, basis.ForwardZ, basis.UpX, basis.UpY, basis.UpZ));
     }
 
     /// <summary>Applies the game's volume sliders and HRTF setting (cheap when nothing changed).</summary>
@@ -271,4 +313,10 @@ public sealed class AudioSession : IDisposable
             ex.Message,
             suppressed > 0 ? string.Create(CultureInfo.InvariantCulture, $" ({suppressed} similar failures suppressed)") : string.Empty);
     }
+}
+
+/// <summary>A block position that engine positions are relative to.</summary>
+public sealed record SceneOrigin(int X, int Y, int Z)
+{
+    public static readonly SceneOrigin Zero = new(0, 0, 0);
 }

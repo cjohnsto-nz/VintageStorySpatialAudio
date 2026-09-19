@@ -81,6 +81,7 @@ public:
     /// The mesh exactly as submitted to Steam Audio (chunk-local), and its level of detail.
     /// False if the chunk has no mesh (unknown, pending, or all air).
     bool chunk_mesh(ChunkKey key, std::shared_ptr<const ChunkMesh>& mesh, int& lod) const;
+    bool chunk_mesh(ChunkKey key, std::shared_ptr<const ChunkMesh>& mesh, int& lod, uint32_t& version) const;
     [[nodiscard]] std::vector<ChunkKey> chunk_keys() const;
     /// Writes every chunk's mesh as an OBJ (+ .mtl) in world block coordinates, one group per
     /// chunk and one material per acoustic material. Throws vsa::Error on I/O failure.

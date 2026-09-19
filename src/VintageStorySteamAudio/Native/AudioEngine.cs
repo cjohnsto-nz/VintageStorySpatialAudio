@@ -97,7 +97,7 @@ public readonly record struct EngineEvent(EngineEventType Type, ulong Voice, ulo
 /// Owns the native engine. At most one exists per process (enforced natively). Thread-safe: every
 /// method may be called from any thread. Dispose it before a new world session creates another.
 /// </summary>
-public sealed class AudioEngine : IDisposable
+public sealed partial class AudioEngine : IDisposable
 {
     private readonly EngineHandle handle;
     private int offlineChannels = 2;

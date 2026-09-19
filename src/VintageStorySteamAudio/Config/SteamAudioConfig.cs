@@ -71,6 +71,21 @@ public sealed class SteamAudioConfig
     /// </summary>
     public string? HrtfSofaFile { get; set; }
 
+    /// <summary>Builds the acoustic scene from the world around the listener (Phase 4).</summary>
+    public bool BuildWorldScene { get; set; } = true;
+
+    /// <summary>Chunks (horizontally) around the listener's chunk at full detail.</summary>
+    public int SceneFullRadiusChunks { get; set; } = 2;
+
+    /// <summary>Chunks around the listener's chunk in the scene at all (beyond the full-detail radius: 2x2x2-block detail).</summary>
+    public int SceneLodRadiusChunks { get; set; } = 4;
+
+    /// <summary>Chunks above and below the listener's chunk in the scene.</summary>
+    public int SceneVerticalRadiusChunks { get; set; } = 2;
+
+    /// <summary>Main-thread milliseconds per game tick (every 50 ms) spent reading chunks for the scene.</summary>
+    public double SceneBudgetMs { get; set; } = 2.0;
+
     /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 

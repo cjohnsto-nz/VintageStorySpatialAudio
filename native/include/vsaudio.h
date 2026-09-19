@@ -689,7 +689,8 @@ typedef struct vsa_chunk_mesh {
      * material id per triangle. */
     uint32_t vertex_capacity;
     uint32_t triangle_capacity;
-    uint32_t reserved;
+    /** Out: changes whenever the chunk is meshed again (for caching debug views). */
+    uint32_t version;
     float* vertices;
     int32_t* triangles;
     uint16_t* materials;
