@@ -30,6 +30,14 @@
     <Reference Include="VintagestoryAPI">
       <HintPath>$(VintageStoryPath)/VintagestoryAPI.dll</HintPath>
     </Reference>
+    <Reference Include="VintagestoryLib">
+      <HintPath>$(VintageStoryPath)/VintagestoryLib.dll</HintPath>
+      <!-- Compile only: GameIntegrationTests loads the real one from the game folder. -->
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(VintageStoryPath)/Lib/0Harmony.dll</HintPath>
+    </Reference>
     <Reference Include="Newtonsoft.Json">
       <HintPath>$(VintageStoryPath)/Lib/Newtonsoft.Json.dll</HintPath>
     </Reference>

@@ -52,6 +52,12 @@ using Scene = IplHandle<IPLScene, iplSceneRelease>;
 using StaticMesh = IplHandle<IPLStaticMesh, iplStaticMeshRelease>;
 using Simulator = IplHandle<IPLSimulator, iplSimulatorRelease>;
 using Source = IplHandle<IPLSource, iplSourceRelease>;
+using Hrtf = IplHandle<IPLHRTF, iplHRTFRelease>;
+using DirectEffect = IplHandle<IPLDirectEffect, iplDirectEffectRelease>;
+using BinauralEffect = IplHandle<IPLBinauralEffect, iplBinauralEffectRelease>;
+using PanningEffect = IplHandle<IPLPanningEffect, iplPanningEffectRelease>;
+using AmbisonicsEncodeEffect = IplHandle<IPLAmbisonicsEncodeEffect, iplAmbisonicsEncodeEffectRelease>;
+using AmbisonicsDecodeEffect = IplHandle<IPLAmbisonicsDecodeEffect, iplAmbisonicsDecodeEffectRelease>;
 
 /// Human-readable name for an IPLerror.
 [[nodiscard]] const char* error_name(IPLerror error) noexcept;

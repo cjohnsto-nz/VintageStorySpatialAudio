@@ -15,6 +15,7 @@ public static class AudioPatchTargets
     private const string PlatformBase = "Vintagestory.Client.NoObf.ClientPlatformAbstract";
     private const string ClientMain = "Vintagestory.Client.NoObf.ClientMain";
     private const string LoadedSoundNative = "Vintagestory.Client.LoadedSoundNative";
+    private const string AudioOpenAl = "Vintagestory.Client.AudioOpenAl";
     private const string AudioMetaData = "Vintagestory.Client.NoObf.AudioMetaData";
     private const string ScreenManager = "Vintagestory.Client.ScreenManager";
     private const string SystemSoundEngine = "Vintagestory.Client.NoObf.SystemSoundEngine";
@@ -40,6 +41,13 @@ public static class AudioPatchTargets
     private static PatchTarget Field(string id, string type, string name, string fieldType, string purpose, bool isStatic = false) =>
         new(id, type, TargetMemberKind.Field, name, fieldType, [], isStatic, purpose);
 
+    private static PatchTarget Constructor(string id, string type, string[] parameters, string purpose) =>
+        new(id, type, TargetMemberKind.Constructor, ".ctor", Void, parameters, false, purpose);
+
+    /// <summary>The target with this id.</summary>
+    public static PatchTarget Get(string id) =>
+        Members.FirstOrDefault(t => t.Id == id) ?? throw new ArgumentException($"no patch target '{id}'", nameof(id));
+
     public static IReadOnlyList<PatchTarget> Members { get; } =
     [
         // --- The platform seam: every sound is created, and the device is owned, through these.
@@ -53,12 +61,15 @@ public static class AudioPatchTargets
         Property("platform.devices", Platform, "AvailableAudioDevices", "System.Collections.Generic.IList<System.String>", "device list in the settings menu"),
         Property("platform.current-device", Platform, "CurrentAudioDevice", String, "device selection"),
         Property("platform.master-level", Platform, "MasterSoundLevel", Float, "master volume"),
+        Field("platform.openal", Platform, "audio", AudioOpenAl, "close OpenAL in-world (disposed and cleared; StartAudio recreates it on hand-back)"),
+        Method("openal.dispose", AudioOpenAl, "Dispose", Void, [], "close the OpenAL device and context"),
 
         // --- Vanilla sound objects that exist when we take over (intro music) and hand back.
         Field("loadedsound.registry", LoadedSoundNative, "loadedSounds", "System.Collections.Generic.List<Vintagestory.Client.LoadedSoundNative>", "migrate live vanilla sounds at takeover", isStatic: true),
         Field("loadedsound.registry-lock", LoadedSoundNative, "loadedSoundsLock", "System.Object", "lock for the registry", isStatic: true),
         Method("loadedsound.dispose-all", LoadedSoundNative, "DisposeAllSounds", Void, [], "release vanilla sources before closing OpenAL", isStatic: true),
         Property("loadedsound.playback-position", LoadedSoundNative, "PlaybackPosition", Float, "resume migrated sounds at the same position"),
+        Method("loadedsound.change-output-device", LoadedSoundNative, "ChangeOutputDevice", Void, ["System.Action"], "suppress OpenAL device/HRTF rebuilds in-world", isStatic: true),
 
         // --- Asset metadata shared between the game and the engine.
         Field("audiometa.pcm", AudioMetaData, "Pcm", "System.Byte[]", "decoded PCM handed to the engine"),
@@ -66,7 +77,10 @@ public static class AudioPatchTargets
         Field("audiometa.rate", AudioMetaData, "Rate", Int, "asset sample rate"),
         Field("audiometa.bits", AudioMetaData, "BitsPerSample", Int, "asset sample format"),
         Field("audiometa.asset", AudioMetaData, "Asset", IAsset, "asset identity"),
-        Method("audiometa.add-on-loaded", AudioMetaData, "AddOnLoaded", Void, ["Vintagestory.Client.NoObf.MainThreadAction"], "deferred start for still-loading assets"),
+        Constructor("audiometa.ctor", AudioMetaData, [IAsset], "metadata for natively decoded assets"),
+        Method("audiometa.unload", AudioMetaData, "Unload", Void, [], "make vanilla decode again after hand-back"),
+        Field("audiodata.loaded", AudioData, "Loaded", Int, "loading state (0 none, 1 loading, 2 decoded, 3 in use)"),
+        Method("audiodata.load", AudioData, "Load", "System.Boolean", [], "synchronous decode, as vanilla does before creating a sound"),
 
         // --- Game-side policy we replace.
         Method("clientmain.play-sound-at", ClientMain, "PlaySoundAtInternal", Int, [AssetLocation, Double, Double, Double, Float, Float, Float, EnumSoundType], "remove the fixed 250-sound cap"),
@@ -75,6 +89,7 @@ public static class AudioPatchTargets
         Method("soundengine.tick-100ms", SystemSoundEngine, "OnGameTick100ms", Void, [Float], "underwater / glitch / legacy reverb application"),
 
         // --- Main menu.
+        Field("screenmanager.platform", ScreenManager, "Platform", PlatformBase, "the platform instance (hand-back calls its StartAudio)", isStatic: true),
         Field("screenmanager.intro-music", ScreenManager, "IntroMusic", ILoadedSound, "the menu music playing when a world starts", isStatic: true),
         Field("screenmanager.audio-data", ScreenManager, "soundAudioData", "System.Collections.Generic.Dictionary<Vintagestory.API.Common.AssetLocation, Vintagestory.Client.NoObf.AudioData>", "asset table", isStatic: true),
     ];

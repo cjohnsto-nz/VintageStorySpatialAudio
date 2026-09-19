@@ -19,6 +19,12 @@ public sealed record StatusReport
     /// <summary>Why the engine could not start, if it could not.</summary>
     public string? EngineError { get; init; }
 
+    /// <summary>Whether the game's audio is being played by the engine right now.</summary>
+    public bool TakeoverActive { get; init; }
+
+    /// <summary>Why the takeover was not applied when it could have been (disabled, or it failed).</summary>
+    public string? TakeoverNote { get; init; }
+
     public bool TakeoverPossible => Engine is not null && SelfTest is { Passed: true } && Verification is { AllPassed: true };
 
     public string Render(bool includePassingTargets = false)
@@ -61,9 +67,21 @@ public sealed record StatusReport
             }
         }
 
-        text.Append(TakeoverPossible
-            ? "Audio takeover: ready (takeover itself arrives in Phase 2; vanilla audio is still playing)."
-            : "Audio takeover: would be REFUSED; vanilla audio stays in charge.");
+        if (TakeoverActive)
+        {
+            text.Append("Audio takeover: ACTIVE (the game's sounds play through Steam Audio).");
+        }
+        else if (TakeoverNote is not null)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"Audio takeover: not applied ({TakeoverNote}); vanilla audio stays in charge.");
+        }
+        else
+        {
+            text.Append(TakeoverPossible
+                ? "Audio takeover: ready (applied when a world starts)."
+                : "Audio takeover: would be REFUSED; vanilla audio stays in charge.");
+        }
+
         return text.ToString();
     }
 }

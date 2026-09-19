@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <functional>
+#include <limits>
 
 namespace vsa {
 namespace {
@@ -14,6 +16,13 @@ namespace {
 constexpr float kMonoPan = 0.70710678f;  // equal power, -3 dB per side
 constexpr double kDeclickSeconds = 0.005;
 constexpr double kSmoothSeconds = 0.005;
+// Virtual below -70 dB estimated output, real again above -64 dB.
+constexpr float kVirtualBelow = 3.16e-4f;
+constexpr float kRealAbove = 6.3e-4f;
+// Steam Audio's default air absorption coefficients (1/m) for its three bands.
+constexpr float kAirAbsorption[3] = {0.0002f, 0.0017f, 0.0182f};
+// Within this distance of the head a source blends to centred (no meaningful direction).
+constexpr float kCentreRadius = 0.5f;
 
 template <typename T>
 void store_max(std::atomic<T>& target, T value) noexcept {
@@ -32,7 +41,8 @@ void store_min(std::atomic<T>& target, T value) noexcept {
 }  // namespace
 
 Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
-             SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, uint32_t block_frames)
+             SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
+             LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget)
     : kernel_(kernel),
       slots_(slots),
       slot_count_(slot_count),
@@ -40,7 +50,11 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
       events_(events),
       retired_(retired),
       rt_log_(rt_log),
-      block_frames_(block_frames) {
+      spatial_(spatial),
+      listener_(listener),
+      block_frames_(block_frames),
+      binaural_budget_(binaural_budget) {
+    ranking_.resize(spatial.pool_size());
     active_.resize(slot_count);
     coef_.resize(kernel.scratch_floats());
 
@@ -53,25 +67,44 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
     voice_out_[0] = voice_storage_.data();
     voice_out_[1] = voice_storage_.data() + block_frames;
     gain_buf_.resize(block_frames);
+    bus_gain_storage_.resize(static_cast<std::size_t>(block_frames) * VSA_BUS_COUNT);
+    for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
+        bus_gains_[b] = bus_gain_storage_.data() + b * block_frames;
+    }
+    spatial_storage_.resize(static_cast<std::size_t>(block_frames) * kMaxOutputChannels);
+    for (std::size_t c = 0; c < kMaxOutputChannels; ++c) {
+        spatial_out_[c] = spatial_storage_.data() + c * block_frames;
+    }
 
     bus_storage_.resize(static_cast<std::size_t>(block_frames) * bus_.size());
     for (std::size_t i = 0; i < bus_.size(); ++i) {
         bus_[i] = bus_storage_.data() + i * block_frames;
     }
-    master_storage_.resize(static_cast<std::size_t>(block_frames) * 2);
-
-    prepare(sample_rate_, channels_);
+    master_storage_.resize(static_cast<std::size_t>(block_frames) * kMaxOutputChannels);
+    for (std::size_t c = 0; c < kMaxOutputChannels; ++c) {
+        master_[c] = master_storage_.data() + c * block_frames;
+    }
 }
 
-void Mixer::prepare(uint32_t sample_rate, uint32_t channels) {
+void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* device_speakers) {
     sample_rate_ = sample_rate;
-    channels_ = channels;
+    channels_ = std::min(channels, kMaxOutputChannels);
+    const std::array<Speaker, kMaxOutputChannels> standard = steam_layout(channels_);
+    device_map_ = map_to_device(channels_, device_speakers != nullptr ? device_speakers : standard.data());
     smooth_frames_ = std::max(1u, static_cast<uint32_t>(std::lround(kSmoothSeconds * sample_rate)));
     declick_step_ = 1.0f / static_cast<float>(std::max(1L, std::lround(kDeclickSeconds * sample_rate)));
     block_period_ns_ = static_cast<uint64_t>(1e9 * block_frames_ / sample_rate);
     limiter_.prepare(sample_rate);
     block_out_.assign(static_cast<std::size_t>(block_frames_) * channels, 0.0f);
     block_read_ = block_frames_;  // empty: the next render() starts a block
+
+    // New effect sets for the new rate: every voice re-acquires one on its next block.
+    spatial_.prepare(sample_rate, block_frames_, channels_);
+    for (uint32_t i = 0; i < active_count_; ++i) {
+        RenderVoice& v = slots_[active_[i]].render;
+        v.effect_set = -1;
+        v.is_virtual = false;
+    }
 }
 
 void Mixer::render(float* out, uint32_t frames, BlockHook hook, void* user) noexcept {
@@ -101,50 +134,79 @@ void Mixer::render_block() noexcept {
     while (commands_.try_pop(command)) {
         apply(command);
     }
+    pose_ = listener_.read();
+    update_binaural_threshold();
 
+    for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
+        bus_gain_[b].render(bus_gains_[b], frames);
+    }
+    spatial_.begin_block();
     bus_used_.fill(false);
     for (uint32_t i = 0; i < active_count_;) {
         if (!render_voice(active_[i])) {
             ++i;  // a retired voice's place is taken by the last one, so do not advance
         }
     }
+    uint32_t virtual_count = 0;
+    for (uint32_t i = 0; i < active_count_; ++i) {
+        virtual_count += slots_[active_[i]].render.is_virtual ? 1u : 0u;
+    }
 
-    float* master_l = master_storage_.data();
-    float* master_r = master_storage_.data() + frames;
-    std::fill(master_l, master_l + 2 * static_cast<std::size_t>(frames), 0.0f);
-    float* gain = gain_buf_.data();
+    // Buses -> master (all output channels, engine order) -> master gain -> linked limiter.
+    const uint32_t channels = channels_;
+    std::fill(master_storage_.begin(), master_storage_.begin() + static_cast<std::ptrdiff_t>(frames) * channels, 0.0f);
     for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
         if (!bus_used_[b]) {
-            bus_gain_[b].render(nullptr, frames);
             continue;
         }
-        bus_gain_[b].render(gain, frames);
-        const float* bl = bus_[2 * b];
-        const float* br = bus_[2 * b + 1];
-        for (uint32_t j = 0; j < frames; ++j) {
-            master_l[j] += bl[j] * gain[j];
-            master_r[j] += br[j] * gain[j];
+        const float* gain = bus_gains_[b];
+        for (uint32_t c = 0; c < channels; ++c) {
+            const float* in = bus_[b * kMaxOutputChannels + c];
+            float* sum = master_[c];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += in[j] * gain[j];
+            }
         }
     }
+    // The world ambisonic bus (bus gains already applied), decoded for the listener's head.
+    const Orientation orientation{
+        {pose_.right[0], pose_.right[1], pose_.right[2]},
+        {pose_.up[0], pose_.up[1], pose_.up[2]},
+        {pose_.forward[0], pose_.forward[1], pose_.forward[2]},
+        {pose_.position[0], pose_.position[1], pose_.position[2]},
+    };
+    if (spatial_.decode(orientation, spatial_out_[0], spatial_out_[1])) {
+        for (uint32_t c = 0; c < 2; ++c) {
+            const float* in = spatial_out_[c];
+            float* sum = master_[c];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += in[j];
+            }
+        }
+    }
+
+    float* gain = gain_buf_.data();
     master_gain_.render(gain, frames);
-    for (uint32_t j = 0; j < frames; ++j) {
-        master_l[j] *= gain[j];
-        master_r[j] *= gain[j];
+    for (uint32_t c = 0; c < channels; ++c) {
+        float* x = master_[c];
+        for (uint32_t j = 0; j < frames; ++j) {
+            x[j] *= gain[j];
+        }
     }
 
-    const float limiter_gain = limiter_.process(master_l, master_r, frames);
+    const float limiter_gain = limiter_.process(master_.data(), channels, frames);
 
+    // Interleave into the device's channel order.
     float* out = block_out_.data();
-    if (channels_ == 2) {
-        for (uint32_t j = 0; j < frames; ++j) {
-            out[2 * j] = master_l[j];
-            out[2 * j + 1] = master_r[j];
+    std::fill(block_out_.begin(), block_out_.end(), 0.0f);
+    for (uint32_t c = 0; c < channels; ++c) {
+        const int d = device_map_[c];
+        if (d < 0) {
+            continue;
         }
-    } else {
-        std::fill(block_out_.begin(), block_out_.end(), 0.0f);
+        const float* x = master_[c];
         for (uint32_t j = 0; j < frames; ++j) {
-            out[static_cast<std::size_t>(j) * channels_] = master_l[j];
-            out[static_cast<std::size_t>(j) * channels_ + 1] = master_r[j];
+            out[static_cast<std::size_t>(j) * channels + static_cast<std::size_t>(d)] = x[j];
         }
     }
 
@@ -159,6 +221,8 @@ void Mixer::render_block() noexcept {
     }
     store_min(stats_.min_limiter_gain, limiter_gain);
     stats_.active_voices.store(active_count_, std::memory_order_relaxed);
+    stats_.real_voices.store(spatial_.in_use(), std::memory_order_relaxed);
+    stats_.virtual_voices.store(virtual_count, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -172,6 +236,10 @@ void Mixer::apply(const Command& c) noexcept {
             }
             return;
         case Op::SetMasterGain: master_gain_.linear(c.value, smooth_frames_); return;
+        case Op::SetRenderMode:
+            render_mode_ = c.flags == VSA_RENDER_SPEAKERS ? VSA_RENDER_SPEAKERS : VSA_RENDER_HEADPHONES;
+            spatial_.reset_all();  // the other effect kind's state is stale
+            return;
         default: break;
     }
 
@@ -218,6 +286,18 @@ void Mixer::apply(const Command& c) noexcept {
             s.seek_applied.store(c.seek_seq, std::memory_order_release);
             break;
         case Op::Fade: fade(s, c); break;
+        case Op::SetPosition:
+            v.spatial = c.flags;
+            v.position[0] = c.vec[0];
+            v.position[1] = c.vec[1];
+            v.position[2] = c.vec[2];
+            break;
+        case Op::SetLowpass:
+            if (!v.shelf.active() && c.value < 1.0f) {
+                v.shelf.reset();
+            }
+            v.shelf.set(c.value, sample_rate_);
+            break;
         case Op::Release: release(c.slot); return;
         default: break;
     }
@@ -239,6 +319,12 @@ void Mixer::activate(uint32_t slot) noexcept {
     v.gain.jump(s.initial_gain);
     v.pitch = s.initial_pitch;
     v.looping = s.initial_looping;
+    v.spatial = s.initial_spatial;
+    v.position[0] = s.initial_position[0];
+    v.position[1] = s.initial_position[1];
+    v.position[2] = s.initial_position[2];
+    v.min_distance = s.initial_min_distance;
+    v.shelf.set(1.0f, sample_rate_);
     if (s.stream != nullptr) {
         s.stream->set_looping(v.looping);
     }
@@ -384,6 +470,7 @@ void Mixer::retire(uint32_t slot) noexcept {
     VoiceSlot& s = slots_[slot];
     RenderVoice& v = s.render;
     cancel_fade(s);
+    release_effects(v);
     const uint32_t index = v.active_index;
     const uint32_t last = active_[--active_count_];
     active_[index] = last;
@@ -415,6 +502,8 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
 
     const bool audible = v.state == VSA_VOICE_PLAYING || (v.pending != RenderVoice::kNone && v.env > 0.0f);
     if (!audible) {
+        release_effects(v);
+        v.is_virtual = false;
         // Fades run on wall-clock time even while a voice is silent.
         if (v.gain.render(nullptr, frames)) {
             complete_fade(s);
@@ -423,50 +512,73 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
         return false;
     }
 
-    const Generated generated = generate(s);
-
-    float* gain = gain_buf_.data();
-    const bool ramp_done = v.gain.render(gain, frames);
-    if (v.env != 1.0f || v.env_target != 1.0f) {
-        float env = v.env;
-        const float target = v.env_target;
-        const float step = declick_step_;
-        for (uint32_t j = 0; j < frames; ++j) {
-            env = env < target ? std::min(target, env + step) : std::max(target, env - step);
-            gain[j] *= env;
+    // Estimate the output level; voices far below audibility go virtual (with hysteresis), and
+    // positional voices need an effect set to be heard.
+    const bool spatial = v.spatial != VSA_SPATIAL_NONE;
+    SpatialParams params;
+    float level = v.gain.value() * bus_gain_[s.bus].value() * master_gain_.value();
+    if (spatial) {
+        params = spatial_params(v);
+        level *= params.distance_gain;
+    } else {
+        release_effects(v);
+    }
+    v.level = level;
+    // Streams are never virtual (skipping ahead would need a seek on the decoder thread); one
+    // that cannot get an effect set plays unpositioned until it can.
+    const bool streamed = s.stream != nullptr;
+    bool silent = !streamed && level < (v.is_virtual ? kRealAbove : kVirtualBelow);
+    if (!silent && spatial && v.effect_set < 0) {
+        v.effect_set = acquire_effects(slot, level);
+        silent = v.effect_set < 0 && !streamed;
+    }
+    if (silent) {
+        release_effects(v);
+    }
+    v.is_virtual = silent;
+    const bool positioned = spatial && v.effect_set >= 0;
+    if (positioned) {
+        SpatialTier tier = SpatialTier::Panned;
+        if (render_mode_ == VSA_RENDER_HEADPHONES) {
+            const float ranked = level * (v.tier == SpatialTier::Binaural ? 2.0f : 1.0f);
+            tier = ranked >= binaural_threshold_ ? SpatialTier::Binaural : SpatialTier::Ambisonic;
         }
-        v.env = env;
+        if (tier != v.tier) {
+            spatial_.reset_tier(v.effect_set, tier);  // its state is from an earlier use
+            v.tier = tier;
+        }
     }
 
-    if (generated != Generated::Silent) {
-        const std::size_t b = s.bus;
-        float* bl = bus_[2 * b];
-        float* br = bus_[2 * b + 1];
-        if (!bus_used_[b]) {
-            std::fill(bl, bl + frames, 0.0f);
-            std::fill(br, br + frames, 0.0f);
-            bus_used_[b] = true;
-        }
-        const float* src_l = voice_out_[0];
-        if (s.asset->channels() == 1) {
+    const Generated generated = silent ? advance_silent(s) : generate(s);
+
+    float* gain = gain_buf_.data();
+    bool ramp_done = false;
+    if (silent) {
+        ramp_done = v.gain.render(nullptr, frames);
+        advance_env(v, frames);
+    } else {
+        ramp_done = v.gain.render(gain, frames);
+        if (v.env != 1.0f || v.env_target != 1.0f) {
+            float env = v.env;
+            const float target = v.env_target;
+            const float step = declick_step_;
             for (uint32_t j = 0; j < frames; ++j) {
-                const float x = src_l[j] * gain[j] * kMonoPan;
-                bl[j] += x;
-                br[j] += x;
+                env = env < target ? std::min(target, env + step) : std::max(target, env - step);
+                gain[j] *= env;
             }
-        } else {
-            const float* src_r = voice_out_[1];
-            for (uint32_t j = 0; j < frames; ++j) {
-                bl[j] += src_l[j] * gain[j];
-                br[j] += src_r[j] * gain[j];
-            }
+            v.env = env;
         }
+    }
+
+    if (generated == Generated::Produced || generated == Generated::ProducedAndEnded) {
+        mix(s, params, gain, positioned);
     }
 
     if (ramp_done) {
         complete_fade(s);
     }
 
+    const bool ended = generated == Generated::ProducedAndEnded || generated == Generated::SilentAndEnded;
     if (v.env == 0.0f && v.pending != RenderVoice::kNone) {
         if ((v.pending & RenderVoice::kRelease) != 0) {
             retire(slot);
@@ -478,7 +590,7 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
             finish_seek(s);
         }
         v.pending = static_cast<uint8_t>(v.pending & ~RenderVoice::kPause);
-    } else if (generated == Generated::ProducedAndEnded && v.state == VSA_VOICE_PLAYING) {
+    } else if (ended && v.state == VSA_VOICE_PLAYING) {
         end_voice(s);
     }
 
@@ -486,13 +598,207 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
     return false;
 }
 
+void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bool positioned) noexcept {
+    RenderVoice& v = s.render;
+    const uint32_t frames = block_frames_;
+    const uint32_t channels = s.asset->channels();
+    float* left = voice_out_[0];
+    float* right = voice_out_[1];
+    if (v.shelf.active() && v.shelf.rate() != sample_rate_) {
+        v.shelf.set(v.shelf.gain(), sample_rate_);  // the output rate changed
+    }
+
+    const std::size_t b = s.bus;
+    float* const* bus = &bus_[b * kMaxOutputChannels];
+    float* bl = bus[0];
+    float* br = bus[1];
+    if (!bus_used_[b]) {
+        for (uint32_t c = 0; c < channels_; ++c) {
+            std::fill(bus[c], bus[c] + frames, 0.0f);
+        }
+        bus_used_[b] = true;
+    }
+
+    if (positioned) {
+        // Positioned: mono (stereo assets downmixed) -> gain -> shelf -> Steam Audio -> stereo.
+        if (channels == 2) {
+            for (uint32_t j = 0; j < frames; ++j) {
+                left[j] = 0.5f * (left[j] + right[j]) * gain[j];
+            }
+        } else {
+            for (uint32_t j = 0; j < frames; ++j) {
+                left[j] *= gain[j];
+            }
+        }
+        if (v.shelf.active()) {
+            v.shelf.process(left, frames, 0);
+        }
+        if (v.tier == SpatialTier::Ambisonic) {
+            // The shared bus is decoded after every bus gain, so this voice's is applied now.
+            const float* bus_gain = bus_gains_[b];
+            for (uint32_t j = 0; j < frames; ++j) {
+                left[j] *= bus_gain[j];
+            }
+            spatial_.encode(v.effect_set, params, left);
+            return;
+        }
+        // Binaural goes to the front pair; panning covers the whole output layout.
+        const bool binaural = v.tier == SpatialTier::Binaural;
+        spatial_.render(v.effect_set, binaural ? VSA_RENDER_HEADPHONES : VSA_RENDER_SPEAKERS, params, left,
+                        spatial_out_.data());
+        const uint32_t count = binaural ? 2u : spatial_.speaker_channels();
+        for (uint32_t c = 0; c < count; ++c) {
+            const float* in = spatial_out_[c];
+            float* sum = bus[c];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += in[j];
+            }
+        }
+        return;
+    }
+
+    for (uint32_t c = 0; c < channels; ++c) {
+        float* x = voice_out_[c];
+        for (uint32_t j = 0; j < frames; ++j) {
+            x[j] *= gain[j];
+        }
+        if (v.shelf.active()) {
+            v.shelf.process(x, frames, c);
+        }
+    }
+    if (channels == 1) {
+        for (uint32_t j = 0; j < frames; ++j) {
+            const float x = left[j] * kMonoPan;
+            bl[j] += x;
+            br[j] += x;
+        }
+    } else {
+        for (uint32_t j = 0; j < frames; ++j) {
+            bl[j] += left[j];
+            br[j] += right[j];
+        }
+    }
+}
+
+SpatialParams Mixer::spatial_params(const RenderVoice& v) const noexcept {
+    const auto dot = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    float local[3] = {v.position[0], v.position[1], v.position[2]};
+    if (v.spatial == VSA_SPATIAL_WORLD) {
+        const float d[3] = {v.position[0] - pose_.position[0], v.position[1] - pose_.position[1],
+                            v.position[2] - pose_.position[2]};
+        // Listener space as Steam Audio expects it: +x right, +y up, -z forward.
+        local[0] = dot(d, pose_.right);
+        local[1] = dot(d, pose_.up);
+        local[2] = -dot(d, pose_.forward);
+    }
+    const float distance = std::sqrt(dot(local, local));
+
+    SpatialParams p;
+    p.distance_gain = std::min(1.0f, v.min_distance / std::max(distance, 1e-6f));
+    for (std::size_t band = 0; band < 3; ++band) {
+        p.air_absorption[band] = std::exp(-kAirAbsorption[band] * distance);
+    }
+    if (distance > 1e-4f) {
+        p.direction[0] = local[0] / distance;
+        p.direction[1] = local[1] / distance;
+        p.direction[2] = local[2] / distance;
+    }
+    // A source at the head has no direction: blend to centred within kCentreRadius.
+    p.spatial_blend = std::min(1.0f, distance / kCentreRadius);
+    // The same direction in world space, for the world ambisonic bus (listener space is +x right,
+    // +y up, -z forward).
+    for (std::size_t i = 0; i < 3; ++i) {
+        p.world_direction[i] =
+            pose_.right[i] * p.direction[0] + pose_.up[i] * p.direction[1] - pose_.forward[i] * p.direction[2];
+    }
+    return p;
+}
+
+int Mixer::acquire_effects(uint32_t slot, float level) noexcept {
+    int set = spatial_.acquire();
+    if (set < 0) {
+        // Pool exhausted: take the set of the quietest positional voice, if it is quieter.
+        uint32_t victim = slot_count_;
+        float lowest = level;
+        for (uint32_t i = 0; i < active_count_; ++i) {
+            const uint32_t other = active_[i];
+            const RenderVoice& o = slots_[other].render;
+            if (other != slot && o.effect_set >= 0 && o.level < lowest) {
+                lowest = o.level;
+                victim = other;
+            }
+        }
+        if (victim == slot_count_) {
+            return -1;
+        }
+        RenderVoice& loser = slots_[victim].render;
+        set = loser.effect_set;
+        loser.effect_set = -1;
+        loser.is_virtual = true;
+    }
+    spatial_.reset(set);
+    return set;
+}
+
+void Mixer::update_binaural_threshold() noexcept {
+    // Rank last block's levels of voices holding effects; current binaural voices get +6 dB so
+    // voices near the cut-off do not flip between binaural and ambisonic every block.
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < active_count_ && count < ranking_.size(); ++i) {
+        const RenderVoice& v = slots_[active_[i]].render;
+        if (v.effect_set >= 0) {
+            ranking_[count++] = v.level * (v.tier == SpatialTier::Binaural ? 2.0f : 1.0f);
+        }
+    }
+    if (count <= binaural_budget_) {
+        binaural_threshold_ = 0.0f;
+        return;
+    }
+    if (binaural_budget_ == 0) {
+        binaural_threshold_ = std::numeric_limits<float>::infinity();
+        return;
+    }
+    const auto begin = ranking_.begin();
+    std::nth_element(begin, begin + (binaural_budget_ - 1), begin + count, std::greater<float>());
+    binaural_threshold_ = ranking_[binaural_budget_ - 1];
+}
+
+void Mixer::release_effects(RenderVoice& v) noexcept {
+    if (v.effect_set >= 0) {
+        spatial_.release(v.effect_set);
+        v.effect_set = -1;
+    }
+}
+
+void Mixer::advance_env(RenderVoice& v, uint32_t frames) const noexcept {
+    const float step = declick_step_ * static_cast<float>(frames);
+    v.env = v.env < v.env_target ? std::min(v.env_target, v.env + step) : std::max(v.env_target, v.env - step);
+}
+
+double Mixer::playback_ratio(const VoiceSlot& s) const noexcept {
+    return std::clamp(static_cast<double>(s.asset->sample_rate()) / sample_rate_ * static_cast<double>(s.render.pitch),
+                      1e-3, dsp::ResamplerKernel::kMaxRatio);
+}
+
+Mixer::Generated Mixer::advance_silent(VoiceSlot& s) noexcept {
+    RenderVoice& v = s.render;
+    dsp::ResamplerKernel::advance(v.pos, playback_ratio(s), block_frames_);
+    const auto length = static_cast<int64_t>(s.asset->frames());
+    if (v.pos.frame >= length) {
+        if (!v.looping) {
+            return Generated::SilentAndEnded;
+        }
+        v.pos.frame %= length;
+        v.has_looped = true;
+    }
+    return Generated::Silent;
+}
 Mixer::Generated Mixer::generate(VoiceSlot& s) noexcept {
     RenderVoice& v = s.render;
     const Asset& asset = *s.asset;
     const uint32_t frames = block_frames_;
     const uint32_t channels = asset.channels();
-    const double ratio = std::clamp(static_cast<double>(asset.sample_rate()) / sample_rate_ * static_cast<double>(v.pitch), 1e-3,
-                                    dsp::ResamplerKernel::kMaxRatio);
+    const double ratio = playback_ratio(s);
     const dsp::ResamplerKernel::Span span = kernel_.span(v.pos, ratio, frames);
 
     if (s.stream != nullptr) {

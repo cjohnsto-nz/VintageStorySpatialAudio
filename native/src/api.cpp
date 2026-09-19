@@ -24,15 +24,17 @@
 static_assert(sizeof(vsa_result) == 4 && sizeof(vsa_log_level) == 4, "vsaudio enums must be 32-bit");
 static_assert(std::is_standard_layout_v<vsa_engine_config> && std::is_standard_layout_v<vsa_self_test_report>);
 // Layouts the managed bindings mirror (tests/.../NativeLayoutTests.cs). 64-bit targets only.
-static_assert(sizeof(vsa_engine_config) == 56);
+static_assert(sizeof(vsa_engine_config) == 72 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
+              offsetof(vsa_engine_config, hrtf_sofa_path) == 64);
 static_assert(sizeof(vsa_asset_desc) == 48 && offsetof(vsa_asset_desc, storage) == 32);
 static_assert(sizeof(vsa_asset_info) == 40);
-static_assert(sizeof(vsa_voice_desc) == 32 && offsetof(vsa_voice_desc, gain) == 16);
+static_assert(sizeof(vsa_voice_desc) == 48 && offsetof(vsa_voice_desc, gain) == 16 && offsetof(vsa_voice_desc, position) == 32);
 static_assert(sizeof(vsa_voice_status) == 16);
 static_assert(sizeof(vsa_device_info) == 776 && offsetof(vsa_device_info, id) == 264);
 static_assert(sizeof(vsa_output_desc) == 24);
-static_assert(sizeof(vsa_engine_stats) == 352 && offsetof(vsa_engine_stats, blocks_rendered) == 40 &&
-              offsetof(vsa_engine_stats, device_name) == 96);
+static_assert(sizeof(vsa_engine_stats) == 360 && offsetof(vsa_engine_stats, real_voices) == 40 &&
+              offsetof(vsa_engine_stats, blocks_rendered) == 48 && offsetof(vsa_engine_stats, device_name) == 104);
+static_assert(sizeof(vsa_listener) == 40);
 static_assert(sizeof(vsa_event) == 32);
 
 struct vsa_engine {
@@ -300,6 +302,21 @@ VSA_API vsa_result VSA_CALL vsa_voice_fade(vsa_engine* engine, vsa_voice voice, 
     });
 }
 
+VSA_API vsa_result VSA_CALL vsa_voice_set_position(vsa_engine* engine, vsa_voice voice, uint32_t spatial, float x,
+                                                   float y, float z) {
+    return guarded([&] {
+        engine_of(engine).set_voice_position(voice, spatial, x, y, z);
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_voice_set_lowpass(vsa_engine* engine, vsa_voice voice, float gain_hf) {
+    return guarded([&] {
+        engine_of(engine).set_voice_lowpass(voice, gain_hf);
+        return VSA_OK;
+    });
+}
+
 VSA_API vsa_result VSA_CALL vsa_voice_get_status(vsa_engine* engine, vsa_voice voice, vsa_voice_status* out) {
     return guarded([&] {
         check_out_struct(out, "vsa_voice_status");
@@ -318,6 +335,21 @@ VSA_API vsa_result VSA_CALL vsa_bus_set_gain(vsa_engine* engine, uint32_t bus, f
 VSA_API vsa_result VSA_CALL vsa_engine_set_master_gain(vsa_engine* engine, float gain) {
     return guarded([&] {
         engine_of(engine).set_master_gain(gain);
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_listener_set(vsa_engine* engine, const vsa_listener* listener) {
+    return guarded([&] {
+        const vsa_listener& l = check_in_struct(listener, "vsa_listener");
+        engine_of(engine).set_listener(l);
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_engine_set_render_mode(vsa_engine* engine, uint32_t mode) {
+    return guarded([&] {
+        engine_of(engine).set_render_mode(mode);
         return VSA_OK;
     });
 }

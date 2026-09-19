@@ -1,8 +1,11 @@
 #pragma once
 
 #include "audio/mixer.hpp"
+#include "audio/spatial.hpp"
+#include "core/latest_value.hpp"
 #include "audio/voice.hpp"
 #include "backend/device.hpp"
+#include "backend/spatial_output.hpp"
 #include "core/rt_log.hpp"
 #include "core/spsc_ring.hpp"
 #include "dsp/resampler.hpp"
@@ -16,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -58,10 +62,14 @@ public:
     void set_voice_looping(vsa_voice voice, bool looping);
     void seek_voice(vsa_voice voice, double seconds);
     void fade_voice(vsa_voice voice, float target, float seconds, uint32_t flags, uint64_t token);
+    void set_voice_position(vsa_voice voice, uint32_t spatial, float x, float y, float z);
+    void set_voice_lowpass(vsa_voice voice, float gain_hf);
     [[nodiscard]] vsa_voice_status voice_status(vsa_voice voice) const;
 
     void set_bus_gain(uint32_t bus, float gain);
     void set_master_gain(float gain);
+    void set_listener(const vsa_listener& listener);
+    void set_render_mode(uint32_t mode);
 
     // Output.
     [[nodiscard]] std::vector<vsa_device_info> enumerate_devices();
@@ -78,6 +86,9 @@ public:
         uint32_t max_voices = 4096;
         vsa_resampler_quality resampler_quality = VSA_RESAMPLER_MEDIUM;
         uint32_t stream_threshold_ms = 20000;
+        uint32_t max_real_voices = 256;
+        uint32_t max_binaural_voices = 64;
+        std::string hrtf_sofa_path;  // empty: Steam Audio's default HRTF
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
@@ -97,11 +108,14 @@ private:
     void drain_retired();
     void drain_events_locked();  // requires events_mutex_
     void check_device();
-    void open_device_locked(const vsa_device_id* id, uint32_t channels);  // requires output_mutex_
+    /// Opens the requested device: through Windows Spatial Audio when wants_spatial_ and it is
+    /// available, else directly. Sets output_kind_. Requires output_mutex_.
+    void open_device_locked(const vsa_device_id* id, uint32_t channels);
+    void close_device_locked() noexcept;  // requires output_mutex_
     void push_event_locked(const vsa_event& event);                        // requires events_mutex_
 
     static void render_callback(void* user, float* out, uint32_t frames) noexcept;
-    static void prepare_callback(void* user, uint32_t sample_rate, uint32_t channels);
+    static void prepare_callback(void* user, uint32_t sample_rate, uint32_t channels, const Speaker* speakers);
     static void offline_block_hook(void* user) noexcept;
 
     Settings settings_;
@@ -120,6 +134,8 @@ private:
     SpscRing<uint32_t> retired_;   // render -> worker
     RtLog rt_log_;
 
+    SpatialRenderer spatial_;
+    LatestValue<ListenerPose> listener_;
     Mixer mixer_;
     uint32_t stream_history_frames_;
     uint32_t stream_window_frames_;
@@ -136,7 +152,9 @@ private:
     // Output. output_mutex_ also serialises offline rendering against output changes.
     std::mutex output_mutex_;
     backend::DeviceOutput device_;
-    uint32_t output_kind_ = VSA_OUTPUT_NONE;
+    backend::SpatialOutput spatial_output_;
+    uint32_t output_kind_ = VSA_OUTPUT_NONE;  // what runs: NONE, DEVICE or SPATIAL
+    bool wants_spatial_ = false;              // SPATIAL was requested (DEVICE may be its fallback)
     std::optional<vsa_device_id> device_id_;  // the requested device; nullopt = follow the default
     uint32_t device_channels_ = 0;
     bool reopen_pending_ = false;

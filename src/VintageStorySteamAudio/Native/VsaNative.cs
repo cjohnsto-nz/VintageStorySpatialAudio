@@ -112,6 +112,30 @@ public enum OutputKind : uint
     /// <summary>No device: audio only through <see cref="AudioEngine.RenderOffline"/>.</summary>
     None = 0,
     Device = 1,
+    /// <summary>
+    /// Windows Spatial Audio: the 7.1.4 mix goes to the spatial stream's bed (Dolby Atmos, DTS:X,
+    /// Windows Sonic). Falls back to <see cref="Device"/> where unavailable.
+    /// </summary>
+    Spatial = 2,
+}
+
+/// <summary>How a voice is positioned.</summary>
+public enum SpatialMode : uint
+{
+    /// <summary>Not positioned: straight to its bus (music, UI).</summary>
+    None = 0,
+    /// <summary>World coordinates, rendered relative to the listener.</summary>
+    World = 1,
+    /// <summary>Listener space (head-locked): +x right, +y up, -z forward.</summary>
+    Listener = 2,
+}
+
+public enum RenderMode : uint
+{
+    /// <summary>Binaural (HRTF) for the loudest positional voices, panning for the rest.</summary>
+    Headphones = 0,
+    /// <summary>Panning to the output's speakers: stereo, quad, 5.1 or 7.1 (unpositioned sounds stay on the front pair).</summary>
+    Speakers = 1,
 }
 
 public enum EngineEventType : uint
@@ -138,6 +162,10 @@ internal unsafe struct VsaEngineConfig
     public uint MaxVoices;
     public uint ResamplerQuality;
     public uint StreamThresholdMs;
+    public uint MaxRealVoices;
+    public uint MaxBinauralVoices;
+    public uint Reserved;
+    public byte* HrtfSofaPath;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -174,6 +202,26 @@ internal struct VsaVoiceDesc
     public float Gain;
     public float Pitch;
     public uint Looping;
+    public uint Spatial;
+    public float PositionX;
+    public float PositionY;
+    public float PositionZ;
+    public float MinDistance;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct VsaListener
+{
+    public uint StructSize;
+    public float PositionX;
+    public float PositionY;
+    public float PositionZ;
+    public float ForwardX;
+    public float ForwardY;
+    public float ForwardZ;
+    public float UpX;
+    public float UpY;
+    public float UpZ;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -224,6 +272,8 @@ internal unsafe struct VsaEngineStats
     public uint AllocatedVoices;
     public uint MaxVoices;
     public float LimiterPeakReductionDb;
+    public uint RealVoices;
+    public uint VirtualVoices;
     public ulong BlocksRendered;
     public ulong Overloads;
     public ulong StreamUnderruns;
@@ -267,7 +317,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 2;
+    public const uint AbiVersion = 4;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint FadeStopWhenDone = 1u << 0;
@@ -345,6 +395,22 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_voice_fade")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult VoiceFade(nint engine, ulong voice, float targetGain, float seconds, uint flags, ulong token);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_voice_set_position")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult VoiceSetPosition(nint engine, ulong voice, uint spatial, float x, float y, float z);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_voice_set_lowpass")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult VoiceSetLowpass(nint engine, ulong voice, float gainHf);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_listener_set")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult ListenerSet(nint engine, in VsaListener listener);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_set_render_mode")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineSetRenderMode(nint engine, uint mode);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_voice_get_status")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

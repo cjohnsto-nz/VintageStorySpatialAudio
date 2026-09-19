@@ -41,8 +41,15 @@ public static class ScenarioRunner
                 MaxVoices = scenario.Engine.MaxVoices,
                 ResamplerQuality = scenario.Engine.ResamplerQuality,
                 StreamThresholdMs = scenario.Engine.StreamThresholdMs,
+                MaxRealVoices = scenario.Engine.MaxRealVoices,
+                MaxBinauralVoices = scenario.Engine.MaxBinauralVoices,
             },
             log);
+        engine.SetRenderMode(scenario.RenderMode);
+        if (scenario.Listener is ListenerSpec l)
+        {
+            engine.SetListener(l.Position[0], l.Position[1], l.Position[2], l.Forward[0], l.Forward[1], l.Forward[2], l.Up[0], l.Up[1], l.Up[2]);
+        }
         engine.OpenOffline(scenario.SampleRate, scenario.Channels);
         engine.SetMasterGain(scenario.MasterGain);
         foreach ((string bus, float gain) in scenario.Buses)
@@ -60,6 +67,7 @@ public static class ScenarioRunner
             }
 
             var schedule = new List<(double Time, int Order, Action Apply)>();
+            var orbits = new List<(Voice Voice, OrbitSpec Orbit, double Phase)>();
             foreach (VoiceSpec spec in scenario.Voices)
             {
                 if (!assets.TryGetValue(spec.Asset, out AudioAsset? asset))
@@ -70,8 +78,14 @@ public static class ScenarioRunner
                 for (int i = 0; i < spec.Count; i++)
                 {
                     float spread = spec.Count > 1 ? spec.PitchSpread * ((2f * i / (spec.Count - 1)) - 1f) : 0f;
-                    Voice voice = engine.CreateVoice(asset, spec.Bus, spec.Gain, spec.Pitch + spread, spec.Loop);
+                    SpatialMode mode = spec.Orbit is null ? spec.Spatial : SpatialMode.World;
+                    var placement = new VoicePlacement(mode, spec.Position[0], spec.Position[1], spec.Position[2], spec.MinDistance);
+                    Voice voice = engine.CreateVoice(asset, spec.Bus, spec.Gain, spec.Pitch + spread, spec.Loop, placement);
                     voices.Add(voice);
+                    if (spec.Orbit is OrbitSpec orbit)
+                    {
+                        orbits.Add((voice, orbit, spec.Count > 1 ? (double)i / spec.Count : 0));
+                    }
                     double offset = i * spec.StartStagger;
                     if (spec.Start is double start)
                     {
@@ -80,13 +94,13 @@ public static class ScenarioRunner
 
                     foreach (VoiceAction action in spec.Actions)
                     {
-                        schedule.Add((action.At + offset, schedule.Count, () => Apply(voice, action)));
+                        schedule.Add((action.At + offset, schedule.Count, () => Apply(voice, action, mode)));
                     }
                 }
             }
 
             schedule.Sort((a, b) => a.Time != b.Time ? a.Time.CompareTo(b.Time) : a.Order.CompareTo(b.Order));
-            return Render(engine, scenario, schedule, voices.Count);
+            return Render(engine, scenario, schedule, orbits, voices.Count);
         }
         finally
         {
@@ -103,7 +117,11 @@ public static class ScenarioRunner
     }
 
     private static ScenarioResult Render(
-        AudioEngine engine, Scenario scenario, List<(double Time, int Order, Action Apply)> schedule, int voiceCount)
+        AudioEngine engine,
+        Scenario scenario,
+        List<(double Time, int Order, Action Apply)> schedule,
+        List<(Voice Voice, OrbitSpec Orbit, double Phase)> orbits,
+        int voiceCount)
     {
         int channels = scenario.Channels;
         int rate = scenario.SampleRate;
@@ -122,6 +140,16 @@ public static class ScenarioRunner
             while (next < schedule.Count && schedule[next].Time <= now)
             {
                 schedule[next++].Apply();
+            }
+
+            foreach ((Voice voice, OrbitSpec orbit, double phase) in orbits)
+            {
+                double angle = 2.0 * Math.PI * ((now / orbit.PeriodSeconds) + phase);
+                voice.SetPosition(
+                    SpatialMode.World,
+                    orbit.Centre[0] + (orbit.Radius * (float)Math.Sin(angle)),
+                    orbit.Centre[1],
+                    orbit.Centre[2] - (orbit.Radius * (float)Math.Cos(angle)));
             }
 
             int frames = (int)Math.Min(blockFrames, totalFrames - frame);
@@ -212,8 +240,10 @@ public static class ScenarioRunner
         return failures;
     }
 
-    private static void Apply(Voice voice, VoiceAction action)
+    private static void Apply(Voice voice, VoiceAction action, SpatialMode mode)
     {
+        if (action.Position is { Count: 3 } p) voice.SetPosition(mode == SpatialMode.None ? SpatialMode.World : mode, p[0], p[1], p[2]);
+        if (action.Lowpass is float lowpass) voice.SetLowpass(lowpass);
         if (action.Start == true) voice.Start();
         if (action.Pause == true) voice.Pause();
         if (action.Stop == true) voice.Stop();

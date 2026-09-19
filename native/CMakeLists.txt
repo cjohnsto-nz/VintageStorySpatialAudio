@@ -39,16 +39,25 @@ add_library(vsaudio_core STATIC
     src/engine.hpp
     src/audio/asset.cpp
     src/audio/asset.hpp
+    src/audio/channel_layout.hpp
     src/audio/mixer.cpp
     src/audio/mixer.hpp
+    src/audio/spatial.cpp
+    src/audio/spatial.hpp
+    src/audio/spatial_tier.hpp
     src/audio/stream.cpp
     src/audio/stream.hpp
+    src/audio/vbap.cpp
+    src/audio/vbap.hpp
     src/audio/voice.hpp
     src/backend/device.cpp
     src/backend/device.hpp
+    src/backend/spatial_output.cpp
+    src/backend/spatial_output.hpp
     src/core/error.cpp
     src/core/error.hpp
     src/core/log.cpp
+    src/core/latest_value.hpp
     src/core/log.hpp
     src/core/rt_log.cpp
     src/core/rt_log.hpp
@@ -56,10 +65,12 @@ add_library(vsaudio_core STATIC
     src/decode/decoders.cpp
     src/decode/decoders.hpp
     src/dsp/gain_ramp.hpp
+    src/dsp/high_shelf.hpp
     src/dsp/limiter.cpp
     src/dsp/limiter.hpp
     src/dsp/resampler.cpp
     src/dsp/resampler.hpp
+    src/dsp/spherical_harmonics.hpp
     src/steam/ipl_handle.hpp
     src/steam/self_test.cpp
     src/steam/self_test.hpp
@@ -68,6 +79,10 @@ add_library(vsaudio_core STATIC
 target_include_directories(vsaudio_core
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(vsaudio_core PUBLIC SteamAudio::phonon vsa_miniaudio vsa_vorbis Threads::Threads)
+if(WIN32)
+    # Windows Spatial Audio output: COM and MMCSS.
+    target_link_libraries(vsaudio_core PUBLIC ole32 avrt)
+endif()
 vsa_enable_warnings(vsaudio_core)
 
 # ---------------------------------------------------------------------------

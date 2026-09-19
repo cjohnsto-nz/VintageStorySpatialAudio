@@ -10,6 +10,9 @@ public sealed class SteamAudioConfig
 {
     public const string FileName = "vssteamaudio.json";
 
+    /// <summary>Play the game's sounds through Steam Audio in-world. False keeps vanilla OpenAL (the engine still starts, for diagnostics).</summary>
+    public bool TakeOverGameAudio { get; set; } = true;
+
     /// <summary>Auto, Embree or Steam.</summary>
     [JsonConverter(typeof(StringEnumConverter))]
     public RayTracer RayTracer { get; set; } = RayTracer.Auto;
@@ -30,15 +33,74 @@ public sealed class SteamAudioConfig
     /// <summary>Voice slot capacity (0 = 4096). A storage bound, not a cap on audible sounds.</summary>
     public int MaxVoices { get; set; }
 
-    /// <summary>Part of a device name for the Phase 1 test commands; empty = system default.</summary>
+    /// <summary>Positional sounds rendered at once with their own Steam Audio effects (0 = 256); quieter ones go virtual.</summary>
+    public int MaxRealVoices { get; set; }
+
+    /// <summary>Of those, how many get their own HRTF with headphones (0 = 64); the rest share one binaural Ambisonic mix.</summary>
+    public int MaxBinauralVoices { get; set; }
+
+    /// <summary>
+    /// Level trim per sound category in dB (Sound, Entity, Ambient, Weather, Music), applied on top
+    /// of the game's sliders. Physical distance fall-off changes the balance vanilla was mixed for.
+    /// </summary>
+    public Dictionary<string, float> CategoryTrimDb { get; set; } = new()
+    {
+        ["Sound"] = 0f,
+        ["Entity"] = 0f,
+        ["Ambient"] = 0f,
+        ["Weather"] = 0f,
+        ["Music"] = 0f,
+    };
+
+    /// <summary>
+    /// Metres the listener sits behind the player's eyes (horizontally), so the player's own sounds
+    /// come from the front rather than flipping to the rear speakers. 0 disables it.
+    /// </summary>
+    public float ListenerBackwardOffset { get; set; } = 0.5f;
+
+    /// <summary>
+    /// With speakers (the game's HRTF option off), play through Windows Spatial Audio when the
+    /// output device has a spatial sound format enabled (Dolby Atmos for home theater, DTS:X):
+    /// a 7.1.4 mix, so sounds above reach the height speakers. Otherwise the device is used directly.
+    /// </summary>
+    public bool SpatialAudio { get; set; } = true;
+
+    /// <summary>
+    /// A SOFA file with a personal HRTF for headphones (absolute, or relative to the ModConfig
+    /// folder); empty = Steam Audio's default. Falls back to the default if it cannot be loaded.
+    /// </summary>
+    public string? HrtfSofaFile { get; set; }
+
+    /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 
-    public EngineOptions ToEngineOptions() => new()
+    /// <param name="modConfigDirectory">Where relative paths (HrtfSofaFile) are resolved; null leaves them as they are.</param>
+    public EngineOptions ToEngineOptions(string? modConfigDirectory = null) => new()
     {
         RayTracer = RayTracer,
         SteamAudioValidation = SteamAudioValidation,
         ResamplerQuality = ResamplerQuality,
         BlockFrames = BlockFrames,
         MaxVoices = MaxVoices,
+        MaxRealVoices = MaxRealVoices,
+        MaxBinauralVoices = MaxBinauralVoices,
+        HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
+            : modConfigDirectory is null ? HrtfSofaFile.Trim()
+            : Path.GetFullPath(HrtfSofaFile.Trim(), modConfigDirectory),
     };
+
+    /// <summary>The trims by bus; unknown names are ignored.</summary>
+    public IReadOnlyDictionary<AudioBus, float> CategoryTrimsDb()
+    {
+        var trims = new Dictionary<AudioBus, float>();
+        foreach ((string name, float db) in CategoryTrimDb ?? [])
+        {
+            if (Enum.TryParse(name, ignoreCase: true, out AudioBus bus) && float.IsFinite(db))
+            {
+                trims[bus] = Math.Clamp(db, -40f, 20f);
+            }
+        }
+
+        return trims;
+    }
 }

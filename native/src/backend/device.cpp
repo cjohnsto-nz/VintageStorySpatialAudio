@@ -28,10 +28,13 @@ void notification_trampoline(const ma_device_notification* notification) {
     }
 }
 
-// Layouts the engine renders: stereo, quad, 5.1 and 7.1.
+// Layouts the engine renders: stereo, quad, 5.1, 7.1 and 7.1.4.
 uint32_t supported_channels(uint32_t channels) noexcept {
     if (channels <= 2) {
         return 2;
+    }
+    if (channels >= 12) {
+        return 12;
     }
     if (channels >= 8) {
         return 8;
@@ -40,6 +43,42 @@ uint32_t supported_channels(uint32_t channels) noexcept {
 }
 
 std::string describe(ma_result result) { return std::string(ma_result_description(result)); }
+
+Speaker speaker_of(ma_channel channel) noexcept {
+    switch (channel) {
+        case MA_CHANNEL_FRONT_LEFT: return Speaker::FrontLeft;
+        case MA_CHANNEL_FRONT_RIGHT: return Speaker::FrontRight;
+        case MA_CHANNEL_FRONT_CENTER: return Speaker::FrontCentre;
+        case MA_CHANNEL_LFE: return Speaker::Lfe;
+        case MA_CHANNEL_BACK_LEFT: return Speaker::BackLeft;
+        case MA_CHANNEL_BACK_RIGHT: return Speaker::BackRight;
+        case MA_CHANNEL_SIDE_LEFT: return Speaker::SideLeft;
+        case MA_CHANNEL_SIDE_RIGHT: return Speaker::SideRight;
+        case MA_CHANNEL_TOP_FRONT_LEFT: return Speaker::TopFrontLeft;
+        case MA_CHANNEL_TOP_FRONT_RIGHT: return Speaker::TopFrontRight;
+        case MA_CHANNEL_TOP_BACK_LEFT: return Speaker::TopBackLeft;
+        case MA_CHANNEL_TOP_BACK_RIGHT: return Speaker::TopBackRight;
+        default: return Speaker::Other;
+    }
+}
+
+const char* speaker_name(Speaker speaker) noexcept {
+    switch (speaker) {
+        case Speaker::FrontLeft: return "FL";
+        case Speaker::FrontRight: return "FR";
+        case Speaker::FrontCentre: return "FC";
+        case Speaker::Lfe: return "LFE";
+        case Speaker::BackLeft: return "BL";
+        case Speaker::BackRight: return "BR";
+        case Speaker::SideLeft: return "SL";
+        case Speaker::SideRight: return "SR";
+        case Speaker::TopFrontLeft: return "TFL";
+        case Speaker::TopFrontRight: return "TFR";
+        case Speaker::TopBackLeft: return "TBL";
+        case Speaker::TopBackRight: return "TBR";
+        default: return "?";
+    }
+}
 
 }  // namespace
 
@@ -99,7 +138,7 @@ std::vector<vsa_device_info> DeviceOutput::enumerate() {
 }
 
 std::unique_ptr<ma_device, DeviceOutput::DeviceDeleter> DeviceOutput::init_device(const vsa_device_id* id,
-                                                                                  uint32_t channels) {
+                                                                                  uint32_t channels, uint32_t rate) {
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     ma_device_id device_id{};
     if (id != nullptr) {
@@ -108,7 +147,7 @@ std::unique_ptr<ma_device, DeviceOutput::DeviceDeleter> DeviceOutput::init_devic
     }
     config.playback.format = ma_format_f32;
     config.playback.channels = channels;
-    config.sampleRate = 0;  // the device's native rate
+    config.sampleRate = rate;  // 0 = the device's native rate
     config.dataCallback = &data_trampoline;
     config.notificationCallback = &notification_trampoline;
     config.pUserData = this;
@@ -135,11 +174,18 @@ DeviceOutput::Format DeviceOutput::open(const vsa_device_id* id, uint32_t channe
     rerouted_.store(false);
     closing_.store(false);
 
-    auto device = init_device(id, channels);
+    // The engine renders at 44.1 or 48 kHz (Steam Audio's HRTF supports no other useful rates);
+    // any other native rate gets the nearest family and miniaudio converts.
+    auto device = init_device(id, channels, 0);
+    const uint32_t native_rate = device->sampleRate;
+    const uint32_t rate = native_rate == 44100 || native_rate == 48000 ? native_rate
+                          : native_rate % 44100 == 0                  ? 44100u
+                                                                       : 48000u;
     const uint32_t wanted = channels == 0 ? supported_channels(device->playback.channels) : channels;
-    if (device->playback.channels != wanted) {
+    if (device->playback.channels != wanted || rate != native_rate) {
         device.reset();
-        device = init_device(id, wanted);
+        device = init_device(id, wanted, rate);
+        Log::writef(VSA_LOG_INFO, "device runs at %u Hz; rendering at %u Hz", native_rate, rate);
     }
 
     Format format;
@@ -147,7 +193,14 @@ DeviceOutput::Format DeviceOutput::open(const vsa_device_id* id, uint32_t channe
     format.channels = device->playback.channels;
     format.period_frames = device->playback.internalPeriodSizeInFrames;
     format.name = device->playback.name;
-    prepare(user, format.sample_rate, format.channels);
+    format.speakers.resize(format.channels);
+    std::string layout;
+    for (uint32_t c = 0; c < format.channels; ++c) {
+        format.speakers[c] = speaker_of(device->playback.channelMap[c]);
+        layout += (c == 0 ? "" : " ");
+        layout += speaker_name(format.speakers[c]);
+    }
+    prepare(user, format.sample_rate, format.channels, format.speakers.data());
 
     if (const ma_result result = ma_device_start(device.get()); result != MA_SUCCESS) {
         closing_.store(true);
@@ -155,8 +208,8 @@ DeviceOutput::Format DeviceOutput::open(const vsa_device_id* id, uint32_t channe
     }
     device_ = std::move(device);
     format_ = format;
-    Log::writef(VSA_LOG_INFO, "output: '%s', %u Hz, %u channels, period %u frames", format_.name.c_str(),
-                format_.sample_rate, format_.channels, format_.period_frames);
+    Log::writef(VSA_LOG_INFO, "output: '%s', %u Hz, %u channels (%s), period %u frames", format_.name.c_str(),
+                format_.sample_rate, format_.channels, layout.c_str(), format_.period_frames);
     return format_;
 }
 

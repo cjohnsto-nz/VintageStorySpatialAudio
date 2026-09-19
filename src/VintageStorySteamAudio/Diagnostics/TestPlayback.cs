@@ -79,13 +79,13 @@ internal sealed class TestPlayback(AudioEngine engine, ILogger logger, string? d
 
                         break;
                     case EngineEventType.DeviceLost:
-                        logger.Warning("[vssteamaudio] Output device lost; the engine is trying to reopen it.");
+                        logger.Warning("Output device lost; the engine is trying to reopen it.");
                         break;
                     case EngineEventType.DeviceRestored:
-                        logger.Notification("[vssteamaudio] Output device restored.");
+                        logger.Notification("Output device restored.");
                         break;
                     case EngineEventType.DeviceRerouted:
-                        logger.Notification("[vssteamaudio] Output followed the new default device.");
+                        logger.Notification("Output followed the new default device.");
                         break;
                     default:
                         break;
@@ -110,10 +110,18 @@ internal sealed class TestPlayback(AudioEngine engine, ILogger logger, string? d
 
     public void Dispose() => StopAll();
 
-    private string? EnsureDevice()
+    /// <summary>Opens the test output unless one is open (the takeover's, or an earlier test's). Returns an error message or null.</summary>
+    internal string? EnsureDevice()
     {
         if (deviceOpen)
         {
+            return null;
+        }
+
+        // With the takeover the game's output device is already open: play there.
+        if (string.IsNullOrWhiteSpace(deviceName) && engine.GetStats().Output != OutputKind.None)
+        {
+            deviceOpen = true;
             return null;
         }
 
@@ -131,7 +139,7 @@ internal sealed class TestPlayback(AudioEngine engine, ILogger logger, string? d
         deviceOpen = true;
         EngineStats stats = engine.GetStats();
         logger.Notification(
-            "[vssteamaudio] Test output opened: '{0}', {1} Hz, {2} channels, period {3} frames",
+            "Test output opened: '{0}', {1} Hz, {2} channels, period {3} frames",
             stats.DeviceName, stats.SampleRate, stats.Channels, stats.DevicePeriodFrames);
         return null;
     }

@@ -23,6 +23,19 @@
       <HintPath>$(VintageStoryPath)/Lib/Newtonsoft.Json.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!--
+      The takeover's Harmony patches name game-internal types in their signatures. Everything they
+      touch is listed in Platform/AudioPatchTargets.cs and verified before any patch is applied, so
+      a game update that changes these types refuses the takeover instead of failing at run time.
+    -->
+    <Reference Include="VintagestoryLib">
+      <HintPath>$(VintageStoryPath)/VintagestoryLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(VintageStoryPath)/Lib/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

@@ -5,49 +5,78 @@ using VintageStorySteamAudio.Config;
 using VintageStorySteamAudio.Diagnostics;
 using VintageStorySteamAudio.Native;
 using VintageStorySteamAudio.Platform;
+using VintageStorySteamAudio.Takeover;
 
 namespace VintageStorySteamAudio;
 
 /// <summary>
-/// Entry point. Loads the native engine, runs its self-test and verifies every game integration
-/// point, then reports. Nothing in the game is patched yet (the takeover is Phase 2); the Phase 1
-/// test commands play game sounds through our own engine and device alongside vanilla audio.
+/// Entry point. In the earliest client phase: verify every game integration point, start the
+/// native engine, run its self-test and, if all of that succeeded, take over the game's audio for
+/// this world session (ADR 0006). On world exit the audio is handed back to vanilla.
 /// </summary>
 public sealed class SteamAudioModSystem : ModSystem, IDisposable
 {
+    /// <summary>Mods that replace or drive the game's audio themselves (docs/PLAN.md §6.5).</summary>
+    private static readonly string[] IncompatibleMods = ["vintagestorysurroundsound", "vintagestoryacousticlab"];
+
     private AudioEngine? engine;
+    private AudioTakeover? takeover;
     private TestPlayback? playback;
+    private SpeakerTest? speakerTest;
     private long tickListener = -1;
     private ICoreClientAPI? capi;
     private StatusReport status = new();
 
     public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Client;
 
-    // Runs before other client mod systems start, i.e. before any world sound exists.
-    // Phase 2 applies the audio takeover here.
+    // First among client mod systems.
     public override double ExecuteOrder() => 0.0;
 
-    public override void StartClientSide(ICoreClientAPI api)
+    /// <summary>The earliest client phase: before any world sound exists.</summary>
+    public override void StartPre(ICoreAPI api)
     {
-        capi = api;
-        SteamAudioConfig config = LoadConfig(api);
-        status = BringUp(config, Mod.Logger);
-        if (engine is not null)
+        if (api is not ICoreClientAPI clientApi)
         {
-            playback = new TestPlayback(engine, Mod.Logger, config.TestOutputDevice);
-            tickListener = api.Event.RegisterGameTickListener(_ => TickPlayback(), 100);
+            return;
+        }
+
+        capi = clientApi;
+        SteamAudioConfig config = LoadConfig(clientApi);
+        status = BringUp(config, Mod.Logger, api.GetOrCreateDataPath("ModConfig"));
+        if (engine is not null && status.TakeoverPossible)
+        {
+            status = TakeOver(config, clientApi, status);
         }
 
         foreach (string line in status.Render().Split('\n'))
         {
             Mod.Logger.Notification(line.TrimEnd('\r'));
         }
+    }
+
+    public override void StartClientSide(ICoreClientAPI api)
+    {
+        // Mods that load after us may patch the same calls; they would fight our patches all session.
+        if (takeover?.ForeignPatches() is string conflict)
+        {
+            Mod.Logger.Warning("{0}. Handing audio back to vanilla for this session.", conflict);
+            takeover.Dispose();
+            takeover = null;
+            status = status with { TakeoverActive = false, TakeoverNote = conflict };
+        }
+
+        if (engine is not null)
+        {
+            SteamAudioConfig config = LoadConfig(api);
+            playback = new TestPlayback(engine, Mod.Logger, config.TestOutputDevice);
+            tickListener = api.Event.RegisterGameTickListener(_ => TickPlayback(), 100);
+        }
 
         CommandArgumentParsers parsers = api.ChatCommands.Parsers;
         api.ChatCommands.Create("steamaudio")
             .WithDescription("Steam Audio engine status and test playback")
             .BeginSubCommand("status")
-                .WithDescription("Show engine, self-test and game integration status")
+                .WithDescription("Show engine, self-test, game integration and takeover status")
                 .HandleWith(_ => TextCommandResult.Success(status.Render()))
             .EndSubCommand()
             .BeginSubCommand("targets")
@@ -56,20 +85,25 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             .EndSubCommand()
             .BeginSubCommand("stats")
                 .WithDescription("Engine telemetry: output, voices, render time, limiter")
-                .HandleWith(_ => WithEngine(() => RenderStats(engine!.GetStats())))
+                .HandleWith(_ => WithEngine(RenderStats))
             .EndSubCommand()
             .BeginSubCommand("devices")
                 .WithDescription("List playback devices")
                 .HandleWith(_ => WithEngine(() => playback!.ListDevices()))
             .EndSubCommand()
             .BeginSubCommand("play")
-                .WithDescription("Play a game sound through the Steam Audio engine, e.g. .steamaudio play effect/woodswitch 1 1")
+                .WithDescription("Play a game sound straight through the engine, e.g. .steamaudio play effect/woodswitch 1 1")
                 .WithArgs(parsers.Word("sound"), parsers.OptionalFloat("volume", 1f), parsers.OptionalFloat("pitch", 1f))
                 .HandleWith(args => WithEngine(() => playback!.Play(api, (string)args[0], (float)args[1], (float)args[2])))
             .EndSubCommand()
             .BeginSubCommand("stop")
-                .WithDescription("Stop every test sound")
+                .WithDescription("Stop every sound started with .steamaudio play")
                 .HandleWith(_ => WithEngine(() => $"Stopped {playback!.StopAll()} sound(s)."))
+            .EndSubCommand()
+            .BeginSubCommand("speakertest")
+                .WithDescription("Noise from each 7.1.4 speaker position in turn, then overhead; '.steamaudio speakertest stop' ends it")
+                .WithArgs(parsers.OptionalWord("stop"))
+                .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
             .EndSubCommand();
     }
 
@@ -81,12 +115,62 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             tickListener = -1;
         }
 
+        speakerTest?.Dispose();
+        speakerTest = null;
         playback?.Dispose();
         playback = null;
-        // World exit: the next session creates a fresh engine (only one may exist per process).
+        // World exit: hand audio back to vanilla before the engine goes (only one may exist per process).
+        takeover?.Dispose();
+        takeover = null;
         engine?.Dispose();
         engine = null;
         base.Dispose();
+    }
+
+    private StatusReport TakeOver(SteamAudioConfig config, ICoreClientAPI api, StatusReport report)
+    {
+        if (!config.TakeOverGameAudio)
+        {
+            return report with { TakeoverNote = $"TakeOverGameAudio is off in {SteamAudioConfig.FileName}" };
+        }
+
+        string[] conflicting = IncompatibleMods.Where(api.ModLoader.IsModEnabled).ToArray();
+        if (conflicting.Length > 0)
+        {
+            return report with { TakeoverNote = $"incompatible audio mod enabled: {string.Join(", ", conflicting)}" };
+        }
+
+        try
+        {
+            takeover = AudioTakeover.Begin(GameAssemblies.FromCurrentProcess(), engine!, config, api, Mod.Logger);
+            return report with { TakeoverActive = true };
+        }
+        catch (Exception ex) when (ex is NativeException or InvalidOperationException or MemberAccessException
+                                       or System.Reflection.TargetInvocationException or HarmonyLib.HarmonyException
+                                       or NotSupportedException or ArgumentException)
+        {
+            Mod.Logger.Error("Steam Audio takeover failed; vanilla audio stays in charge. {0}", ex);
+            takeover = null;
+            return report with { TakeoverNote = "failed: " + ex.Message };
+        }
+    }
+
+    private string SpeakerTestCommand(ICoreClientAPI api, string? argument)
+    {
+        if (string.Equals(argument, "stop", StringComparison.OrdinalIgnoreCase))
+        {
+            bool running = speakerTest?.Running == true;
+            speakerTest?.Stop();
+            return running ? "Speaker test stopped." : "No speaker test is running.";
+        }
+
+        if (playback!.EnsureDevice() is string error)
+        {
+            return error;
+        }
+
+        speakerTest ??= new SpeakerTest(engine!);
+        return speakerTest.Start(api);
     }
 
     private TextCommandResult WithEngine(Func<string> action)
@@ -111,7 +195,11 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
     {
         try
         {
-            playback?.Tick();
+            // Without the takeover nothing else drains the engine's events.
+            if (takeover is null)
+            {
+                playback?.Tick();
+            }
         }
         catch (NativeException ex)
         {
@@ -119,16 +207,40 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         }
     }
 
-    private static string RenderStats(EngineStats s) => string.Create(
-        CultureInfo.InvariantCulture,
-        $"Output: {(s.Output == OutputKind.Device ? $"'{s.DeviceName}'" : "none (offline)")}, {s.SampleRate} Hz, {s.Channels} ch, " +
-        $"block {s.BlockFrames} frames ({s.BlockPeriodUs / 1000:0.00} ms), device period {s.DevicePeriodFrames}\n" +
-        $"Voices: {s.ActiveVoices} active, {s.AllocatedVoices}/{s.MaxVoices} allocated\n" +
-        $"Render: avg {s.RenderTimeAvgUs:0} us, max {s.RenderTimeMaxUs:0} us per block ({s.RenderTimeMaxUs / Math.Max(1, s.BlockPeriodUs):P0} of the period); " +
-        $"{s.BlocksRendered} blocks, {s.Overloads} overloads, {s.StreamUnderruns} stream underruns\n" +
-        $"Limiter: deepest reduction {s.LimiterPeakReductionDb:0.0} dB since the last read");
+    /// <summary>"'name'", "'name' via Windows Spatial Audio (7.1.4)" or "none (offline)".</summary>
+    internal static string DescribeOutput(EngineStats s) => s.Output switch
+    {
+        OutputKind.Device => $"'{s.DeviceName}'",
+        OutputKind.Spatial => $"'{s.DeviceName}' via Windows Spatial Audio (7.1.4)",
+        _ => "none (offline)",
+    };
 
-    private StatusReport BringUp(SteamAudioConfig config, ILogger logger)
+    private string RenderStats()
+    {
+        EngineStats s = engine!.GetStats();
+        string text = string.Create(
+            CultureInfo.InvariantCulture,
+            $"Output: {DescribeOutput(s)}, {s.SampleRate} Hz, {s.Channels} ch, " +
+            $"block {s.BlockFrames} frames ({s.BlockPeriodUs / 1000:0.00} ms), device period {s.DevicePeriodFrames}\n" +
+            $"Voices: {s.ActiveVoices} active ({s.RealVoices} positional with effects, {s.VirtualVoices} virtual), " +
+            $"{s.AllocatedVoices}/{s.MaxVoices} allocated\n" +
+            $"Render: avg {s.RenderTimeAvgUs:0} us, max {s.RenderTimeMaxUs:0} us per block ({s.RenderTimeMaxUs / Math.Max(1, s.BlockPeriodUs):P0} of the period); " +
+            $"{s.BlocksRendered} blocks, {s.Overloads} overloads, {s.StreamUnderruns} stream underruns\n" +
+            $"Limiter: deepest reduction {s.LimiterPeakReductionDb:0.0} dB since the last read");
+        if (takeover is not null)
+        {
+            AudioSession session = takeover.Session;
+            text += string.Create(
+                CultureInfo.InvariantCulture,
+                $"\nGame sounds: {session.SoundCount} ({session.PendingCount} waiting for data), " +
+                $"{session.Assets.Count} assets ({session.Assets.MemoryBytes / (1024.0 * 1024.0):0.0} MB), " +
+                $"250-sound cap {(takeover.SoundCapRemoved ? "removed" : "STILL ACTIVE")}");
+        }
+
+        return text;
+    }
+
+    private StatusReport BringUp(SteamAudioConfig config, ILogger logger, string modConfigDirectory)
     {
         VerificationReport verification = PatchTargetVerifier.Verify(
             GameAssemblies.FromCurrentProcess(), AudioPatchTargets.Members, AudioPatchTargets.Invariants);
@@ -137,7 +249,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         {
             NativeLibraryResolver.Register(NativeLibraryResolver.DefaultNativeDirectory(typeof(SteamAudioModSystem).Assembly.Location));
             EngineVersion version = AudioEngine.GetVersion();
-            engine = AudioEngine.Create(config.ToEngineOptions(), new GameLoggerEngineLog(logger));
+            engine = AudioEngine.Create(config.ToEngineOptions(modConfigDirectory), new GameLoggerEngineLog(logger));
             SelfTestResult? selfTest = config.RunSelfTestOnStartup ? engine.RunSelfTest() : null;
             return new StatusReport { Version = version, Engine = engine.Info, SelfTest = selfTest, Verification = verification };
         }
@@ -159,9 +271,10 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             if (config is null)
             {
                 config = new SteamAudioConfig();
-                api.StoreModConfig(config, SteamAudioConfig.FileName);
             }
 
+            // Rewritten every time so new options appear in the file with their defaults.
+            api.StoreModConfig(config, SteamAudioConfig.FileName);
             return config;
         }
         catch (Exception ex)

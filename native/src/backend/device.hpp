@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/channel_layout.hpp"
 #include "vsaudio.h"
 
 #include <atomic>
@@ -24,14 +25,16 @@ namespace vsa::backend {
 class DeviceOutput {
 public:
     using RenderFn = void (*)(void* user, float* out, uint32_t frames) noexcept;
-    /// Called after the device is initialised and before it starts, with its actual format.
-    using PrepareFn = void (*)(void* user, uint32_t sample_rate, uint32_t channels);
+    /// Called after the device is initialised and before it starts, with its actual format and
+    /// channel order (`channels` entries).
+    using PrepareFn = void (*)(void* user, uint32_t sample_rate, uint32_t channels, const Speaker* speakers);
 
     struct Format {
         uint32_t sample_rate = 0;
         uint32_t channels = 0;
         uint32_t period_frames = 0;
         std::string name;
+        std::vector<Speaker> speakers;
     };
 
     DeviceOutput();
@@ -44,7 +47,7 @@ public:
     std::vector<vsa_device_info> enumerate();
 
     /// Opens and starts a device. `id` null = system default, followed when it changes.
-    /// `channels` 0 = native layout, clamped to 2/4/6/8. Throws vsa::Error (VSA_ERROR_DEVICE).
+    /// `channels` 0 = native layout, clamped to 2/4/6/8/12. Throws vsa::Error (VSA_ERROR_DEVICE).
     Format open(const vsa_device_id* id, uint32_t channels, RenderFn render, PrepareFn prepare, void* user);
     void close() noexcept;
 
@@ -73,7 +76,7 @@ private:
     };
 
     void ensure_context();
-    std::unique_ptr<ma_device, DeviceDeleter> init_device(const vsa_device_id* id, uint32_t channels);
+    std::unique_ptr<ma_device, DeviceDeleter> init_device(const vsa_device_id* id, uint32_t channels, uint32_t rate);
 
     std::unique_ptr<ma_context, ContextDeleter> context_;
     std::unique_ptr<ma_device, DeviceDeleter> device_;

@@ -9,6 +9,7 @@ Everything here is pinned by version and SHA-256 in [`deps.json`](deps.json). `s
 | miniaudio | 0.11.25 | public domain or MIT-0 (choice of the user) | audio device I/O (WASAPI, CoreAudio, PipeWire/PulseAudio/ALSA) | `ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89` |
 | libogg | 1.3.6 | BSD-3-Clause | Ogg container for libvorbis | `83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638` |
 | libvorbis | 1.3.7 | BSD-3-Clause | Vorbis decoding (the encoder, `vorbisenc.c`, is built for tests only and not shipped) | `0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab` |
+| MIT KEMAR HRTF (SOFA, normal pinna; converted by ARI) | 2020-03-24 | "Provided without any usage restrictions"; cite Gardner, W. G. and Martin, K. D. (1995), "HRTF measurements of a KEMAR", JASA 97, 3907-3908 | a real SOFA file for the native HRTF tests (not shipped) | `e7035994f5fd754058424c061380ee92b1d5ed58fccef2887a4266916616acdf` |
 
 libogg and libvorbis are compiled straight from their source lists by `native/cmake/Vorbis.cmake` (their own CMake projects are not used); miniaudio by `native/cmake/Miniaudio.cmake`, with decoding and its high-level engine compiled out.
 

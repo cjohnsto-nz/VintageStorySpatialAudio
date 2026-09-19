@@ -36,49 +36,50 @@ void Limiter::prepare(uint32_t sample_rate, float lookahead_ms, float release_ms
     min_values_.assign(window_ + 1, 1.0f);
     min_index_.assign(window_ + 1, 0);
     box_.assign(window_, 1.0f);
-    delay_l_.assign(delay_ + 1, 0.0f);
-    delay_r_.assign(delay_ + 1, 0.0f);
+    for (auto& line : lines_) {
+        line.assign(delay_ + 1, 0.0f);
+    }
     reset();
 }
 
 void Limiter::reset() noexcept {
-    hist_l_.fill(0.0f);
-    hist_r_.fill(0.0f);
+    for (auto& history : hist_) {
+        history.fill(0.0f);
+    }
     min_head_ = 0;
     min_size_ = 0;
     release_state_ = 1.0f;
     std::fill(box_.begin(), box_.end(), 1.0f);
     box_pos_ = 0;
     box_sum_ = static_cast<double>(window_);
-    std::fill(delay_l_.begin(), delay_l_.end(), 0.0f);
-    std::fill(delay_r_.begin(), delay_r_.end(), 0.0f);
+    for (auto& line : lines_) {
+        std::fill(line.begin(), line.end(), 0.0f);
+    }
     delay_pos_ = 0;
     sample_index_ = 0;
 }
 
-float Limiter::process(float* left, float* right, uint32_t frames) noexcept {
+float Limiter::process(float* const* channels, uint32_t count, uint32_t frames) noexcept {
+    count = std::min(count, kMaxChannels);
     const auto min_capacity = static_cast<uint32_t>(min_values_.size());
-    const auto delay_size = static_cast<uint32_t>(delay_l_.size());
+    const auto delay_size = static_cast<uint32_t>(lines_[0].size());
     float smallest = 1.0f;
 
     for (uint32_t j = 0; j < frames; ++j) {
-        const float in_l = left[j];
-        const float in_r = right[j];
-
-        // 1. True-peak estimate for sample m = n - kDetectorLag.
-        std::copy(hist_l_.begin() + 1, hist_l_.end(), hist_l_.begin());
-        std::copy(hist_r_.begin() + 1, hist_r_.end(), hist_r_.begin());
-        hist_l_[kTaps - 1] = in_l;
-        hist_r_[kTaps - 1] = in_r;
-        float peak = std::max(std::abs(hist_l_[3]), std::abs(hist_r_[3]));
-        for (const auto& fir : fir_) {
-            float yl = 0.0f;
-            float yr = 0.0f;
-            for (std::size_t k = 0; k < kTaps; ++k) {
-                yl += fir[k] * hist_l_[k];
-                yr += fir[k] * hist_r_[k];
+        // 1. True-peak estimate for sample m = n - kDetectorLag, linked across channels.
+        float peak = 0.0f;
+        for (uint32_t c = 0; c < count; ++c) {
+            auto& history = hist_[c];
+            std::copy(history.begin() + 1, history.end(), history.begin());
+            history[kTaps - 1] = channels[c][j];
+            peak = std::max(peak, std::abs(history[3]));
+            for (const auto& fir : fir_) {
+                float y = 0.0f;
+                for (std::size_t k = 0; k < kTaps; ++k) {
+                    y += fir[k] * history[k];
+                }
+                peak = std::max(peak, std::abs(y));
             }
-            peak = std::max(peak, std::max(std::abs(yl), std::abs(yr)));
         }
 
         // 2. Target gain.
@@ -126,11 +127,12 @@ float Limiter::process(float* left, float* right, uint32_t frames) noexcept {
         smallest = std::min(smallest, gain);
 
         // Delay the audio so the gain lands on the sample it was computed for.
-        delay_l_[delay_pos_] = in_l;
-        delay_r_[delay_pos_] = in_r;
         const uint32_t oldest = delay_pos_ + 1 == delay_size ? 0 : delay_pos_ + 1;
-        left[j] = delay_l_[oldest] * gain;
-        right[j] = delay_r_[oldest] * gain;
+        for (uint32_t c = 0; c < count; ++c) {
+            std::vector<float>& line = lines_[c];
+            line[delay_pos_] = channels[c][j];
+            channels[c][j] = line[oldest] * gain;
+        }
         delay_pos_ = oldest;
 
         ++sample_index_;

@@ -21,7 +21,10 @@ public sealed class NativeLayoutTests
     [Fact]
     public unsafe void EngineConfig_matches_header()
     {
-        Assert.Equal(56, sizeof(VsaEngineConfig));
+        Assert.Equal(72, sizeof(VsaEngineConfig));
+        Assert.Equal(64, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.HrtfSofaPath)));
+        Assert.Equal(52, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxRealVoices)));
+        Assert.Equal(56, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxBinauralVoices)));
         Assert.Equal(8, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.Log)));
         Assert.Equal(16, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.LogUserData)));
         Assert.Equal(24, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.RayTracer)));
@@ -56,7 +59,11 @@ public sealed class NativeLayoutTests
     [Fact]
     public void VoiceDesc_and_status_match_header()
     {
-        Assert.Equal(32, Unsafe.SizeOf<VsaVoiceDesc>());
+        Assert.Equal(48, Unsafe.SizeOf<VsaVoiceDesc>());
+        Assert.Equal(28, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Spatial)));
+        Assert.Equal(32, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.PositionX)));
+        Assert.Equal(44, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.MinDistance)));
+        Assert.Equal(40, Unsafe.SizeOf<VsaListener>());
         Assert.Equal(8, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Asset)));
         Assert.Equal(16, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Gain)));
         Assert.Equal(24, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Looping)));
@@ -78,11 +85,12 @@ public sealed class NativeLayoutTests
     [Fact]
     public unsafe void EngineStats_matches_header()
     {
-        Assert.Equal(352, sizeof(VsaEngineStats));
+        Assert.Equal(360, sizeof(VsaEngineStats));
         Assert.Equal(36, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.LimiterPeakReductionDb)));
-        Assert.Equal(40, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.BlocksRendered)));
-        Assert.Equal(72, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.RenderTimeAvgUs)));
-        Assert.Equal(96, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.DeviceName)));
+        Assert.Equal(40, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.RealVoices)));
+        Assert.Equal(48, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.BlocksRendered)));
+        Assert.Equal(80, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.RenderTimeAvgUs)));
+        Assert.Equal(104, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.DeviceName)));
     }
 
     [Fact]
@@ -105,7 +113,10 @@ public sealed class NativeLayoutTests
         Assert.Equal(2u, (uint)AssetStorage.Streamed);
         Assert.Equal(2u, (uint)VoiceState.Paused);
         Assert.Equal(1u, (uint)OutputKind.Device);
+        Assert.Equal(2u, (uint)OutputKind.Spatial);
         Assert.Equal(6u, (uint)EngineEventType.DeviceRestored);
+        Assert.Equal(2u, (uint)SpatialMode.Listener);
+        Assert.Equal(1u, (uint)RenderMode.Speakers);
     }
 
     [Fact]

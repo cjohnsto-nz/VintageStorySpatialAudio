@@ -6,7 +6,7 @@
 
 namespace vsa::dsp {
 
-/// Stereo-linked, true-peak, look-ahead brickwall limiter.
+/// Channel-linked (up to kMaxChannels), true-peak, look-ahead brickwall limiter.
 ///
 ///  1. Peak detection: |x| per sample plus the three 4x-oversampled points between samples
 ///     (8-tap polyphase windowed-sinc), so inter-sample peaks count.
@@ -25,8 +25,17 @@ public:
                  float ceiling_db = kDefaultCeilingDb);
     void reset() noexcept;
 
-    /// In place on planar stereo. Returns the smallest gain applied in this call (1 = none).
-    float process(float* left, float* right, uint32_t frames) noexcept;
+    static constexpr uint32_t kMaxChannels = 12;
+
+    /// In place on `count` planar channels (the same count every call). Returns the smallest gain
+    /// applied in this call (1 = none).
+    float process(float* const* channels, uint32_t count, uint32_t frames) noexcept;
+
+    /// Stereo convenience.
+    float process(float* left, float* right, uint32_t frames) noexcept {
+        float* channels[2] = {left, right};
+        return process(channels, 2, frames);
+    }
 
     [[nodiscard]] uint32_t latency_frames() const noexcept { return delay_; }
     [[nodiscard]] float ceiling() const noexcept { return ceiling_; }
@@ -43,8 +52,7 @@ private:
 
     std::array<std::array<float, kTaps>, kPhases> fir_{};
     // Last kTaps input samples per channel, for the interpolator (index kTaps - 1 = newest).
-    std::array<float, kTaps> hist_l_{};
-    std::array<float, kTaps> hist_r_{};
+    std::array<std::array<float, kTaps>, kMaxChannels> hist_{};
 
     // Sliding-window minimum: monotonic deque in a ring of (value, sample index).
     std::vector<float> min_values_;
@@ -59,9 +67,8 @@ private:
     uint32_t box_pos_ = 0;
     double box_sum_ = 0.0;
 
-    // Audio delay lines.
-    std::vector<float> delay_l_;
-    std::vector<float> delay_r_;
+    // Audio delay lines, one per channel, (delay_ + 1) frames each.
+    std::array<std::vector<float>, kMaxChannels> lines_{};
     uint32_t delay_pos_ = 0;
 
     uint64_t sample_index_ = 0;

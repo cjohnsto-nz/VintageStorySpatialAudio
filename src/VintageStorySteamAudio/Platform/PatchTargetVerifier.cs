@@ -28,11 +28,21 @@ public static class PatchTargetVerifier
     private const BindingFlags AnyMember =
         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 
+    /// <summary>The member a target names (null if it does not match). Use after <see cref="Verify"/> passed.</summary>
+    public static MemberInfo? Resolve(GameAssemblies game, PatchTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(game);
+        ArgumentNullException.ThrowIfNull(target);
+        MemberInfo? resolved = null;
+        VerifyTarget(game, target, member => resolved = member);
+        return resolved;
+    }
+
     public static VerificationReport Verify(GameAssemblies game, IEnumerable<PatchTarget> targets, IEnumerable<GameInvariant> invariants)
     {
         ArgumentNullException.ThrowIfNull(game);
         var entries = new List<VerificationEntry>();
-        entries.AddRange(targets.Select(t => VerifyTarget(game, t)));
+        entries.AddRange(targets.Select(t => VerifyTarget(game, t, _ => { })));
         entries.AddRange(invariants.Select(i => VerifyInvariant(game, i)));
         return new VerificationReport(entries);
     }
@@ -50,7 +60,7 @@ public static class PatchTargetVerifier
         }
     }
 
-    private static VerificationEntry VerifyTarget(GameAssemblies game, PatchTarget target)
+    private static VerificationEntry VerifyTarget(GameAssemblies game, PatchTarget target, Action<MemberInfo> found)
     {
         VerificationEntry Result(VerificationStatus status, string? detail = null) => new(target.Id, target.Describe(), status, detail);
 
@@ -75,9 +85,10 @@ public static class PatchTargetVerifier
 
             return target.Kind switch
             {
-                TargetMemberKind.Method => MatchMethod(target, members.OfType<MethodInfo>().ToList(), Result),
-                TargetMemberKind.Property => MatchProperty(target, members.OfType<PropertyInfo>().ToList(), Result),
-                TargetMemberKind.Field => MatchField(target, members.OfType<FieldInfo>().ToList(), Result),
+                TargetMemberKind.Method => MatchMethod(target, members.OfType<MethodInfo>().ToList(), Result, found),
+                TargetMemberKind.Constructor => MatchMethod(target, members.OfType<ConstructorInfo>().ToList(), Result, found),
+                TargetMemberKind.Property => MatchProperty(target, members.OfType<PropertyInfo>().ToList(), Result, found),
+                TargetMemberKind.Field => MatchField(target, members.OfType<FieldInfo>().ToList(), Result, found),
                 _ => Result(VerificationStatus.Failed, "unknown member kind"),
             };
         }
@@ -87,30 +98,36 @@ public static class PatchTargetVerifier
         }
     }
 
-    private static VerificationEntry MatchMethod(PatchTarget target, List<MethodInfo> methods, Func<VerificationStatus, string?, VerificationEntry> result)
+    private static VerificationEntry MatchMethod<T>(
+        PatchTarget target, List<T> methods, Func<VerificationStatus, string?, VerificationEntry> result, Action<MemberInfo> found)
+        where T : MethodBase
     {
         if (methods.Count == 0)
         {
-            return result(VerificationStatus.MemberMissing, "member exists but is not a method");
+            return result(VerificationStatus.MemberMissing, "member exists but is not a " + (target.Kind == TargetMemberKind.Constructor ? "constructor" : "method"));
         }
 
-        foreach (MethodInfo method in methods)
+        foreach (T method in methods)
         {
             string[] parameters = method.GetParameters().Select(p => TypeNames.Format(p.ParameterType)).ToArray();
             if (method.IsStatic == target.IsStatic
-                && TypeNames.Format(method.ReturnType) == target.Type
+                && TypeNames.Format(ReturnType(method)) == target.Type
                 && parameters.SequenceEqual(target.Parameters, StringComparer.Ordinal))
             {
+                found(method);
                 return result(VerificationStatus.Ok, null);
             }
         }
 
-        string found = string.Join(" | ", methods.Select(m =>
-            $"{(m.IsStatic ? "static " : string.Empty)}{TypeNames.Format(m.ReturnType)} {m.Name}({string.Join(", ", m.GetParameters().Select(p => TypeNames.Format(p.ParameterType)))})"));
-        return result(VerificationStatus.SignatureMismatch, "found: " + found);
+        string existing = string.Join(" | ", methods.Select(m =>
+            $"{(m.IsStatic ? "static " : string.Empty)}{TypeNames.Format(ReturnType(m))} {m.Name}({string.Join(", ", m.GetParameters().Select(p => TypeNames.Format(p.ParameterType)))})"));
+        return result(VerificationStatus.SignatureMismatch, "found: " + existing);
     }
 
-    private static VerificationEntry MatchProperty(PatchTarget target, List<PropertyInfo> properties, Func<VerificationStatus, string?, VerificationEntry> result)
+    private static Type ReturnType(MethodBase method) => method is MethodInfo info ? info.ReturnType : typeof(void);
+
+    private static VerificationEntry MatchProperty(
+        PatchTarget target, List<PropertyInfo> properties, Func<VerificationStatus, string?, VerificationEntry> result, Action<MemberInfo> found)
     {
         if (properties.Count == 0)
         {
@@ -120,12 +137,17 @@ public static class PatchTargetVerifier
         PropertyInfo property = properties[0];
         bool isStatic = (property.GetMethod ?? property.SetMethod)?.IsStatic ?? false;
         string type = TypeNames.Format(property.PropertyType);
-        return type == target.Type && isStatic == target.IsStatic
-            ? result(VerificationStatus.Ok, null)
-            : result(VerificationStatus.SignatureMismatch, $"found: {(isStatic ? "static " : string.Empty)}{type}");
+        if (type == target.Type && isStatic == target.IsStatic)
+        {
+            found(property);
+            return result(VerificationStatus.Ok, null);
+        }
+
+        return result(VerificationStatus.SignatureMismatch, $"found: {(isStatic ? "static " : string.Empty)}{type}");
     }
 
-    private static VerificationEntry MatchField(PatchTarget target, List<FieldInfo> fields, Func<VerificationStatus, string?, VerificationEntry> result)
+    private static VerificationEntry MatchField(
+        PatchTarget target, List<FieldInfo> fields, Func<VerificationStatus, string?, VerificationEntry> result, Action<MemberInfo> found)
     {
         if (fields.Count == 0)
         {
@@ -134,8 +156,12 @@ public static class PatchTargetVerifier
 
         FieldInfo field = fields[0];
         string type = TypeNames.Format(field.FieldType);
-        return type == target.Type && field.IsStatic == target.IsStatic
-            ? result(VerificationStatus.Ok, null)
-            : result(VerificationStatus.SignatureMismatch, $"found: {(field.IsStatic ? "static " : string.Empty)}{type}");
+        if (type == target.Type && field.IsStatic == target.IsStatic)
+        {
+            found(field);
+            return result(VerificationStatus.Ok, null);
+        }
+
+        return result(VerificationStatus.SignatureMismatch, $"found: {(field.IsStatic ? "static " : string.Empty)}{type}");
     }
 }

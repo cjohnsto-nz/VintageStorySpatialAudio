@@ -37,10 +37,14 @@ add_executable(vsaudio_tests
     test_header_c.c
     test_output.cpp
     test_self_test.cpp
+    test_spatial.cpp
     test_streaming.cpp
     test_voices.cpp)
 target_include_directories(vsaudio_tests SYSTEM PRIVATE "${DOCTEST_INCLUDE_DIR}")
 target_link_libraries(vsaudio_tests PRIVATE vsaudio vsa_test_support)
+# A real SOFA HRTF (MIT KEMAR, fetched by fetch-deps) for the SOFA loading tests.
+target_compile_definitions(vsaudio_tests PRIVATE
+    VSA_TEST_SOFA_PATH="${VSA_THIRD_PARTY_DIR}/sofa/mit_kemar_normal_pinna.sofa")
 vsa_enable_warnings(vsaudio_tests)
 vsa_place_runtime(vsaudio_tests)
 # Put vsaudio next to the test binary.
@@ -58,11 +62,14 @@ add_executable(vsaudio_core_tests
     test_main.cpp
     core/alloc_counter.cpp
     core/alloc_counter.hpp
+    core/test_channel_layout.cpp
     core/test_gain_ramp.cpp
     core/test_limiter.cpp
     core/test_render_budget.cpp
     core/test_resampler.cpp
-    core/test_spsc_ring.cpp)
+    core/test_spherical_harmonics.cpp
+    core/test_spsc_ring.cpp
+    core/test_vbap.cpp)
 target_include_directories(vsaudio_core_tests SYSTEM PRIVATE "${DOCTEST_INCLUDE_DIR}")
 target_link_libraries(vsaudio_core_tests PRIVATE vsaudio_core vsa_test_support)
 vsa_enable_warnings(vsaudio_core_tests)

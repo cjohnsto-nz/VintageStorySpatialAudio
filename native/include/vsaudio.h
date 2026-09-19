@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 2u
+#define VSA_ABI_VERSION 4u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -130,7 +130,7 @@ typedef struct vsa_engine_config {
     uint32_t ray_tracer;
     /** Combination of VSA_ENGINE_FLAG_* values. */
     uint32_t flags;
-    /** Rate of the initial offline output (VSA_OUTPUT_NONE). 0 = 48000. Devices always run at their native rate. */
+    /** Rate of the initial offline output (VSA_OUTPUT_NONE): 44100 or 48000, 0 = 48000. */
     uint32_t sample_rate;
     /** Frames per engine block (the render granularity). 0 = 256; 32..4096. */
     uint32_t block_frames;
@@ -140,6 +140,25 @@ typedef struct vsa_engine_config {
     uint32_t resampler_quality;
     /** Ogg assets with storage AUTO longer than this are streamed. 0 = 20000 ms. */
     uint32_t stream_threshold_ms;
+    /**
+     * Positional voices rendered with their own Steam Audio effects at once (the rest are
+     * virtual: silent, but still advancing). 0 = 256; 1..4096.
+     */
+    uint32_t max_real_voices;
+    /**
+     * Of those, how many get per-voice HRTF rendering in headphones mode (the loudest ones; the
+     * rest share a world-space order-3 Ambisonic bus decoded binaurally once per block).
+     * 0 = 64; at most max_real_voices.
+     */
+    uint32_t max_binaural_voices;
+    /** Must be 0. */
+    uint32_t reserved;
+    /**
+     * A SOFA file (UTF-8 path) with the HRTF to use instead of Steam Audio's default, or NULL.
+     * Copied at creation. If it cannot be loaded (at the output's rate), the engine logs a
+     * warning and uses the default HRTF.
+     */
+    const char* hrtf_sofa_path;
 } vsa_engine_config;
 
 typedef struct vsa_engine_info {
@@ -277,6 +296,16 @@ typedef enum vsa_voice_state {
  */
 typedef uint64_t vsa_voice;
 
+/** How a voice is positioned. */
+typedef enum vsa_spatial_mode {
+    /** Not positioned: straight to its bus (music, UI). Mono is centred at -3 dB per side. */
+    VSA_SPATIAL_NONE = 0,
+    /** Position in world coordinates, rendered relative to the listener. */
+    VSA_SPATIAL_WORLD = 1,
+    /** Position in listener space (head-locked): +x right, +y up, -z forward. */
+    VSA_SPATIAL_LISTENER = 2
+} vsa_spatial_mode;
+
 typedef struct vsa_voice_desc {
     uint32_t struct_size;
     /** A vsa_bus value. */
@@ -289,6 +318,11 @@ typedef struct vsa_voice_desc {
     float pitch;
     /** Non-zero to loop. */
     uint32_t looping;
+    /** A vsa_spatial_mode value. Positioned stereo assets are downmixed to mono. */
+    uint32_t spatial;
+    float position[3];
+    /** Distance (m) within which the source does not get louder; beyond it, 1/distance. 0 = 1 m. */
+    float min_distance;
 } vsa_voice_desc;
 
 typedef struct vsa_voice_status {
@@ -325,6 +359,14 @@ VSA_API vsa_result VSA_CALL vsa_voice_set_gain(vsa_engine* engine, vsa_voice voi
 VSA_API vsa_result VSA_CALL vsa_voice_set_pitch(vsa_engine* engine, vsa_voice voice, float pitch);
 VSA_API vsa_result VSA_CALL vsa_voice_set_looping(vsa_engine* engine, vsa_voice voice, uint32_t looping);
 VSA_API vsa_result VSA_CALL vsa_voice_seek(vsa_engine* engine, vsa_voice voice, double position_seconds);
+/** Sets the positioning mode (a vsa_spatial_mode value) and position together. */
+VSA_API vsa_result VSA_CALL vsa_voice_set_position(vsa_engine* engine, vsa_voice voice, uint32_t spatial, float x,
+                                                   float y, float z);
+/**
+ * High-frequency damping, as OpenAL's EFX low-pass: `gain_hf` (0..1) is the gain above about
+ * 5 kHz; 1 turns it off. The game uses it underwater.
+ */
+VSA_API vsa_result VSA_CALL vsa_voice_set_lowpass(vsa_engine* engine, vsa_voice voice, float gain_hf);
 /**
  * Fades the voice gain to target_gain over `seconds`, linearly in decibels (a geometric
  * curve), then posts VSA_EVENT_FADE_DONE carrying `token`. `flags` is VSA_FADE_* values.
@@ -338,6 +380,36 @@ VSA_API vsa_result VSA_CALL vsa_voice_get_status(vsa_engine* engine, vsa_voice v
 VSA_API vsa_result VSA_CALL vsa_bus_set_gain(vsa_engine* engine, uint32_t bus, float gain);
 /** Master gain (linear, smoothed), applied before the limiter. */
 VSA_API vsa_result VSA_CALL vsa_engine_set_master_gain(vsa_engine* engine, float gain);
+
+/* ------------------------------------------------------------------------------------------ */
+/* Listener and spatial rendering                                                              */
+/* ------------------------------------------------------------------------------------------ */
+
+typedef struct vsa_listener {
+    uint32_t struct_size;
+    float position[3];
+    /** Unit vector the listener faces. */
+    float forward[3];
+    /** Unit vector up from the listener's head, orthogonal to forward. */
+    float up[3];
+} vsa_listener;
+
+typedef enum vsa_render_mode {
+    /** Binaural (Steam Audio HRTF) to the front left/right channels. The default. */
+    VSA_RENDER_HEADPHONES = 0,
+    /**
+     * Amplitude panning to the output's speakers: stereo, quad, 5.1, 7.1 or 7.1.4 for 2/4/6/8/12
+     * channels (7.1.4 by 3D vector-base panning, overhead sources on the height speakers; channels
+     * are routed by speaker position, so the device's own channel order is respected).
+     * The LFE channel is not used. Unpositioned voices stay on the front pair in every layout.
+     */
+    VSA_RENDER_SPEAKERS = 1
+} vsa_render_mode;
+
+/** Listener pose for positional voices. Takes effect at the next block. */
+VSA_API vsa_result VSA_CALL vsa_listener_set(vsa_engine* engine, const vsa_listener* listener);
+/** A vsa_render_mode value. */
+VSA_API vsa_result VSA_CALL vsa_engine_set_render_mode(vsa_engine* engine, uint32_t mode);
 
 /* ------------------------------------------------------------------------------------------ */
 /* Output                                                                                      */
@@ -361,7 +433,16 @@ typedef enum vsa_output_kind {
     /** No device; audio is produced only by vsa_engine_render_offline. The initial state. */
     VSA_OUTPUT_NONE = 0,
     /** A playback device through the platform backend (WASAPI, CoreAudio, PipeWire/PulseAudio/ALSA). */
-    VSA_OUTPUT_DEVICE = 1
+    VSA_OUTPUT_DEVICE = 1,
+    /**
+     * A playback device through Windows Spatial Audio: the 7.1.4 mix (12 channels; `channels` is
+     * ignored) goes to the spatial stream's static bed, so the device's spatial sound format
+     * (Dolby Atmos, DTS:X, Windows Sonic) renders the heights. Where that is unavailable (another
+     * platform, or no spatial format enabled for the device) the engine opens the device as
+     * VSA_OUTPUT_DEVICE instead, and does so again whenever the spatial stream fails; the stats'
+     * output_kind says which is running. Meant for VSA_RENDER_SPEAKERS.
+     */
+    VSA_OUTPUT_SPATIAL = 2
 } vsa_output_kind;
 
 typedef struct vsa_output_desc {
@@ -370,9 +451,16 @@ typedef struct vsa_output_desc {
     uint32_t kind;
     /** DEVICE: the device to open, or NULL for the system default (and to follow it when it changes). */
     const vsa_device_id* device_id;
-    /** 0 = the device's native layout (NONE: 2); otherwise 2, 4, 6 or 8. */
+    /**
+     * 0 = the device's native layout (NONE: 2); otherwise 2, 4, 6, 8 or 12. The engine's order is
+     * FL FR, then FC LFE BL BR, SL SR, TFL TFR TBL TBR as the layout has them (quad: FL FR BL BR).
+     */
     uint32_t channels;
-    /** NONE: the offline rate, 0 = 48000. DEVICE: ignored (the engine runs at the device's native rate). */
+    /**
+     * NONE: the offline rate, 44100 or 48000 (0 = 48000). DEVICE: ignored; the engine renders at
+     * the device's native rate when it is 44.1 or 48 kHz, otherwise at the nearest of the two
+     * (the backend converts).
+     */
     uint32_t sample_rate;
 } vsa_output_desc;
 
@@ -392,6 +480,10 @@ typedef struct vsa_engine_stats {
     uint32_t max_voices;
     /** Deepest limiter gain reduction since the previous read, in dB (<= 0). */
     float limiter_peak_reduction_db;
+    /** Positional voices currently holding Steam Audio effects. */
+    uint32_t real_voices;
+    /** Voices currently virtual (inaudible: advancing without rendering). */
+    uint32_t virtual_voices;
     uint64_t blocks_rendered;
     /** Blocks whose render time exceeded the block period. */
     uint64_t overloads;

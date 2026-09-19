@@ -1,0 +1,32 @@
+// Phase 2 listening scene (headphones): a noise source circles the listener at 3 m, a tone
+// circles the other way further out, a clicker sits fixed on the left, and a drone walks from far
+// ahead to up close. Listen for front/back/left/right, distance fall-off and air absorption.
+{
+  "name": "spatial-orbit",
+  "sampleRate": 48000,
+  "channels": 2,
+  "durationSeconds": 12,
+  "renderMode": "Headphones",
+  "assets": {
+    "noise": { "noise": { "seconds": 1, "amplitude": 0.4 } },
+    "tone": { "tone": { "frequency": 660, "seconds": 1, "amplitude": 0.3 } },
+    "click": { "tone": { "frequency": 8, "seconds": 1, "shape": "Square", "amplitude": 0.4 } },
+    "drone": { "tone": { "frequency": 110, "seconds": 1, "shape": "Saw", "amplitude": 0.4 } }
+  },
+  "voices": [
+    { "asset": "noise", "gain": 0.8, "loop": true, "orbit": { "radius": 3, "periodSeconds": 6 } },
+    { "asset": "tone", "gain": 0.8, "loop": true, "orbit": { "radius": 10, "periodSeconds": -8 } },
+    { "asset": "click", "gain": 0.5, "loop": true, "spatial": "World", "position": [-4, 0, 0] },
+    {
+      "asset": "drone", "gain": 1.0, "loop": true, "spatial": "World", "position": [0, 0, -80],
+      "actions": [
+        { "at": 3, "position": [0, 0, -40] },
+        { "at": 5, "position": [0, 0, -20] },
+        { "at": 7, "position": [0, 0, -8] },
+        { "at": 9, "position": [0, 0, -2] },
+        { "at": 11, "lowpass": 0.06 }
+      ]
+    }
+  ],
+  "expect": { "maxUnderruns": 0, "maxPeakDbfs": -0.9, "maxP99Load": 1.0 }
+}

@@ -38,7 +38,24 @@ public sealed record EngineOptions
 
     /// <summary>Ogg assets longer than this are streamed. 0 = 20 s.</summary>
     public int StreamThresholdMs { get; init; }
+
+    /// <summary>Positional voices rendered with their own Steam Audio effects at once. 0 = 256.</summary>
+    public int MaxRealVoices { get; init; }
+
+    /// <summary>Of those, how many get per-voice HRTF in headphones mode. 0 = 64.</summary>
+    public int MaxBinauralVoices { get; init; }
+
+    /// <summary>A SOFA file with the HRTF to use (null = Steam Audio's default). Falls back to the default, with a warning, if it cannot be loaded.</summary>
+    public string? HrtfSofaPath { get; init; }
 }
+
+/// <summary>Where a positional voice is and how it falls off with distance.</summary>
+/// <param name="Mode">World or listener-relative; <see cref="SpatialMode.None"/> for unpositioned voices.</param>
+/// <param name="X">Position (world or listener space).</param>
+/// <param name="Y">Position (world or listener space).</param>
+/// <param name="Z">Position (world or listener space).</param>
+/// <param name="MinDistance">Distance within which the source no longer gets louder (0 = 1 m).</param>
+public readonly record struct VoicePlacement(SpatialMode Mode, float X = 0, float Y = 0, float Z = 0, float MinDistance = 0);
 
 public sealed record EngineVersion(
     Version Engine,
@@ -63,6 +80,8 @@ public sealed record EngineStats(
     int ActiveVoices,
     int AllocatedVoices,
     int MaxVoices,
+    int RealVoices,
+    int VirtualVoices,
     ulong BlocksRendered,
     ulong Overloads,
     ulong StreamUnderruns,
@@ -118,24 +137,33 @@ public sealed class AudioEngine : IDisposable
         }
 
         GCHandle logHandle = log is null ? default : GCHandle.Alloc(log);
+        byte[]? sofaPath = string.IsNullOrEmpty(options.HrtfSofaPath) ? null : Encoding.UTF8.GetBytes(options.HrtfSofaPath + "\0");
         try
         {
-            var config = new VsaEngineConfig
+            nint engine;
+            fixed (byte* sofa = sofaPath)
             {
-                StructSize = (uint)sizeof(VsaEngineConfig),
-                AbiVersion = VsaNative.AbiVersion,
-                Log = log is null ? null : &OnNativeLog,
-                LogUserData = log is null ? 0 : GCHandle.ToIntPtr(logHandle),
-                RayTracer = (uint)options.RayTracer,
-                Flags = options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0,
-                SampleRate = checked((uint)options.SampleRate),
-                BlockFrames = checked((uint)options.BlockFrames),
-                MaxVoices = checked((uint)options.MaxVoices),
-                ResamplerQuality = (uint)options.ResamplerQuality,
-                StreamThresholdMs = checked((uint)options.StreamThresholdMs),
-            };
+                var config = new VsaEngineConfig
+                {
+                    StructSize = (uint)sizeof(VsaEngineConfig),
+                    AbiVersion = VsaNative.AbiVersion,
+                    Log = log is null ? null : &OnNativeLog,
+                    LogUserData = log is null ? 0 : GCHandle.ToIntPtr(logHandle),
+                    RayTracer = (uint)options.RayTracer,
+                    Flags = options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0,
+                    SampleRate = checked((uint)options.SampleRate),
+                    BlockFrames = checked((uint)options.BlockFrames),
+                    MaxVoices = checked((uint)options.MaxVoices),
+                    ResamplerQuality = (uint)options.ResamplerQuality,
+                    StreamThresholdMs = checked((uint)options.StreamThresholdMs),
+                    MaxRealVoices = checked((uint)options.MaxRealVoices),
+                    MaxBinauralVoices = checked((uint)options.MaxBinauralVoices),
+                    HrtfSofaPath = sofa,
+                };
 
-            NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out nint engine), "vsa_engine_create");
+                NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out engine), "vsa_engine_create");
+            }
+
             var engineHandle = new EngineHandle(engine, logHandle);
             logHandle = default; // now owned by engineHandle
 
@@ -217,7 +245,8 @@ public sealed class AudioEngine : IDisposable
     }
 
     /// <summary>Creates a stopped voice. The voice keeps the asset alive; the caller may dispose its asset.</summary>
-    public Voice CreateVoice(AudioAsset asset, AudioBus bus = AudioBus.Sound, float gain = 1f, float pitch = 1f, bool looping = false)
+    public Voice CreateVoice(
+        AudioAsset asset, AudioBus bus = AudioBus.Sound, float gain = 1f, float pitch = 1f, bool looping = false, VoicePlacement placement = default)
     {
         ArgumentNullException.ThrowIfNull(asset);
         using Lease lease = new(handle);
@@ -230,6 +259,11 @@ public sealed class AudioEngine : IDisposable
             Gain = gain,
             Pitch = pitch,
             Looping = looping ? 1u : 0u,
+            Spatial = (uint)placement.Mode,
+            PositionX = placement.X,
+            PositionY = placement.Y,
+            PositionZ = placement.Z,
+            MinDistance = placement.MinDistance,
         };
         NativeException.ThrowIfFailed(VsaNative.VoiceCreate(lease.Engine, in desc, out ulong voice), "vsa_voice_create");
         return new Voice(this, voice);
@@ -245,6 +279,32 @@ public sealed class AudioEngine : IDisposable
     {
         using Lease lease = new(handle);
         NativeException.ThrowIfFailed(VsaNative.EngineSetMasterGain(lease.Engine, gain), "vsa_engine_set_master_gain");
+    }
+
+    /// <summary>Listener pose for positional voices: position and unit forward/up vectors.</summary>
+    public void SetListener(float x, float y, float z, float forwardX, float forwardY, float forwardZ, float upX, float upY, float upZ)
+    {
+        using Lease lease = new(handle);
+        var listener = new VsaListener
+        {
+            StructSize = (uint)Unsafe.SizeOf<VsaListener>(),
+            PositionX = x,
+            PositionY = y,
+            PositionZ = z,
+            ForwardX = forwardX,
+            ForwardY = forwardY,
+            ForwardZ = forwardZ,
+            UpX = upX,
+            UpY = upY,
+            UpZ = upZ,
+        };
+        NativeException.ThrowIfFailed(VsaNative.ListenerSet(lease.Engine, in listener), "vsa_listener_set");
+    }
+
+    public void SetRenderMode(RenderMode mode)
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineSetRenderMode(lease.Engine, (uint)mode), "vsa_engine_set_render_mode");
     }
 
     // ---- output ----
@@ -273,8 +333,12 @@ public sealed class AudioEngine : IDisposable
         }
     }
 
-    /// <summary>Opens a device (null = the system default, followed when it changes).</summary>
-    public unsafe void OpenDevice(AudioDevice? device = null, int channels = 0)
+    /// <summary>
+    /// Opens a device (null = the system default, followed when it changes). With
+    /// <paramref name="spatial"/>, through Windows Spatial Audio (a 7.1.4 bed) when the device has
+    /// a spatial sound format enabled, otherwise directly; <see cref="EngineStats.Output"/> says which.
+    /// </summary>
+    public unsafe void OpenDevice(AudioDevice? device = null, int channels = 0, bool spatial = false)
     {
         using Lease lease = new(handle);
         VsaDeviceId id = default;
@@ -291,7 +355,7 @@ public sealed class AudioEngine : IDisposable
         var desc = new VsaOutputDesc
         {
             StructSize = (uint)sizeof(VsaOutputDesc),
-            Kind = (uint)OutputKind.Device,
+            Kind = (uint)(spatial ? OutputKind.Spatial : OutputKind.Device),
             DeviceId = device is null ? null : &id,
             Channels = checked((uint)channels),
         };
@@ -346,6 +410,8 @@ public sealed class AudioEngine : IDisposable
             (int)stats.ActiveVoices,
             (int)stats.AllocatedVoices,
             (int)stats.MaxVoices,
+            (int)stats.RealVoices,
+            (int)stats.VirtualVoices,
             stats.BlocksRendered,
             stats.Overloads,
             stats.StreamUnderruns,

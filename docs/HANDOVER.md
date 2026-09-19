@@ -48,6 +48,79 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Phase 2 (engine takeover): in progress on `phase2-takeover`
+
+Built and tested offline; **not yet run in the game**. Phase 1 is merged into `main`.
+
+### Native (ABI v3)
+
+- Positional voices (`vsa_voice_desc.spatial` world/listener, `vsa_voice_set_position`) render mono through Steam Audio's direct effect (1/r beyond a per-voice minimum distance, 3-band air absorption), then binaural (headphones) or panning (speakers). `vsa_listener_set`, `vsa_engine_set_render_mode`.
+- Effect pool (`max_real_voices`, 256) created off the audio thread; when full, the quietest positional voice loses its set. Binaural budget (`max_binaural_voices`, 64): the loudest voices get HRTF, the rest go to the world Ambisonic bus (Phase 3, below). 256 binaural voices cost ~48 % of the block (p50), with the budget ~37 %, panned ~25 %.
+- Virtualisation: voices estimated below -70 dB advance without rendering (real again above -64 dB). Streams are never virtual.
+- `vsa_voice_set_lowpass`: the game's EFX low-pass (underwater) as OpenAL Soft implements it, a 5 kHz high shelf.
+- **Steam Audio's HRTF only exists at 24, 44.1 and 48 kHz**, so the engine renders at 44.1 or 48 kHz; devices at other rates get a converted stream (miniaudio), and the offline output accepts only those two rates.
+
+### Managed takeover (`src/VintageStorySteamAudio/Takeover/`)
+
+- `AudioTakeover` (in `StartPre`): verify, open our device (matching the game's `audioDevice` setting), Harmony-patch the platform seam, carry the menu music over if it is still playing, dispose vanilla sources and close OpenAL. Hand-back in `Dispose`: release voices, unpatch, `Unload()` the samples we emptied so vanilla decodes them again, reopen OpenAL via the original `StartAudio()`.
+- `SteamAudioSound`: `ILoadedSound` with vanilla's contract (restart on Start, fade clamping and main-thread callbacks, SetVolume not cancelling fades, deferred start while loading). **`AudioMetaData.Loaded` must be set to 3 when a sound is created**: `PlaySoundAt` only starts sounds whose data reached 3.
+- `CreateAudioData` decodes natively and returns metadata with an empty `Pcm`; long Ogg files stream.
+- Category sliders become bus gains (polled every 250 ms), `masterSoundLevel` the master gain, `useHRTFaudio` the render mode; `CategoryTrimDb` in the config trims each category for rebalancing by ear.
+- The 250-sound cap is removed with a transpiler on `PlaySoundAtInternal` (reported by `.steamaudio stats`).
+- The mod now compiles against VintagestoryLib and the game's 0Harmony (not shipped). Everything touched is in `AudioPatchTargets` (35 entries, verified before patching).
+
+### Verified in the game (19 Sep 2026)
+
+Chris played a session on the AV receiver (48 kHz, 6 channels, speakers mode): takeover ACTIVE, 35/35, menu music carried over at 43.5 s, sounds all working, clean hand-back to vanilla at the menu. HRTF not tried (no headphones). The takeover now also refuses to run when another mod has Harmony patches on our targets or VintageStorySurroundSound/AcousticLab is enabled.
+
+### Surround (first Phase 3 item, done early)
+
+Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1) with Steam Audio's panning effect. Buses, master and the limiter are N-channel (limiter linked). Channels are routed by speaker using miniaudio's channel map for the device, so a 5.1 device with side instead of rear surrounds still gets the rear channels; the log's "output:" line shows the device order. Unpositioned sounds and binaural voices stay on the front pair; the LFE is unused. Tests: `test_channel_layout.cpp`, and the 5.1/7.1/quad direction cases in `test_spatial.cpp`.
+
+## Phase 3 (output formats): done on `phase2-takeover`
+
+**Verified in the game (19 Sep 2026)**: with speakers, the output ran through Windows Spatial Audio and `.steamaudio speakertest` was "perfect" on Chris's Atmos receiver, heights included. Headphone rendering (the ambisonic tier, SOFA) is covered by tests only; Chris has no headphones.
+
+### World Ambisonic bus (headphones, beyond the binaural budget)
+
+- Voices past the binaural budget are encoded into one **world-space order-3 Ambisonic bus** (16 channels) and decoded binaurally once per block with the listener's orientation (`SpatialRenderer::encode/decode`, tier `SpatialTier::Ambisonic`). Head rotation doesn't touch the encoding; each voice's coefficients ramp across the block when it moves.
+- Encoding is ours (`dsp/spherical_harmonics.hpp`), not Steam Audio's encode effect: that effect cost ~5 µs per voice per block, and **its first block after a reset scales channel c by c/frameSize** (a transition bug; the steady state is fine). Our coefficients match its steady state exactly (`core/test_spherical_harmonics.cpp`): orthonormal real SH, ACN, ambisonic axes x = -z, y = -x, z = y.
+- Order 3, not 2: order 2 lost 3-5 dB at 1 kHz for frontal sources and had deep comb notches. Even at order 3 the binaural decode is **4.7 dB below per-voice HRTF, averaged over the sphere** (0 dB to the sides, 5-7 dB elsewhere, worst at 3 kHz); `kAmbisonicMakeup` restores the diffuse-field level so a voice doesn't jump when it changes tier (a test holds it within 1 dB).
+- A source straight behind leans 4.5 dB left at 6-8 kHz through the bus. It's the same whichever way the listener faces, so it's in Steam Audio's order-3 HRTF, not our coordinates.
+- At the head (`spatial_blend` < 1) the directional channels fade out, leaving the omnidirectional W, so the source sounds centred.
+- Bus gains are rendered per frame at the block start, because ambisonic voices from every category share the one bus; its decode is added to the master front pair before master gain.
+- Tests (`test_spatial.cpp`, "headphone tiers"): left/right and turning, above/below with the head tilted, looking straight up, front vs back brightness, bus gain, centring and the diffuse level match, for both the binaural and ambisonic tiers.
+
+### 7.1.4 layout (12 channels)
+
+- The engine's 7.1.4 order is FL FR FC LFE BL BR SL SR TFL TFR TBL TBR (7.1 plus the heights, which is Windows' channel-mask order). Buses, master and the limiter go up to 12 channels; miniaudio devices that report 12 channels with height positions get it natively.
+- Positional voices are panned with our own 3D VBAP (`audio/vbap.*`), not Steam Audio's panning effect. It uses ITU/Dolby placements (FL/FR ±30°, SL/SR ±90°, BL/BR ±150°, heights at ±45°/±135° azimuth and 45° elevation). Virtual speakers keep it symmetric: the zenith spreads over the four heights, the nadir over the ear-level ring, and the centre of the back quad (BL BR TBL TBR are coplanar, since there's no back-centre speaker) over those four. Without that virtual speaker, the quad's two triangulations swapped and gains jumped by 0.65 behind the listener. Gains ramp across each block.
+- Tests: `core/test_vbap.cpp` (speaker directions, zenith and nadir spread, back symmetry, power, continuity around circles at seven elevations) and the 7.1.4 cases in `test_spatial.cpp`: front, overhead (100 % in the heights), above-front, below, behind, left and above-behind-right, turning, looking up and down, and a source gliding overhead without zipper noise.
+
+### Windows Spatial Audio output (ABI v4)
+
+- `VSA_OUTPUT_SPATIAL` (`backend/spatial_output.*`): `ISpatialAudioClient` on the device (miniaudio's id holds the WASAPI endpoint id), a static 7.1.4 bed (all 12 objects, mask 0x1ffe, `AudioCategory_GameEffects`), the offered object format (float32 mono, 44.1/48 kHz only), and `GetMaxFrameCount` frames per update. It runs on its own thread (MTA, MMCSS "Pro Audio"): wait on the event, Begin, render, copy each engine channel into its object's buffer, End.
+- The activation `PROPVARIANT` borrows our parameters and is never cleared (OpenAL Soft's heap-corruption bug). A 500 ms wait timeout or any failed update marks the output lost; the worker recreates the stream rather than calling `Reset` (0x88890100 on the receiver). A default-device change while following the default reopens the stream on the new device.
+- If spatial audio is unavailable (not Windows, no spatial sound format enabled, unsupported format), the engine opens the plain device instead, now and on every reopen; `stats.output_kind` says which is running. There is no periodic retry, so enabling Atmos mid-session takes effect at the next reopen.
+- **Verified on Chris's machine by `test_output.cpp`**: 'AV Receiver (NVIDIA High Definition Audio)', 48000 Hz, 12 channels, 480-frame updates (the plain device path gives 8 channels).
+- Managed: `SpatialAudio` config option (default on). The takeover opens the spatial output in speakers mode and the plain device with the game's HRTF option on, since our binaural render must not be spatialised again by Sonic or Atmos for headphones. It reopens when that option changes. `.steamaudio stats` shows "via Windows Spatial Audio (7.1.4)".
+- `.steamaudio speakertest` plays a noise burst from each 7.1.4 position in turn, named in chat, then straight overhead. Use it with the receiver's display to confirm the heights.
+- SceneLab writes `WAVE_FORMAT_EXTENSIBLE` with the speaker mask for more than 2 channels; `scenarios/surround-714.json` is a 7.1.4 listening scene.
+
+### SOFA HRTF
+
+- `vsa_engine_config.hrtf_sofa_path` (the config struct is now 72 bytes, with a `reserved` field that must be 0 at offset 60) and the `HrtfSofaFile` config option (absolute, or relative to ModConfig). If it can't be loaded, the engine logs a warning and uses the default HRTF. Tested with a missing file, a junk file, and a real one: MIT KEMAR (`third_party/sofa`, pinned in `deps.json`, test-only). It loads at 48 kHz (Steam Audio resamples the 44.1 kHz data) and gives ±10 dB between the ears for sources at the sides.
+
+### Left open from Phase 3
+
+- Dynamic spatial objects (the loudest sources as Atmos objects rather than panned into the bed): only if the bed turns out not to be enough.
+
+### Still to do for Phase 2
+
+- In-game verification: a full session with no missing, stuck or misbehaving sounds; category rebalance by ear; join/leave cycles (menu audio must work after leaving).
+- Positional stereo assets are downmixed to mono (the plan's two-emitter wide source is deferred).
+- Detecting other mods' Harmony patches on our targets (VintageStorySurroundSound) and refusing the takeover.
+
 ## Phase 1 as built
 
 ### ABI (v2, `native/include/vsaudio.h`)
@@ -83,7 +156,7 @@ Not yet verified:
 - **Streaming**: Ogg assets longer than 20 s (configurable) stream. Looping is done by the worker, so turning looping off late can play up to ~1 s past the loop point before ending. WAV and raw PCM are always decoded.
 - **Voices start on block boundaries** (commands apply at block starts). Tests that render in pieces must render whole blocks between voice starts to stay sample-aligned.
 - **Offline rendering refills streams synchronously** before each block, so it is deterministic; the worker also services them concurrently under the same lock.
-- **Device output**: the engine runs at the device's native rate; channels are native layout clamped to 2/4/6/8, with front L/R carrying the (non-spatial) Phase 1 mix. Default-device following relies on miniaudio's rerouting; a lost device is reopened by the worker every second, falling back to the default device.
+- **Device output**: the engine runs at the device's native rate; channels are native layout clamped to 2/4/6/8 (12 since Phase 3), with front L/R carrying the (non-spatial) Phase 1 mix. Default-device following relies on miniaudio's rerouting; a lost device is reopened by the worker every second, falling back to the default device.
 - **Performance leftovers**: the stretched-kernel path (ratio > 1, i.e. most pitched-up sounds) still computes its coefficients with scalar table lookups; it costs ~50 % more per voice than the ratio ≤ 1 path. Worth another look if Phase 2's Steam Audio effects make the budget tight.
 
 ### Managed side and tools
