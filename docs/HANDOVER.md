@@ -156,6 +156,7 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
   - a strike behind a wall has the same reflection level on every repeat (-19 dB on strikes 2–6; the first has none, its spot not existing yet);
   - a 6 dB level change reaches the tail in steps of at most 0.5 dB per 50 ms;
   - early and tail can each be turned off.
+- **Materials pulled apart** (wood and stone sounded alike after the first retune): stone 0.07 / 0.10 / 0.13 absorbed, brick 0.08 / 0.11 / 0.14, wood 0.20 / 0.30 / 0.33. A 7×4×7 room decays in about 0.4 s built of wood and 1.4 s of stone; a large cave in about 5 s.
 - **Worth knowing:** in a small room about 97% of the reflected energy is early reflections (the first 0.1 s). `.steamaudio reverb early 0` shows how much is them.
 
 ### To check in game (Chris)
