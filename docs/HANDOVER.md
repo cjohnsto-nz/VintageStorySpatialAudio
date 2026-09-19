@@ -48,6 +48,50 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Phase 4 (world geometry): in progress on `phase4-world-geometry`
+
+Phases 2 and 3 are merged into `main` (not pushed; Linux and macOS CI deferred to the end, at Chris's request). The design change from the plan is recorded in ADR 0007.
+
+### Native (ABI v5)
+
+- `vsa_scene_*`: a material table (`vsa_acoustic_material`: kind, Steam Audio surface bands, dB/m attenuation for Phase 5, name). Chunks arrive as `vsa_chunk_desc`: 32³ `uint16` material ids plus partial blocks' boxes, at LOD 0 or 1. Also origin, stats, mesh read-back with a version, a chunk list, OBJ export, and `wait_idle` for tests.
+- `world/mesher.*` is the boundary-only greedy mesher. A surface is emitted where a denser kind meets a more open one (air < liquid < porous < solid). Partial blocks mesh as their boxes; LOD 1 uses 2³ majority super-voxels; faces toward unknown chunks are left out. It takes about 1 ms per terrain chunk in Release (7.6 ms for pathological noise).
+- `world/world_scene.*` meshes on its own thread and instances each chunk (a sub-scene with one static mesh) in the top-level scene. It re-meshes neighbours when a chunk arrives or leaves; after an edit, only neighbours whose shared layer changed. Instances sit at chunk minus origin. Remove + Commit happens before Release. The simulator (Phase 5) must hold `scene_lock()` while it runs.
+- Verified with real Steam Audio occlusion rays across a chunk's wall, including after moving the origin (`core/test_world_scene.cpp`).
+
+### Managed
+
+- `World/MaterialTable`: `assets/vssteamaudio/config/acousticmaterials.json` holds materials, a block-material map and code wildcards. A `ModConfig/vssteamaudio-materials.json` override is re-read by `.steamaudio scene reload`.
+- `World/BlockClassifier`:
+  - Plants, fire and blocks without collision boxes are air.
+  - Leaves and liquids fill their cell (leaves have no collision boxes).
+  - Solids are full cubes or their boxes, clamped to the cell. Boxes on blocks with a block entity (doors) are read per snapshot, on the main thread.
+- `World/ChunkReader`: `Unpack_ReadOnly`, then a bulk read lock, `GetBlockIdUnsafe`, and the fluid layer where the solid block isn't in the scene.
+- `World/ChunkStreamer` keeps full detail within 2 chunks and a coarse ring out to 4, ±2 chunks vertically, nearest first. Dirty chunks are debounced for 250 ms and fingerprinted, so unchanged re-reads aren't re-sent. There is no client unload event, so sent chunks are polled every second.
+- `World/WorldAcoustics` starts at `LevelFinalize` and spends 2 ms per 50 ms tick. It hooks `ChunkDirty` (thread-safe queue) and `BlockChanged`; around block entities it also marks nearby chunks, for multi-block gates.
+- The origin is chunk-aligned and moves when the player strays 1024 blocks. `AudioSession.SetOrigin` re-sends the listener and every world sound relative to it.
+- Config: `BuildWorldScene`, `SceneFullRadiusChunks`, `SceneLodRadiusChunks`, `SceneVerticalRadiusChunks`, `SceneBudgetMs`.
+
+### Visual debugging
+
+- **Ctrl+F7** (rebindable) cycles the overlay: off → wireframe → wireframe + chunk bounds → translucent faces + wireframe.
+- The wireframe is the mesh read back from the engine (exactly what Steam Audio has), coloured by material, and uses the game's own wireframe shader. Chunk bounds are green for full detail, blue for coarse and grey for empty.
+- A HUD panel shows scene stats (chunks, triangles, memory, meshing and commit times), streaming state, the origin, and the acoustic material of the block under the crosshair.
+- `.steamaudio scene` takes `status | wire | faces | bounds | off | radius N | legend | export | reload`. `export` writes an OBJ + MTL to the Logs folder.
+- **Ray probe** (whenever the overlay is on): a ray from the camera along the view, tested against the scene's meshes as submitted (`vsa_scene_raycast`, native, Möller–Trumbore per chunk). The hit triangle and the block that produced it are highlighted in yellow. The HUD gives distance, material, whether it came from a whole cell's face or a partial block's box, the chunk and triangle, and the game block at that cell (code, class, block material, block entity, fluid, and a multi-block filler's control block).
+- The probe's first catch: a door's upper half is a `BlockMultiblock` filler, whose static collision box is a full cube, so it had become a solid wooden block. Fillers (`IMultiblockOffset`) are now dynamic: their real boxes come from the door, and their material from its control block.
+
+### To check in game (Chris)
+
+- Press Ctrl+F7 in a varied area (cave, house, water, trees). The wireframe should hug the terrain and buildings; materials should look right (look at blocks with the HUD open); doors should change when opened and closed.
+- Watch the HUD's tick time and meshing times while flying around. Note triangle counts and memory for the budget (an exit criterion).
+- Edit latency (edit to scene within 250 ms, an exit criterion): place and break blocks with the wireframe on.
+
+### Still to do for Phase 4
+
+- Measure triangle and memory budgets on real worlds, and set presets from them.
+- Consider moving chunk reading off the main thread if the 2 ms budget is too slow to fill the scene.
+
 ## Phase 2 (engine takeover): in progress on `phase2-takeover`
 
 Built and tested offline; **not yet run in the game**. Phase 1 is merged into `main`.

@@ -50,7 +50,7 @@
 
   <!--
     Assembles the mod folder layout under bin/<Configuration>/mod/:
-      modinfo.json, VintageStorySteamAudio.dll, native/<rid>/{vsaudio, phonon}
+      modinfo.json, VintageStorySteamAudio.dll, assets/ (acoustic materials), native/<rid>/{vsaudio, phonon}
     Natives come from artifacts/native (produced by the CMake install step). Missing
     natives are a warning locally (managed-only iteration) and an error when
     -p:RequireNatives=true (packaging / CI).
@@ -61,10 +61,12 @@
     </PropertyGroup>
     <ItemGroup>
       <VsaNativeFiles Include="$(NativeArtifactsDir)**/*" />
+      <VsaAssetFiles Include="$(MSBuildProjectDirectory)/assets/**/*" />
     </ItemGroup>
     <RemoveDir Directories="$(ModFolder)" />
     <Copy SourceFiles="$(TargetPath);$(OutDir)modinfo.json" DestinationFolder="$(ModFolder)" />
     <Copy SourceFiles="@(VsaNativeFiles)" DestinationFiles="@(VsaNativeFiles->'$(ModFolder)native/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="@(VsaAssetFiles)" DestinationFiles="@(VsaAssetFiles->'$(ModFolder)assets/%(RecursiveDir)%(Filename)%(Extension)')" />
     <Warning Condition="'@(VsaNativeFiles)' == '' and '$(RequireNatives)' != 'true'"
              Text="No native binaries in $(NativeArtifactsDir). The mod folder will not load in-game until you build the native engine (see docs/BUILDING.md)." />
     <Error Condition="'@(VsaNativeFiles)' == '' and '$(RequireNatives)' == 'true'"

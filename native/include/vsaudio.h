@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 4u
+#define VSA_ABI_VERSION 5u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -554,6 +554,188 @@ typedef struct vsa_event {
  */
 VSA_API vsa_result VSA_CALL vsa_engine_poll_events(vsa_engine* engine, vsa_event* out, uint32_t capacity,
                                                    uint32_t* out_count);
+
+/* =============================================================================================
+ * World scene (Phase 4): the voxel world as Steam Audio geometry.
+ *
+ * The world arrives as chunk snapshots (32³ cells of acoustic material ids). A scene thread meshes
+ * each one (surfaces where a denser material kind meets a more open one, coplanar faces merged)
+ * into its own Steam Audio sub-scene, instanced in the top-level scene. Positions the engine gets
+ * (listener, voices) are relative to the scene origin, a block position near the listener; the
+ * caller moves it with vsa_scene_set_origin when the listener strays far, to keep floats precise.
+ * ============================================================================================= */
+
+typedef enum vsa_material_kind {
+    /** Never meshed. Material id 0 is always air. */
+    VSA_MATERIAL_AIR = 0,
+    /** Water, lava: meshed against air. */
+    VSA_MATERIAL_LIQUID = 1,
+    /** Leaves, plants, cloth: meshed against air and liquids. */
+    VSA_MATERIAL_POROUS = 2,
+    /** Stone, wood, metal, …: meshed against everything more open. */
+    VSA_MATERIAL_SOLID = 3
+} vsa_material_kind;
+
+typedef struct vsa_acoustic_material {
+    uint32_t struct_size;
+    /** A vsa_material_kind value. */
+    uint32_t kind;
+    /** Steam Audio surface properties, 0..1, bands low/mid/high. */
+    float absorption[3];
+    float scattering;
+    float transmission[3];
+    /** Attenuation inside the material, dB per metre per band (the voxel transmission). */
+    float attenuation_db_per_metre[3];
+    /** UTF-8 name for debugging output (copied), or NULL. */
+    const char* name;
+} vsa_acoustic_material;
+
+/** Sets the material table: material id = index; id 0 must be air. Re-meshes every chunk. */
+VSA_API vsa_result VSA_CALL vsa_scene_set_materials(vsa_engine* engine, const vsa_acoustic_material* materials,
+                                                    uint32_t count);
+
+/** Cells per chunk edge. */
+#define VSA_CHUNK_SIZE 32u
+#define VSA_CHUNK_CELLS (VSA_CHUNK_SIZE * VSA_CHUNK_SIZE * VSA_CHUNK_SIZE)
+
+/** An axis-aligned box inside a block, in block units (0..1). */
+typedef struct vsa_box {
+    float min[3];
+    float max[3];
+} vsa_box;
+
+/**
+ * A partial block (slab, stairs, fence, door, …): meshed as its boxes; its cell counts as open
+ * for its neighbours. `cell` indexes the chunk like vsa_chunk_desc.materials.
+ */
+typedef struct vsa_partial_block {
+    uint32_t cell;
+    uint32_t material;
+    /** Its boxes: vsa_chunk_desc.boxes[first_box .. first_box + box_count). */
+    uint32_t first_box;
+    uint32_t box_count;
+} vsa_partial_block;
+
+typedef struct vsa_chunk_desc {
+    uint32_t struct_size;
+    /** Chunk coordinates (block coordinates / 32). */
+    int32_t x;
+    int32_t y;
+    int32_t z;
+    /** 0 = full detail; 1 = 2³-block super-voxels (majority material), for the far ring. */
+    uint32_t lod;
+    /** Must be 0. */
+    uint32_t reserved;
+    /** VSA_CHUNK_CELLS material ids, index (y * 32 + z) * 32 + x; partial blocks' cells hold 0. */
+    const uint16_t* materials;
+    const vsa_partial_block* partials;
+    uint32_t partial_count;
+    uint32_t box_count;
+    const vsa_box* boxes;
+} vsa_chunk_desc;
+
+/**
+ * Adds or replaces a chunk (copied; meshed asynchronously). Fails with INVALID_ARGUMENT for
+ * material ids outside the material table, cells out of range or boxes out of range.
+ */
+VSA_API vsa_result VSA_CALL vsa_scene_set_chunk(vsa_engine* engine, const vsa_chunk_desc* chunk);
+/** Removes a chunk (no-op if unknown). */
+VSA_API vsa_result VSA_CALL vsa_scene_remove_chunk(vsa_engine* engine, int32_t x, int32_t y, int32_t z);
+/** Removes every chunk. */
+VSA_API vsa_result VSA_CALL vsa_scene_clear(vsa_engine* engine);
+/** Block position of the scene origin; engine positions are relative to it. Initially 0, 0, 0. */
+VSA_API vsa_result VSA_CALL vsa_scene_set_origin(vsa_engine* engine, int32_t x, int32_t y, int32_t z);
+/**
+ * Waits up to `timeout_ms` for pending chunks to be meshed and committed. VSA_ERROR_INVALID_STATE
+ * on timeout. For tests and tools.
+ */
+VSA_API vsa_result VSA_CALL vsa_scene_wait_idle(vsa_engine* engine, uint32_t timeout_ms);
+
+typedef struct vsa_scene_stats {
+    uint32_t struct_size;
+    /** Chunks held, those with geometry, and those waiting to be meshed or removed. */
+    uint32_t chunks;
+    uint32_t meshed_chunks;
+    uint32_t pending_chunks;
+    uint64_t triangles;
+    uint64_t vertices;
+    /** Voxel and mesh memory (not counting Steam Audio's own copies). */
+    uint64_t memory_bytes;
+    uint64_t chunks_built;
+    double last_build_ms;
+    double max_build_ms;
+    double last_commit_ms;
+    int32_t origin[3];
+    uint32_t material_count;
+} vsa_scene_stats;
+
+VSA_API vsa_result VSA_CALL vsa_scene_get_stats(vsa_engine* engine, vsa_scene_stats* out);
+
+/**
+ * A chunk's mesh exactly as submitted to Steam Audio, for debug views. The caller sets the
+ * capacities and buffers (NULL buffers with 0 capacity query the counts). Coordinates are
+ * chunk-local block units (add chunk position * 32 for world blocks).
+ */
+typedef struct vsa_chunk_mesh {
+    uint32_t struct_size;
+    /** Out: non-zero if the chunk has a mesh (known, meshed and not all air). */
+    uint32_t found;
+    /** Out: its level of detail. */
+    uint32_t lod;
+    /** Out: sizes. The buffers are filled only when both capacities suffice. */
+    uint32_t vertex_count;
+    uint32_t triangle_count;
+    /** In: capacities (vertices, triangles) and buffers: 3 floats per vertex, 3 indices and one
+     * material id per triangle. */
+    uint32_t vertex_capacity;
+    uint32_t triangle_capacity;
+    /** Out: changes whenever the chunk is meshed again (for caching debug views). */
+    uint32_t version;
+    float* vertices;
+    int32_t* triangles;
+    uint16_t* materials;
+} vsa_chunk_mesh;
+
+VSA_API vsa_result VSA_CALL vsa_scene_get_chunk_mesh(vsa_engine* engine, int32_t x, int32_t y, int32_t z,
+                                                     vsa_chunk_mesh* mesh);
+
+/**
+ * Lists the chunks the scene holds: fills up to `capacity` coordinates (3 int32 each) and sets
+ * *out_count to the total.
+ */
+VSA_API vsa_result VSA_CALL vsa_scene_list_chunks(vsa_engine* engine, int32_t* out, uint32_t capacity,
+                                                  uint32_t* out_count);
+
+/** A ray's first hit on the scene's meshes (debugging: exactly the geometry Steam Audio has). */
+typedef struct vsa_ray_hit {
+    uint32_t struct_size;
+    /** Out: non-zero if something was hit within the distance. */
+    uint32_t hit;
+    float distance;
+    /** Scene coordinates (relative to the origin). */
+    float point[3];
+    /** The surface's front: its open side. */
+    float normal[3];
+    int32_t chunk[3];
+    /** Index into the chunk's mesh (vsa_scene_get_chunk_mesh). */
+    uint32_t triangle;
+    uint32_t material;
+    /** Non-zero: a partial block's box; zero: the face of a whole cell. */
+    uint32_t from_partial;
+    /** World block position that produced the surface (the cell just behind it). */
+    int32_t cell[3];
+    uint32_t lod;
+} vsa_ray_hit;
+
+/**
+ * Casts a ray (scene coordinates; the direction need not be normalised) against the meshed
+ * scene and reports the first hit within `max_distance`, from either side of a triangle.
+ */
+VSA_API vsa_result VSA_CALL vsa_scene_raycast(vsa_engine* engine, const float origin[3], const float direction[3],
+                                              float max_distance, vsa_ray_hit* hit);
+
+/** Writes the scene as an OBJ file (plus .mtl) in world block coordinates. UTF-8 path. */
+VSA_API vsa_result VSA_CALL vsa_scene_save_obj(vsa_engine* engine, const char* path);
 
 /**
  * Message for the most recent failure on the calling thread, or "" if none.

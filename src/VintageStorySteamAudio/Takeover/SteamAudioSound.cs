@@ -215,7 +215,21 @@ public sealed class SteamAudioSound : ILoadedSound
             if (voice is not null)
             {
                 Voice v = voice;
-                VoicePlacement placement = Placement(Params);
+                VoicePlacement placement = Placement(Params, session.Origin);
+                session.Guard(() => v.SetPosition(placement.Mode, placement.X, placement.Y, placement.Z));
+            }
+        }
+    }
+
+    /// <summary>Re-sends a world sound's position (after the session's origin moved).</summary>
+    internal void Reposition()
+    {
+        lock (gate)
+        {
+            if (voice is not null && Params.Position is not null && !Params.RelativePosition)
+            {
+                Voice v = voice;
+                VoicePlacement placement = Placement(Params, session.Origin);
                 session.Guard(() => v.SetPosition(placement.Mode, placement.X, placement.Y, placement.Z));
             }
         }
@@ -344,7 +358,7 @@ public sealed class SteamAudioSound : ILoadedSound
             try
             {
                 voice = session.Engine.CreateVoice(
-                    asset, SoundCategories.BusFor(Params.SoundType), Params.Volume, EffectivePitch, Params.ShouldLoop, Placement(Params));
+                    asset, SoundCategories.BusFor(Params.SoundType), Params.Volume, EffectivePitch, Params.ShouldLoop, Placement(Params, session.Origin));
             }
             catch (Exception ex) when (ex is NativeException or ObjectDisposedException)
             {
@@ -413,9 +427,13 @@ public sealed class SteamAudioSound : ILoadedSound
         callback?.Invoke(this);
     }
 
-    /// <summary>How the game's sound parameters map to engine positioning.</summary>
-    public static VoicePlacement Placement(SoundParams soundParams)
+    /// <summary>How the game's sound parameters map to engine positioning (origin at 0, 0, 0).</summary>
+    public static VoicePlacement Placement(SoundParams soundParams) => Placement(soundParams, SceneOrigin.Zero);
+
+    /// <summary>How the game's sound parameters map to engine positioning; world positions relative to <paramref name="origin"/>.</summary>
+    public static VoicePlacement Placement(SoundParams soundParams, SceneOrigin origin)
     {
+        ArgumentNullException.ThrowIfNull(origin);
         ArgumentNullException.ThrowIfNull(soundParams);
         Vec3f? position = soundParams.Position;
         if (position is null)
@@ -436,7 +454,12 @@ public sealed class SteamAudioSound : ILoadedSound
                 : new VoicePlacement(SpatialMode.Listener, position.X, position.Y, position.Z, minDistance);
         }
 
-        return new VoicePlacement(SpatialMode.World, position.X, position.Y, position.Z, minDistance);
+        return new VoicePlacement(
+            SpatialMode.World,
+            (float)((double)position.X - origin.X),
+            (float)((double)position.Y - origin.Y),
+            (float)((double)position.Z - origin.Z),
+            minDistance);
     }
 
     private void Transport(VoiceState pending, Action<Voice> command)

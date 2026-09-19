@@ -2,10 +2,12 @@ using System.Globalization;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using VintageStorySteamAudio.Config;
+using VintageStorySteamAudio.Debugging;
 using VintageStorySteamAudio.Diagnostics;
 using VintageStorySteamAudio.Native;
 using VintageStorySteamAudio.Platform;
 using VintageStorySteamAudio.Takeover;
+using VintageStorySteamAudio.World;
 
 namespace VintageStorySteamAudio;
 
@@ -22,6 +24,8 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
     private AudioEngine? engine;
     private AudioTakeover? takeover;
     private TestPlayback? playback;
+    private WorldAcoustics? world;
+    private SceneDebugTools? sceneTools;
     private SpeakerTest? speakerTest;
     private long tickListener = -1;
     private ICoreClientAPI? capi;
@@ -70,6 +74,10 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             SteamAudioConfig config = LoadConfig(api);
             playback = new TestPlayback(engine, Mod.Logger, config.TestOutputDevice);
             tickListener = api.Event.RegisterGameTickListener(_ => TickPlayback(), 100);
+            if (config.BuildWorldScene)
+            {
+                StartWorldScene(api, config);
+            }
         }
 
         CommandArgumentParsers parsers = api.ChatCommands.Parsers;
@@ -104,6 +112,13 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .WithDescription("Noise from each 7.1.4 speaker position in turn, then overhead; '.steamaudio speakertest stop' ends it")
                 .WithArgs(parsers.OptionalWord("stop"))
                 .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
+            .EndSubCommand()
+            .BeginSubCommand("scene")
+                .WithDescription("The acoustic scene: status, or wire|faces|bounds|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
+                .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
+                .HandleWith(args => WithEngine(() => sceneTools is null
+                    ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + ")."
+                    : sceneTools.Command(args[0] as string, args[1] as string)))
             .EndSubCommand();
     }
 
@@ -117,6 +132,10 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
 
         speakerTest?.Dispose();
         speakerTest = null;
+        sceneTools?.Dispose();
+        sceneTools = null;
+        world?.Dispose();
+        world = null;
         playback?.Dispose();
         playback = null;
         // World exit: hand audio back to vanilla before the engine goes (only one may exist per process).
@@ -125,6 +144,43 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         engine?.Dispose();
         engine = null;
         base.Dispose();
+    }
+
+    private void StartWorldScene(ICoreClientAPI api, SteamAudioConfig config)
+    {
+        AudioEngine audio = engine!;
+        world = new WorldAcoustics(
+            api,
+            audio,
+            Mod.Logger,
+            (x, y, z) =>
+            {
+                // With the takeover, the session re-sends the listener and sounds relative to it.
+                if (takeover is not null)
+                {
+                    takeover.Session.SetOrigin(x, y, z);
+                }
+                else
+                {
+                    audio.SetSceneOrigin(x, y, z);
+                }
+            },
+            config.SceneFullRadiusChunks,
+            config.SceneLodRadiusChunks,
+            config.SceneVerticalRadiusChunks,
+            config.SceneBudgetMs);
+        sceneTools = new SceneDebugTools(api, audio, world);
+        api.Event.LevelFinalize += () =>
+        {
+            try
+            {
+                world?.Start();
+            }
+            catch (NativeException ex)
+            {
+                Mod.Logger.Error("Steam Audio: the world scene could not start: {0}", ex.Message);
+            }
+        };
     }
 
     private StatusReport TakeOver(SteamAudioConfig config, ICoreClientAPI api, StatusReport report)

@@ -242,6 +242,34 @@ public sealed class SteamAudioSoundTests
         Assert.True(front > rear * 4, $"front {front}, rear {rear}");
     }
 
+    [Fact]
+    public void Positions_are_sent_relative_to_the_origin_and_follow_it_when_it_moves()
+    {
+        using var rig = new Rig();
+        rig.Session.Engine.OpenOffline(Rate, 6);
+        rig.Session.Engine.SetRenderMode(RenderMode.Speakers);
+        rig.Session.SetOrigin(512000, 64, 512000);
+        rig.Session.SetListener(512010, 70, 512010, 0, 0, -1);  // facing -z
+
+        // A sound 3 m to the listener's left, at Vintage Story's usual far-from-zero coordinates.
+        SteamAudioSound sound = rig.Session.CreateSound(
+            new SoundParams { Location = new AssetLocation("game:sounds/tone.ogg"), ShouldLoop = true, Position = new Vec3f(512007, 70, 512010) },
+            () => rig.Asset,
+            1);
+        sound.Start();
+        rig.Render6(0.1);
+        float[] left = rig.Render6(0.2);
+        Assert.True(Power(left, 6, 0) > Power(left, 6, 1) * 10, "the sound is on the left");
+
+        // Moving the origin re-sends the listener and the sound: still on the left.
+        rig.Session.SetOrigin(511000, 0, 513000);
+        rig.Render6(0.1);
+        float[] after = rig.Render6(0.2);
+        Assert.True(Power(after, 6, 0) > Power(after, 6, 1) * 10, "still on the left after the origin moved");
+        Assert.Equal(new SceneOrigin(511000, 0, 513000), rig.Session.Origin);
+        Assert.Equal((511000, 0, 513000), rig.Session.Engine.GetSceneStats().Origin);
+    }
+
     private static double Power(float[] interleaved, int channels, int channel)
     {
         double sum = 0;

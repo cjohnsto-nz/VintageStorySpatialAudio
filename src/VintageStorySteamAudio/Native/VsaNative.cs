@@ -312,12 +312,132 @@ internal struct VsaSelfTestReport
     public double ElapsedMs;
 }
 
+/// <summary>How open a material is to sound: surfaces are meshed where a denser kind meets a more open one.</summary>
+public enum MaterialKind : uint
+{
+    Air = 0,
+    Liquid = 1,
+    Porous = 2,
+    Solid = 3,
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaAcousticMaterial
+{
+    public uint StructSize;
+    public uint Kind;
+    public fixed float Absorption[3];
+    public float Scattering;
+    public fixed float Transmission[3];
+    public fixed float AttenuationDbPerMetre[3];
+    public byte* Name;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct VsaBox
+{
+    public float MinX;
+    public float MinY;
+    public float MinZ;
+    public float MaxX;
+    public float MaxY;
+    public float MaxZ;
+
+    public VsaBox(float minX, float minY, float minZ, float maxX, float maxY, float maxZ)
+    {
+        MinX = minX;
+        MinY = minY;
+        MinZ = minZ;
+        MaxX = maxX;
+        MaxY = maxY;
+        MaxZ = maxZ;
+    }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct VsaPartialBlock
+{
+    public uint Cell;
+    public uint Material;
+    public uint FirstBox;
+    public uint BoxCount;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaChunkDesc
+{
+    public uint StructSize;
+    public int X;
+    public int Y;
+    public int Z;
+    public uint Lod;
+    public uint Reserved;
+    public ushort* Materials;
+    public VsaPartialBlock* Partials;
+    public uint PartialCount;
+    public uint BoxCount;
+    public VsaBox* Boxes;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaSceneStats
+{
+    public uint StructSize;
+    public uint Chunks;
+    public uint MeshedChunks;
+    public uint PendingChunks;
+    public ulong Triangles;
+    public ulong Vertices;
+    public ulong MemoryBytes;
+    public ulong ChunksBuilt;
+    public double LastBuildMs;
+    public double MaxBuildMs;
+    public double LastCommitMs;
+    public fixed int Origin[3];
+    public uint MaterialCount;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaChunkMesh
+{
+    public uint StructSize;
+    public uint Found;
+    public uint Lod;
+    public uint VertexCount;
+    public uint TriangleCount;
+    public uint VertexCapacity;
+    public uint TriangleCapacity;
+    public uint Version;
+    public float* Vertices;
+    public int* Triangles;
+    public ushort* Materials;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaRayHit
+{
+    public uint StructSize;
+    public uint Hit;
+    public float Distance;
+    public fixed float Point[3];
+    public fixed float Normal[3];
+    public fixed int Chunk[3];
+    public uint Triangle;
+    public uint Material;
+    public uint FromPartial;
+    public fixed int Cell[3];
+    public uint Lod;
+}
+
 internal static unsafe partial class VsaNative
 {
+    public const int ChunkSize = 32;
+    public const int ChunkCells = ChunkSize * ChunkSize * ChunkSize;
+
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 4;
+    public const uint AbiVersion = 5;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint FadeStopWhenDone = 1u << 0;
@@ -443,6 +563,50 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_engine_poll_events")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult EnginePollEvents(nint engine, VsaEvent* events, uint capacity, out uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_set_materials")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneSetMaterials(nint engine, VsaAcousticMaterial* materials, uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_set_chunk")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneSetChunk(nint engine, in VsaChunkDesc chunk);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_remove_chunk")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneRemoveChunk(nint engine, int x, int y, int z);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_clear")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneClear(nint engine);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_set_origin")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneSetOrigin(nint engine, int x, int y, int z);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_wait_idle")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneWaitIdle(nint engine, uint timeoutMs);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_get_stats")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneGetStats(nint engine, ref VsaSceneStats stats);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_get_chunk_mesh")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneGetChunkMesh(nint engine, int x, int y, int z, ref VsaChunkMesh mesh);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_list_chunks")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneListChunks(nint engine, int* keys, uint capacity, out uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_raycast")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneRaycast(nint engine, float* origin, float* direction, float maxDistance, ref VsaRayHit hit);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_save_obj")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneSaveObj(nint engine, byte* path);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_get_last_error")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

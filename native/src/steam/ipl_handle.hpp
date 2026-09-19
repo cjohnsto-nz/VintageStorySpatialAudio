@@ -56,6 +56,7 @@ using Hrtf = IplHandle<IPLHRTF, iplHRTFRelease>;
 using DirectEffect = IplHandle<IPLDirectEffect, iplDirectEffectRelease>;
 using BinauralEffect = IplHandle<IPLBinauralEffect, iplBinauralEffectRelease>;
 using PanningEffect = IplHandle<IPLPanningEffect, iplPanningEffectRelease>;
+using InstancedMesh = IplHandle<IPLInstancedMesh, iplInstancedMeshRelease>;
 using AmbisonicsEncodeEffect = IplHandle<IPLAmbisonicsEncodeEffect, iplAmbisonicsEncodeEffectRelease>;
 using AmbisonicsDecodeEffect = IplHandle<IPLAmbisonicsDecodeEffect, iplAmbisonicsDecodeEffectRelease>;
 
