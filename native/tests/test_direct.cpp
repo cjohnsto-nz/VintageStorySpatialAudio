@@ -5,6 +5,8 @@
 #include "engine_fixture.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <cmath>
 #include <vector>
 
@@ -264,4 +266,122 @@ TEST_CASE("direct: a sound inside a lone block is not muffled by it; head-locked
         CHECK(open.db[b] - inside.db[b] < 4.0);
         CHECK(std::abs(head_open.db[b] - head_walled.db[b]) < 0.1);
     }
+}
+
+TEST_CASE("direct: the in-game configuration (Embree, far-from-zero coordinates, device thread) sees walls") {
+    for (const vsa_ray_tracer tracer : {VSA_RAY_TRACER_STEAM, VSA_RAY_TRACER_AUTO}) {
+        for (const bool device : {false, true}) {
+            CAPTURE(static_cast<int>(tracer));
+            CAPTURE(device);
+            OfflineEngine e(make_config(tracer));
+            set_materials(e);
+            std::vector<uint16_t> cells(VSA_CHUNK_CELLS, Air);
+            for (int y = 0; y < 32; ++y) {
+                for (int z = 0; z < 32; ++z) {
+                    cells[cell(10, y, z)] = Stone;
+                }
+            }
+            REQUIRE(vsa_scene_set_origin(e.engine, 512000, 64, 512000) == VSA_OK);
+            vsa_chunk_desc d{};
+            d.struct_size = sizeof d;
+            d.x = 16000;
+            d.y = 2;
+            d.z = 16000;
+            d.materials = cells.data();
+            REQUIRE(vsa_scene_set_chunk(e.engine, &d) == VSA_OK);
+            REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+            e.listener(4.0f, 16.5f, 16.5f, 1.0f, 0.0f, 0.0f);
+            const AssetPtr asset = band_tones(e);
+            const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 20.0f, 16.5f, 16.5f, 1.0f);
+            REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+            if (device) {
+                vsa_output_desc out{};
+                out.struct_size = sizeof out;
+                out.kind = VSA_OUTPUT_DEVICE;
+                if (vsa_output_open(e.engine, &out) != VSA_OK) {
+                    continue;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            } else {
+                e.render(9600);
+            }
+            vsa_source_debug s{};
+            s.struct_size = sizeof s;
+            uint32_t n = 0;
+            REQUIRE(vsa_engine_get_sources(e.engine, &s, 1, &n) == VSA_OK);
+            REQUIRE(n == 1);
+            CHECK(static_cast<double>(s.occlusion) < 0.05);
+            CHECK(s.crossings == 1);
+        }
+    }
+}
+
+TEST_CASE("direct: the simulation listens from the eyes, not the rendering offset, and never from inside rock") {
+    const auto simulate = [](float listener_x, float offset_x, float forward_x) {
+        OfflineEngine e;
+        set_materials(e);
+        std::vector<uint16_t> cells(VSA_CHUNK_CELLS, Air);
+        for (int y = 0; y < 32; ++y) {
+            for (int z = 0; z < 32; ++z) {
+                cells[cell(9, y, z)] = Stone;  // a wall just behind the listener (x 9..10)
+            }
+        }
+        vsa_chunk_desc d{};
+        d.struct_size = sizeof d;
+        d.materials = cells.data();
+        REQUIRE(vsa_scene_set_chunk(e.engine, &d) == VSA_OK);
+        REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+        e.listener(listener_x, 16.5f, 16.5f, forward_x, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, offset_x, 0.0f, 0.0f);
+        const AssetPtr asset = band_tones(e);
+        const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 20.0f, 16.5f, 16.5f, 1.0f);
+        REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+        e.render(9600);
+        vsa_source_debug s{};
+        s.struct_size = sizeof s;
+        uint32_t n = 0;
+        REQUIRE(vsa_engine_get_sources(e.engine, &s, 1, &n) == VSA_OK);
+        vsa_simulation_stats stats{};
+        stats.struct_size = sizeof stats;
+        REQUIRE(vsa_engine_get_simulation_stats(e.engine, &stats) == VSA_OK);
+        return std::make_pair(s, stats);
+    };
+    // Back to the wall: the eyes at x 10.3, rendering offset 0.5 m back (inside the wall).
+    const auto [clear, stats] = simulate(10.3f, -0.5f, 1.0f);
+    CHECK(static_cast<double>(clear.occlusion) > 0.95);
+    CHECK(clear.crossings == 0);
+    CHECK(static_cast<double>(stats.listener[0]) == doctest::Approx(10.3));
+
+    // A camera inside the wall (third person) listens from where it leaves the rock, looking +x.
+    const auto [escaped, escaped_stats] = simulate(9.5f, 0.0f, 1.0f);
+    CHECK(static_cast<double>(escaped.occlusion) > 0.95);
+    CHECK(static_cast<double>(escaped_stats.listener[0]) > 10.0);
+}
+
+TEST_CASE("direct: a sound resting on the floor is not half hidden by it") {
+    OfflineEngine e;
+    set_materials(e);
+    std::vector<uint16_t> cells(VSA_CHUNK_CELLS, Air);
+    for (int z = 0; z < 32; ++z) {
+        for (int x = 0; x < 32; ++x) {
+            cells[cell(x, 10, z)] = Stone;  // a floor, top at y 11
+        }
+    }
+    vsa_chunk_desc d{};
+    d.struct_size = sizeof d;
+    d.materials = cells.data();
+    REQUIRE(vsa_scene_set_chunk(e.engine, &d) == VSA_OK);
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+    e.listener(4.0f, 12.6f, 16.5f, 1.0f, 0.0f, 0.0f);  // standing on the floor
+    const AssetPtr asset = band_tones(e);
+    const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 7.0f, 11.0f, 16.5f, 1.0f);  // at someone's feet
+    REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+    e.render(9600);
+    vsa_source_debug s{};
+    s.struct_size = sizeof s;
+    uint32_t n = 0;
+    REQUIRE(vsa_engine_get_sources(e.engine, &s, 1, &n) == VSA_OK);
+    MESSAGE("feet on the floor: occlusion " << s.occlusion << ", simulated at y " << s.simulated_position[1]);
+    CHECK(static_cast<double>(s.occlusion) > 0.9);
+    CHECK(s.crossings == 0);
+    CHECK(static_cast<double>(s.simulated_position[1]) >= 11.4);
 }

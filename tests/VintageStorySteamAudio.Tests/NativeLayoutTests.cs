@@ -64,7 +64,8 @@ public sealed class NativeLayoutTests
         Assert.Equal(28, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Spatial)));
         Assert.Equal(32, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.PositionX)));
         Assert.Equal(44, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.MinDistance)));
-        Assert.Equal(40, Unsafe.SizeOf<VsaListener>());
+        Assert.Equal(52, Unsafe.SizeOf<VsaListener>());
+        Assert.Equal(40, (int)Marshal.OffsetOf<VsaListener>(nameof(VsaListener.RenderOffsetX)));
         Assert.Equal(8, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Asset)));
         Assert.Equal(16, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Gain)));
         Assert.Equal(24, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Looping)));
@@ -156,7 +157,8 @@ public sealed class NativeLayoutTests
         Assert.Equal(64, sizeof(VsaSourceDebug));
         Assert.Equal(16, (int)Marshal.OffsetOf<VsaSourceDebug>("Position"));
         Assert.Equal(60, (int)Marshal.OffsetOf<VsaSourceDebug>(nameof(VsaSourceDebug.Crossings)));
-        Assert.Equal(56, Marshal.SizeOf<VsaSimulationStats>());
+        Assert.Equal(80, Marshal.SizeOf<VsaSimulationStats>());
+        Assert.Equal(68, (int)Marshal.OffsetOf<VsaSimulationStats>(nameof(VsaSimulationStats.OriginX)));
         Assert.Equal(48, (int)Marshal.OffsetOf<VsaSimulationStats>(nameof(VsaSimulationStats.RateHz)));
         Assert.Equal(48, (int)Marshal.OffsetOf<VsaRayHit>(nameof(VsaRayHit.Triangle)));
         Assert.Equal(60, (int)Marshal.OffsetOf<VsaRayHit>(nameof(VsaRayHit.Cell)));

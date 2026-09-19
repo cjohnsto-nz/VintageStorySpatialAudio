@@ -197,6 +197,14 @@ internal sealed class SceneDebugTools : IDisposable
         SimulationStats sim = engine.GetSimulationStats();
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture, $"Direct simulation: {sim.Sources} sources, tick {sim.LastTickMs:0.00} ms (occlusion {sim.OcclusionMs:0.00}, transmission {sim.TransmissionMs:0.00}), max {sim.MaxTickMs:0.0} ms, {sim.RateHz} Hz, {sim.OcclusionSamples} rays");
+        if (capi.World.Player?.Entity is { } me)
+        {
+            // Frame check: where the simulation listens (world) against the eyes, and both origins.
+            Vec3d eyes = me.Pos.XYZ.Add(me.LocalEyePos);
+            (int X, int Y, int Z) wo = world.Status().Origin;
+            text.Append(CultureInfo.InvariantCulture, $"\n  listens at {sim.Listener.X + sim.Origin.X:0.0},{sim.Listener.Y + sim.Origin.Y:0.0},{sim.Listener.Z + sim.Origin.Z:0.0} (eyes {eyes.X:0.0},{eyes.Y:0.0},{eyes.Z:0.0}); origin {sim.Origin.X},{sim.Origin.Y},{sim.Origin.Z}")
+                .Append(sim.Origin == wo ? string.Empty : string.Create(CultureInfo.InvariantCulture, $" MISMATCH: scene streamer has {wo.X},{wo.Y},{wo.Z}"));
+        }
         if ((renderer.Overlay & SceneOverlay.Sources) == 0 || capi.World.Player?.Entity is not { } player)
         {
             return text.ToString();

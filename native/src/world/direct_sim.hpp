@@ -45,6 +45,8 @@ struct SimulationStats {
     double transmission_ms = 0.0;
     uint32_t rate_hz = 0;
     uint32_t occlusion_samples = 0;
+    float listener[3] = {};  // scene coordinates, as simulated
+    int32_t origin[3] = {};
 };
 
 /// The direct-sound simulation (Phase 5): for every voice with an effect set, Steam Audio's

@@ -224,6 +224,9 @@ internal struct VsaListener
     public float UpX;
     public float UpY;
     public float UpZ;
+    public float RenderOffsetX;
+    public float RenderOffsetY;
+    public float RenderOffsetZ;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -457,6 +460,12 @@ internal struct VsaSimulationStats
     public double TransmissionMs;
     public uint RateHz;
     public uint OcclusionSamples;
+    public float ListenerX;
+    public float ListenerY;
+    public float ListenerZ;
+    public int OriginX;
+    public int OriginY;
+    public int OriginZ;
 }
 
 internal static unsafe partial class VsaNative
@@ -467,7 +476,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 6;
+    public const uint AbiVersion = 7;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;

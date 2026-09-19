@@ -86,6 +86,12 @@ public sealed class SteamAudioConfig
     /// <summary>Main-thread milliseconds per game tick (every 50 ms) spent reading chunks for the scene.</summary>
     public double SceneBudgetMs { get; set; } = 2.0;
 
+    /// <summary>
+    /// Vanilla never plays a sound beyond its range (an anvil stops dead at 16 m); with physical
+    /// fall-off sounds should fade instead. Ranges are multiplied by this (1 = vanilla, up to 16).
+    /// </summary>
+    public float SoundRangeMultiplier { get; set; } = 3f;
+
     /// <summary>Walls muffle what is behind them (occlusion and transmission by the world scene, Phase 5).</summary>
     public bool Occlusion { get; set; } = true;
 

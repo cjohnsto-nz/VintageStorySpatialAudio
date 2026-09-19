@@ -83,6 +83,8 @@ internal sealed class AudioTakeover : IDisposable
         {
             ListenerBackwardOffset = float.IsFinite(config.ListenerBackwardOffset) ? Math.Clamp(config.ListenerBackwardOffset, 0f, 3f) : 0f,
         };
+        float rangeScale = float.IsFinite(config.SoundRangeMultiplier) ? Math.Clamp(config.SoundRangeMultiplier, 1f, 16f) : 3f;
+        PlatformPatches.RangeScaleSquared = rangeScale * rangeScale;
         var takeover = new AudioTakeover(api, logger, session, members, config.SpatialAudio);
         try
         {
@@ -322,6 +324,11 @@ internal sealed class AudioTakeover : IDisposable
         if (!SoundCapRemoved)
         {
             logger.Warning("the 250-sound cap was not found in PlaySoundAtInternal; it stays in place");
+        }
+
+        if (!PlatformPatches.RangeWidened)
+        {
+            logger.Warning("the sound range check was not found in PlaySoundAtInternal; sounds still stop at their range");
         }
     }
 

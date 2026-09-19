@@ -155,3 +155,43 @@ TEST_CASE("transmission: a sound at the centre of a block escapes it towards the
     thick.escape(buried, listener, 2);
     CHECK(thick.trace(buried, listener).blocked());
 }
+
+TEST_CASE("transmission: grazing the corner of a block costs little; a real passage costs in full") {
+    auto c = std::make_shared<ChunkVoxels>();
+    c->materials[static_cast<std::size_t>(cell_index(10, 16, 10))] = Stone;  // one block
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView view(std::move(chunks), materials());
+    // Through its corner: about 4 cm inside it.
+    const double from[3] = {5.0, 16.5, 5.03};
+    const double to[3] = {15.0, 16.5, 15.03};
+    const double graze_from[3] = {10.95 - 5.0, 16.5, 10.0 - 5.0 - 0.02};
+    const double graze_to[3] = {10.95 + 5.0, 16.5, 10.0 + 5.0 - 0.02};
+    const TransmissionTrace graze = view.trace(graze_from, graze_to);
+    MESSAGE("grazing: " << graze.solid_metres << " m, " << graze.loss_db[1] << " dB");
+    CHECK(graze.solid_metres < 0.1f);
+    CHECK(graze.loss_db[1] < 10.0f);
+    const TransmissionTrace through = view.trace(from, to);
+    CHECK(through.loss_db[1] > 35.0f);
+}
+
+TEST_CASE("transmission: clearance keeps a point off neighbouring solid faces") {
+    auto c = std::make_shared<ChunkVoxels>();
+    for (int z = 0; z < kChunkSize; ++z) {
+        for (int x = 0; x < kChunkSize; ++x) {
+            c->materials[static_cast<std::size_t>(cell_index(x, 10, z))] = Stone;  // floor, top at 11
+        }
+    }
+    c->materials[static_cast<std::size_t>(cell_index(6, 11, 5))] = Stone;  // a block beside
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView view(std::move(chunks), materials());
+    double feet[3] = {5.9, 11.0, 5.5};
+    view.clearance(feet, 0.3);
+    CHECK(feet[1] == doctest::Approx(11.3));
+    CHECK(feet[0] == doctest::Approx(5.7));  // off the block at x 6
+    CHECK(feet[2] == doctest::Approx(5.5));
+    double inside[3] = {3.5, 10.5, 3.5};  // in the floor: left alone
+    view.clearance(inside, 0.3);
+    CHECK(inside[1] == doctest::Approx(10.5));
+}

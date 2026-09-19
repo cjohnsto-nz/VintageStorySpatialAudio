@@ -25,8 +25,13 @@ struct TransmissionTrace {
     float loss_db[3] = {0.0f, 0.0f, 0.0f};
     /// Metres inside non-air cells and boxes.
     float solid_metres = 0.0f;
-    /// Times the path entered a material.
+    /// Times the path entered a material (for at least kMinRun metres).
     uint32_t crossings = 0;
+
+    /// A run through full cells shorter than this pays its crossing loss in proportion: grazing
+    /// the corner of a block is not passing through its surfaces.
+    static constexpr double kFullCrossingRun = 0.25;
+    static constexpr double kMinRun = 0.02;
 
     [[nodiscard]] bool blocked() const noexcept { return crossings > 0; }
     /// Amplitude gain for a band.
@@ -55,6 +60,10 @@ public:
     /// sounds are often placed at the centre of a block (breaking, placing, a door), which must
     /// not muffle its own sound. Returns true if the point moved.
     bool escape(double point[3], const double target[3], int max_cells) const;
+
+    /// Keeps `point` at least `radius` from the faces of solid cells next to its own (a sound on
+    /// the floor would otherwise have half its occlusion volume inside the floor).
+    void clearance(double point[3], double radius) const;
 
     /// The material of the full cell at a world block, 0 (air) if unknown or partial.
     [[nodiscard]] uint16_t material_at(int64_t x, int64_t y, int64_t z) const;

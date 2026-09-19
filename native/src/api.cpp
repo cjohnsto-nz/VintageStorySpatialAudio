@@ -29,7 +29,8 @@ static_assert(sizeof(vsa_engine_config) == 80 && offsetof(vsa_engine_config, max
               offsetof(vsa_engine_config, hrtf_sofa_path) == 64 && offsetof(vsa_engine_config, direct_rate_hz) == 76);
 static_assert(sizeof(vsa_source_debug) == 64 && offsetof(vsa_source_debug, position) == 16 &&
               offsetof(vsa_source_debug, crossings) == 60);
-static_assert(sizeof(vsa_simulation_stats) == 56 && offsetof(vsa_simulation_stats, rate_hz) == 48);
+static_assert(sizeof(vsa_simulation_stats) == 80 && offsetof(vsa_simulation_stats, rate_hz) == 48 &&
+              offsetof(vsa_simulation_stats, origin) == 68);
 static_assert(sizeof(vsa_asset_desc) == 48 && offsetof(vsa_asset_desc, storage) == 32);
 static_assert(sizeof(vsa_asset_info) == 40);
 static_assert(sizeof(vsa_voice_desc) == 48 && offsetof(vsa_voice_desc, gain) == 16 && offsetof(vsa_voice_desc, position) == 32);
@@ -38,7 +39,7 @@ static_assert(sizeof(vsa_device_info) == 776 && offsetof(vsa_device_info, id) ==
 static_assert(sizeof(vsa_output_desc) == 24);
 static_assert(sizeof(vsa_engine_stats) == 360 && offsetof(vsa_engine_stats, real_voices) == 40 &&
               offsetof(vsa_engine_stats, blocks_rendered) == 48 && offsetof(vsa_engine_stats, device_name) == 104);
-static_assert(sizeof(vsa_listener) == 40);
+static_assert(sizeof(vsa_listener) == 52 && offsetof(vsa_listener, render_offset) == 40);
 static_assert(sizeof(vsa_acoustic_material) == 56 && offsetof(vsa_acoustic_material, name) == 48);
 static_assert(sizeof(vsa_box) == 24 && sizeof(vsa_partial_block) == 16);
 static_assert(sizeof(vsa_chunk_desc) == 56 && offsetof(vsa_chunk_desc, materials) == 24 &&
@@ -690,6 +691,8 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, 
         stats.transmission_ms = s.transmission_ms;
         stats.rate_hz = s.rate_hz;
         stats.occlusion_samples = s.occlusion_samples;
+        std::copy_n(s.listener, 3, stats.listener);
+        std::copy_n(s.origin, 3, stats.origin);
         *out = stats;
         return VSA_OK;
     });

@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 6u
+#define VSA_ABI_VERSION 7u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -401,6 +401,13 @@ typedef struct vsa_listener {
     float forward[3];
     /** Unit vector up from the listener's head, orthogonal to forward. */
     float up[3];
+    /**
+     * Added to the position for rendering only (directions and distances the voices are panned
+     * and spatialised with), not for the simulation, which listens from `position`. E.g. a little
+     * behind the eyes, so sounds at the player's feet are clearly in front rather than straddling
+     * front and back speakers. Zero for none.
+     */
+    float render_offset[3];
 } vsa_listener;
 
 typedef enum vsa_render_mode {
@@ -798,6 +805,10 @@ typedef struct vsa_simulation_stats {
     double transmission_ms;
     uint32_t rate_hz;
     uint32_t occlusion_samples;
+    /** Where the latest tick listened from (scene coordinates, after leaving any solid block). */
+    float listener[3];
+    /** The scene origin the latest tick used. */
+    int32_t origin[3];
 } vsa_simulation_stats;
 
 VSA_API vsa_result VSA_CALL vsa_engine_get_simulation_stats(vsa_engine* engine, vsa_simulation_stats* out);

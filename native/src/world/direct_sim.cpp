@@ -130,9 +130,19 @@ void DirectSimulator::tick() {
     const ListenerPose pose = listener_.read();
     const std::shared_ptr<const VoxelView> view = scene_.voxel_view();
     const int32_t* origin = view->origin();
-    const double listener_world[3] = {static_cast<double>(pose.position[0]) + origin[0],
-                                      static_cast<double>(pose.position[1]) + origin[1],
-                                      static_cast<double>(pose.position[2]) + origin[2]};
+    double listener_world[3] = {static_cast<double>(pose.position[0]) + origin[0],
+                                static_cast<double>(pose.position[1]) + origin[1],
+                                static_cast<double>(pose.position[2]) + origin[2]};
+    // A camera inside a block (third person against a wall) listens from just outside it, towards
+    // where it looks.
+    const double ahead[3] = {listener_world[0] + static_cast<double>(pose.forward[0]) * 2.0,
+                             listener_world[1] + static_cast<double>(pose.forward[1]) * 2.0,
+                             listener_world[2] + static_cast<double>(pose.forward[2]) * 2.0};
+    view->escape(listener_world, ahead, 2);
+    float listener_scene[3];
+    for (int k = 0; k < 3; ++k) {
+        listener_scene[k] = static_cast<float>(listener_world[k] - origin[k]);
+    }
 
     channel_.scene_has_chunks.store(view->chunk_count() > 0, std::memory_order_relaxed);
     std::vector<Active>& active = active_;
@@ -175,6 +185,8 @@ void DirectSimulator::tick() {
             a.world[k] = static_cast<double>(a.debug.position[k]) + origin[k];
         }
         a.debug.escaped = view->escape(a.world, listener_world, 2);
+        const float radius = std::max(0.05f, in.radius.load(std::memory_order_relaxed));
+        view->clearance(a.world, static_cast<double>(radius));
         for (int k = 0; k < 3; ++k) {
             a.debug.simulated_position[k] = static_cast<float>(a.world[k] - origin[k]);
         }
@@ -184,7 +196,7 @@ void DirectSimulator::tick() {
         inputs.directFlags = IPL_DIRECTSIMULATIONFLAGS_OCCLUSION;
         inputs.source = pose_at(a.debug.simulated_position);
         inputs.occlusionType = IPL_OCCLUSIONTYPE_VOLUMETRIC;
-        inputs.occlusionRadius = std::max(0.05f, in.radius.load(std::memory_order_relaxed));
+        inputs.occlusionRadius = radius;
         inputs.numOcclusionSamples = static_cast<IPLint32>(samples_);
         iplSourceSetInputs(source.handle.get(), IPL_SIMULATIONFLAGS_DIRECT, &inputs);
         active.push_back(a);
@@ -194,7 +206,7 @@ void DirectSimulator::tick() {
     shared.listener.right = {pose.right[0], pose.right[1], pose.right[2]};
     shared.listener.up = {pose.up[0], pose.up[1], pose.up[2]};
     shared.listener.ahead = {pose.forward[0], pose.forward[1], pose.forward[2]};
-    shared.listener.origin = {pose.position[0], pose.position[1], pose.position[2]};
+    shared.listener.origin = {listener_scene[0], listener_scene[1], listener_scene[2]};
     iplSimulatorSetSharedInputs(simulator_.get(), IPL_SIMULATIONFLAGS_DIRECT, &shared);
 
     const auto occlusion_start = std::chrono::steady_clock::now();
@@ -243,6 +255,8 @@ void DirectSimulator::tick() {
     stats_.max_tick_ms = std::max(stats_.max_tick_ms, ms);
     stats_.occlusion_ms = occlusion_ms;
     stats_.transmission_ms = transmission_ms;
+    std::copy_n(listener_scene, 3, stats_.listener);
+    std::copy_n(origin, 3, stats_.origin);
 }
 
 SimulationStats DirectSimulator::stats() const {

@@ -294,7 +294,13 @@ public sealed partial class AudioEngine : IDisposable
     }
 
     /// <summary>Listener pose for positional voices: position and unit forward/up vectors.</summary>
-    public void SetListener(float x, float y, float z, float forwardX, float forwardY, float forwardZ, float upX, float upY, float upZ)
+    /// <summary>
+    /// The listener. The render offset is added to the position for rendering only (panning and
+    /// spatialisation), not for the simulation, which listens from the position itself.
+    /// </summary>
+    public void SetListener(
+        float x, float y, float z, float forwardX, float forwardY, float forwardZ, float upX, float upY, float upZ,
+        float offsetX = 0f, float offsetY = 0f, float offsetZ = 0f)
     {
         using Lease lease = new(handle);
         var listener = new VsaListener
@@ -309,6 +315,9 @@ public sealed partial class AudioEngine : IDisposable
             UpX = upX,
             UpY = upY,
             UpZ = upZ,
+            RenderOffsetX = offsetX,
+            RenderOffsetY = offsetY,
+            RenderOffsetZ = offsetZ,
         };
         NativeException.ThrowIfFailed(VsaNative.ListenerSet(lease.Engine, in listener), "vsa_listener_set");
     }

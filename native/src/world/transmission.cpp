@@ -96,6 +96,20 @@ TransmissionTrace VoxelView::trace(const double from[3], const double to[3]) con
     double loss[3] = {0.0, 0.0, 0.0};
     double solid = 0.0;
     int current = -1;  // material of the run the path is in, -1 in air
+    double run = 0.0;  // metres in the current run
+    // A run of one material ends: its crossing loss, in proportion to how far it went in.
+    const auto end_run = [&] {
+        if (current >= 0 && run >= TransmissionTrace::kMinRun) {
+            const double weight = std::min(1.0, run / TransmissionTrace::kFullCrossingRun);
+            const TransmissionMaterial& m = materials_[static_cast<std::size_t>(current)];
+            for (int b = 0; b < 3; ++b) {
+                loss[b] += weight * static_cast<double>(m.crossing_db[b]);
+            }
+            ++result.crossings;
+        }
+        current = -1;
+        run = 0.0;
+    };
     double t = 0.0;
     for (int steps = 0; steps < kMaxSteps && t < 1.0; ++steps) {
         const int axis = t_max[0] < t_max[1] ? (t_max[0] < t_max[2] ? 0 : 2) : (t_max[1] < t_max[2] ? 1 : 2);
@@ -108,18 +122,16 @@ TransmissionTrace VoxelView::trace(const double from[3], const double to[3]) con
         if (kind(material) != MaterialKind::Air) {
             const TransmissionMaterial& m = materials_[material];
             if (current != material) {
-                ++result.crossings;
-                for (int b = 0; b < 3; ++b) {
-                    loss[b] += static_cast<double>(m.crossing_db[b]);
-                }
+                end_run();
                 current = material;
             }
+            run += metres;
             for (int b = 0; b < 3; ++b) {
                 loss[b] += static_cast<double>(m.bulk_db_per_metre[b]) * metres;
             }
             solid += metres;
         } else {
-            current = -1;
+            end_run();
             if (chunk != nullptr && !chunk->partials.empty()) {
                 // Partial blocks in this cell: each box the path passes through is a crossing.
                 const auto cell16 = static_cast<uint16_t>(index);
@@ -138,7 +150,7 @@ TransmissionTrace VoxelView::trace(const double from[3], const double to[3]) con
                             hi[a] = static_cast<double>(cell[a]) + static_cast<double>(box.max[a]);
                         }
                         const double inside = segment_in_box(from, d, t, t_exit, lo, hi) * length;
-                        if (inside > 1e-4) {
+                        if (inside > TransmissionTrace::kMinRun * 0.5) {  // boxes are thin: a door counts in full
                             ++result.crossings;
                             for (int b = 0; b < 3; ++b) {
                                 loss[b] += static_cast<double>(m.crossing_db[b]) +
@@ -155,12 +167,34 @@ TransmissionTrace VoxelView::trace(const double from[3], const double to[3]) con
         cell[axis] += step[axis];
         t_max[axis] += t_delta[axis];
     }
+    end_run();
 
     for (int b = 0; b < 3; ++b) {
         result.loss_db[b] = static_cast<float>(loss[b]);
     }
     result.solid_metres = static_cast<float>(solid);
     return result;
+}
+
+void VoxelView::clearance(double point[3], double radius) const {
+    const int64_t c[3] = {static_cast<int64_t>(std::floor(point[0])), static_cast<int64_t>(std::floor(point[1])),
+                          static_cast<int64_t>(std::floor(point[2]))};
+    if (kind(material_at(c[0], c[1], c[2])) == MaterialKind::Solid) {
+        return;  // inside rock: escape() is for that
+    }
+    const double r = std::clamp(radius, 0.0, 0.49);
+    for (int a = 0; a < 3; ++a) {
+        int64_t below[3] = {c[0], c[1], c[2]};
+        int64_t above[3] = {c[0], c[1], c[2]};
+        below[a] -= 1;
+        above[a] += 1;
+        const double frac = point[a] - static_cast<double>(c[a]);
+        if (frac < r && kind(material_at(below[0], below[1], below[2])) == MaterialKind::Solid) {
+            point[a] = static_cast<double>(c[a]) + r;
+        } else if (frac > 1.0 - r && kind(material_at(above[0], above[1], above[2])) == MaterialKind::Solid) {
+            point[a] = static_cast<double>(c[a]) + 1.0 - r;
+        }
+    }
 }
 
 bool VoxelView::escape(double point[3], const double target[3], int max_cells) const {

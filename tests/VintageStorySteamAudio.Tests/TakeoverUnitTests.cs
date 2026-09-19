@@ -91,6 +91,7 @@ public sealed class TakeoverUnitTests
         Assert.False(PlatformPatches.SoundCapRemoved);
     }
 
+
     [Fact]
     public void OpenAl_device_names_from_the_settings_find_our_devices()
     {

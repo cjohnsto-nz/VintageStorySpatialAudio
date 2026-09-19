@@ -708,8 +708,10 @@ SpatialParams Mixer::spatial_params(const RenderVoice& v) const noexcept {
     const auto dot = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
     float local[3] = {v.position[0], v.position[1], v.position[2]};
     if (v.spatial == VSA_SPATIAL_WORLD) {
-        const float d[3] = {v.position[0] - pose_.position[0], v.position[1] - pose_.position[1],
-                            v.position[2] - pose_.position[2]};
+        // Rendering listens from the offset position (e.g. a little behind the eyes).
+        const float d[3] = {v.position[0] - (pose_.position[0] + pose_.render_offset[0]),
+                            v.position[1] - (pose_.position[1] + pose_.render_offset[1]),
+                            v.position[2] - (pose_.position[2] + pose_.render_offset[2])};
         // Listener space as Steam Audio expects it: +x right, +y up, -z forward.
         local[0] = dot(d, pose_.right);
         local[1] = dot(d, pose_.up);

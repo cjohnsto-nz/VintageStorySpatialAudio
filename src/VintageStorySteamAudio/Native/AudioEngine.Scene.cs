@@ -143,7 +143,28 @@ public sealed record SourceDebugInfo(
          Occlusion + ((1 - Occlusion) * Transmission.High));
 }
 
-public sealed record SimulationStats(int Sources, long Ticks, double LastTickMs, double MaxTickMs, double OcclusionMs, double TransmissionMs, int RateHz, int OcclusionSamples);
+/// <summary>The direct simulation's latest tick.</summary>
+/// <param name="Sources">Sources simulated.</param>
+/// <param name="Ticks">Ticks so far.</param>
+/// <param name="LastTickMs">The latest tick's duration.</param>
+/// <param name="MaxTickMs">The longest tick so far.</param>
+/// <param name="OcclusionMs">The latest tick's Steam Audio occlusion part.</param>
+/// <param name="TransmissionMs">The latest tick's voxel transmission part.</param>
+/// <param name="RateHz">Ticks per second while a device plays.</param>
+/// <param name="OcclusionSamples">Rays per source.</param>
+/// <param name="Listener">Where the latest tick listened from (scene coordinates).</param>
+/// <param name="Origin">The scene origin the latest tick used.</param>
+public sealed record SimulationStats(
+    int Sources,
+    long Ticks,
+    double LastTickMs,
+    double MaxTickMs,
+    double OcclusionMs,
+    double TransmissionMs,
+    int RateHz,
+    int OcclusionSamples,
+    (float X, float Y, float Z) Listener,
+    (int X, int Y, int Z) Origin);
 
 /// <summary>A chunk's mesh as submitted to Steam Audio, in chunk-local block units.</summary>
 public sealed record ChunkMeshData(int Lod, uint Version, float[] Vertices, int[] Triangles, ushort[] Materials);
@@ -399,7 +420,9 @@ public sealed partial class AudioEngine
         using Lease lease = new(handle);
         var s = new VsaSimulationStats { StructSize = (uint)sizeof(VsaSimulationStats) };
         NativeException.ThrowIfFailed(VsaNative.EngineGetSimulationStats(lease.Engine, ref s), "vsa_engine_get_simulation_stats");
-        return new SimulationStats((int)s.Sources, (long)s.Ticks, s.LastTickMs, s.MaxTickMs, s.OcclusionMs, s.TransmissionMs, (int)s.RateHz, (int)s.OcclusionSamples);
+        return new SimulationStats(
+            (int)s.Sources, (long)s.Ticks, s.LastTickMs, s.MaxTickMs, s.OcclusionMs, s.TransmissionMs, (int)s.RateHz, (int)s.OcclusionSamples,
+            (s.ListenerX, s.ListenerY, s.ListenerZ), (s.OriginX, s.OriginY, s.OriginZ));
     }
 
     /// <summary>Writes the scene as OBJ + MTL in world block coordinates.</summary>

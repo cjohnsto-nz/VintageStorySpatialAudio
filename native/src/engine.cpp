@@ -497,6 +497,10 @@ void Engine::set_listener(const vsa_listener& listener) {
         pose.position[i] = listener.position[i];
         pose.forward[i] = listener.forward[i];
         pose.up[i] = listener.up[i];
+        pose.render_offset[i] = listener.render_offset[i];
+    }
+    if (!finite3(pose.render_offset[0], pose.render_offset[1], pose.render_offset[2])) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "listener render_offset must be finite");
     }
     if (!finite3(pose.position[0], pose.position[1], pose.position[2]) || !normalise(pose.forward) || !normalise(pose.up)) {
         throw Error(VSA_ERROR_INVALID_ARGUMENT, "listener position must be finite and forward/up non-zero");
