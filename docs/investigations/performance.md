@@ -24,17 +24,31 @@ page holds the method and the numbers.
 
 ## Method
 
-One world, one spot, one activity, twice: the mod **disabled in the mod manager** (vanilla
-OpenAL), then **enabled** at the defaults (Medium reflections, pathing on). Sixty seconds each,
-after the chunks around have loaded and the frame rate has settled. Pick spots that work the
-mod hard:
+One world, one spot, one activity, twice.
+
+**The baseline run** keeps the mod loaded but idle: `"TakeOverGameAudio": false` and
+`"BuildWorldScene": false` in `vssteamaudio.json`. Vanilla OpenAL plays every sound, the engine
+sits with its threads parked and no device open, and the mod's only work is counting frames — so
+`.steamaudio perf` reports the game's own frame times, measured exactly as they are measured in
+the other run. Its first line says which run it is. (Disabling the mod outright gives a purer
+CPU and memory baseline, but then nothing inside the game measures frames and the comparison
+rests on the debug screen's fps: worth one run as a sanity check on the process figures, not the
+one to compare frame times against.)
+
+**The mod run** is the defaults: `TakeOverGameAudio` and `BuildWorldScene` true, Medium
+reflections, pathing on.
+
+Sixty seconds each, after the chunks around have loaded and the frame rate has settled. Pick
+spots that work the mod hard:
 
 1. **Village**: villagers, animals, a windmill, doors; many sounds, many blocked.
 2. **Cave**: reverb and pathing round bends.
 3. **Forest at night**: lots of ambient sources, few walls.
 
-For each spot: `perf-sample.ps1` for both runs, F3 fps for both, `.steamaudio perf reset` then
-`.steamaudio perf` after the sixty seconds for the mod run. Note the CPU model and core count.
+For each spot, in both runs: `.steamaudio perf reset`, then `perf-sample.ps1` for the sixty
+seconds, then `.steamaudio perf`. Note the CPU model and core count. The game's own debug screen
+is **Ctrl+F3** (Alt+F3 for the fps graph alone) if you want to watch the frame rate live; plain
+F3 is not bound to anything.
 
 ## What to look at
 
@@ -54,7 +68,7 @@ For each spot: `perf-sample.ps1` for both runs, F3 fps for both, `.steamaudio pe
 
 _To be filled in from Chris's runs._
 
-| Spot | Run | fps (F3) | frame p99 ms | cores | working set MB | mod main thread ms/frame | notes |
+| Spot | Run | fps | frame p99 ms | cores | working set MB | mod main thread ms/frame | notes |
 |---|---|---|---|---|---|---|---|
 | village | vanilla | | | | | – | |
 | village | mod | | | | | | |

@@ -124,6 +124,9 @@ public sealed class PerfReporter
         AudioSession? audio = session();
 
         var text = new StringBuilder();
+        text.Append(audio is null
+            ? "Audio: vanilla OpenAL (this mod is not playing it) - the baseline run\n"
+            : "Audio: this mod\n");
         text.Append(F($"Perf window: {snap.WindowSeconds:0.0} s, {snap.Frames} frames"));
         if (snap.Frames > 0)
         {

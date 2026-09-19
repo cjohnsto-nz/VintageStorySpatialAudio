@@ -61,6 +61,18 @@ public sealed class PerfMonitorTests
     }
 
     [Fact]
+    public void Frame_boundaries_come_from_the_gaps_between_calls()
+    {
+        // The frame probe calls Frame() once per frame; the first call only opens the window.
+        var perf = new PerfMonitor();
+        perf.Frame();
+        Assert.Equal(0, perf.Snapshot().Frames);
+        perf.Frame();
+        perf.Frame();
+        Assert.Equal(2, perf.Snapshot().Frames);
+    }
+
+    [Fact]
     public void Another_thread_is_not_recorded()
     {
         var perf = new PerfMonitor();

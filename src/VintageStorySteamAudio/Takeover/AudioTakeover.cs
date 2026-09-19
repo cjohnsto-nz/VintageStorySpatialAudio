@@ -242,7 +242,6 @@ internal sealed class AudioTakeover : IDisposable
     /// <summary>ClientPlatformWindows.UpdateAudioListener: once per frame on the main thread.</summary>
     public void OnFrame(float posX, float posY, float posZ, float orientX, float orientY, float orientZ)
     {
-        PerfMonitor.Instance.Frame();
         using (PerfMonitor.Instance.Measure(PerfSection.Listener))
         {
             // Vanilla passes a flattened view (y = 0); use the player's full view direction when we can.

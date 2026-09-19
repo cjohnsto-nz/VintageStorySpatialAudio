@@ -25,6 +25,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
     private AudioTakeover? takeover;
     private TestPlayback? playback;
     private PerfReporter? perf;
+    private FrameProbe? frameProbe;
     private WorldAcoustics? world;
     private SceneDebugTools? sceneTools;
     private SpeakerTest? speakerTest;
@@ -76,6 +77,10 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             playback = new TestPlayback(engine, Mod.Logger, config.TestOutputDevice);
             PerfMonitor.Instance.AttachThread();
             perf = new PerfReporter(PerfMonitor.Instance, engine, () => takeover?.Session);
+            // Frames are counted whether or not we play the audio, so a TakeOverGameAudio-off run
+            // is a baseline measured the same way (docs/investigations/performance.md).
+            frameProbe = new FrameProbe();
+            api.Event.RegisterRenderer(frameProbe, EnumRenderStage.Before, "vssteamaudio-frames");
             tickListener = api.Event.RegisterGameTickListener(_ => TickPlayback(), 100);
             if (config.BuildWorldScene)
             {
@@ -143,6 +148,12 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         {
             capi?.Event.UnregisterGameTickListener(tickListener);
             tickListener = -1;
+        }
+
+        if (frameProbe is not null)
+        {
+            capi?.Event.UnregisterRenderer(frameProbe, EnumRenderStage.Before);
+            frameProbe = null;
         }
 
         speakerTest?.Dispose();
