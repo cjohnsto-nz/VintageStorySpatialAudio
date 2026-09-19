@@ -388,7 +388,11 @@ typedef struct vsa_listener {
 typedef enum vsa_render_mode {
     /** Binaural (Steam Audio HRTF) to the front left/right channels. The default. */
     VSA_RENDER_HEADPHONES = 0,
-    /** Amplitude panning to the front left/right speakers. */
+    /**
+     * Amplitude panning to the output's speakers: stereo, quad, 5.1 or 7.1 for 2/4/6/8 channels
+     * (channels are routed by speaker position, so the device's own channel order is respected).
+     * The LFE channel is not used. Unpositioned voices stay on the front pair in every layout.
+     */
     VSA_RENDER_SPEAKERS = 1
 } vsa_render_mode;
 

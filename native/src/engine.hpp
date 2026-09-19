@@ -109,7 +109,7 @@ private:
     void push_event_locked(const vsa_event& event);                        // requires events_mutex_
 
     static void render_callback(void* user, float* out, uint32_t frames) noexcept;
-    static void prepare_callback(void* user, uint32_t sample_rate, uint32_t channels);
+    static void prepare_callback(void* user, uint32_t sample_rate, uint32_t channels, const Speaker* speakers);
     static void offline_block_hook(void* user) noexcept;
 
     Settings settings_;

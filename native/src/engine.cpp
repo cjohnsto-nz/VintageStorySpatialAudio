@@ -523,8 +523,8 @@ void Engine::render_callback(void* user, float* out, uint32_t frames) noexcept {
     static_cast<Engine*>(user)->mixer_.render(out, frames, nullptr, nullptr);
 }
 
-void Engine::prepare_callback(void* user, uint32_t sample_rate, uint32_t channels) {
-    static_cast<Engine*>(user)->mixer_.prepare(sample_rate, channels);
+void Engine::prepare_callback(void* user, uint32_t sample_rate, uint32_t channels, const Speaker* speakers) {
+    static_cast<Engine*>(user)->mixer_.prepare(sample_rate, channels, speakers);
 }
 
 void Engine::offline_block_hook(void* user) noexcept { static_cast<Engine*>(user)->service_streams(); }

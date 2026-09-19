@@ -41,6 +41,34 @@ uint32_t supported_channels(uint32_t channels) noexcept {
 
 std::string describe(ma_result result) { return std::string(ma_result_description(result)); }
 
+Speaker speaker_of(ma_channel channel) noexcept {
+    switch (channel) {
+        case MA_CHANNEL_FRONT_LEFT: return Speaker::FrontLeft;
+        case MA_CHANNEL_FRONT_RIGHT: return Speaker::FrontRight;
+        case MA_CHANNEL_FRONT_CENTER: return Speaker::FrontCentre;
+        case MA_CHANNEL_LFE: return Speaker::Lfe;
+        case MA_CHANNEL_BACK_LEFT: return Speaker::BackLeft;
+        case MA_CHANNEL_BACK_RIGHT: return Speaker::BackRight;
+        case MA_CHANNEL_SIDE_LEFT: return Speaker::SideLeft;
+        case MA_CHANNEL_SIDE_RIGHT: return Speaker::SideRight;
+        default: return Speaker::Other;
+    }
+}
+
+const char* speaker_name(Speaker speaker) noexcept {
+    switch (speaker) {
+        case Speaker::FrontLeft: return "FL";
+        case Speaker::FrontRight: return "FR";
+        case Speaker::FrontCentre: return "FC";
+        case Speaker::Lfe: return "LFE";
+        case Speaker::BackLeft: return "BL";
+        case Speaker::BackRight: return "BR";
+        case Speaker::SideLeft: return "SL";
+        case Speaker::SideRight: return "SR";
+        default: return "?";
+    }
+}
+
 }  // namespace
 
 void DeviceOutput::ContextDeleter::operator()(ma_context* context) const noexcept {
@@ -154,7 +182,14 @@ DeviceOutput::Format DeviceOutput::open(const vsa_device_id* id, uint32_t channe
     format.channels = device->playback.channels;
     format.period_frames = device->playback.internalPeriodSizeInFrames;
     format.name = device->playback.name;
-    prepare(user, format.sample_rate, format.channels);
+    format.speakers.resize(format.channels);
+    std::string layout;
+    for (uint32_t c = 0; c < format.channels; ++c) {
+        format.speakers[c] = speaker_of(device->playback.channelMap[c]);
+        layout += (c == 0 ? "" : " ");
+        layout += speaker_name(format.speakers[c]);
+    }
+    prepare(user, format.sample_rate, format.channels, format.speakers.data());
 
     if (const ma_result result = ma_device_start(device.get()); result != MA_SUCCESS) {
         closing_.store(true);
@@ -162,8 +197,8 @@ DeviceOutput::Format DeviceOutput::open(const vsa_device_id* id, uint32_t channe
     }
     device_ = std::move(device);
     format_ = format;
-    Log::writef(VSA_LOG_INFO, "output: '%s', %u Hz, %u channels, period %u frames", format_.name.c_str(),
-                format_.sample_rate, format_.channels, format_.period_frames);
+    Log::writef(VSA_LOG_INFO, "output: '%s', %u Hz, %u channels (%s), period %u frames", format_.name.c_str(),
+                format_.sample_rate, format_.channels, layout.c_str(), format_.period_frames);
     return format_;
 }
 

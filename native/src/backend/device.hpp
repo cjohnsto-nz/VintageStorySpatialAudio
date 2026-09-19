@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/channel_layout.hpp"
 #include "vsaudio.h"
 
 #include <atomic>
@@ -24,14 +25,16 @@ namespace vsa::backend {
 class DeviceOutput {
 public:
     using RenderFn = void (*)(void* user, float* out, uint32_t frames) noexcept;
-    /// Called after the device is initialised and before it starts, with its actual format.
-    using PrepareFn = void (*)(void* user, uint32_t sample_rate, uint32_t channels);
+    /// Called after the device is initialised and before it starts, with its actual format and
+    /// channel order (`channels` entries).
+    using PrepareFn = void (*)(void* user, uint32_t sample_rate, uint32_t channels, const Speaker* speakers);
 
     struct Format {
         uint32_t sample_rate = 0;
         uint32_t channels = 0;
         uint32_t period_frames = 0;
         std::string name;
+        std::vector<Speaker> speakers;
     };
 
     DeviceOutput();

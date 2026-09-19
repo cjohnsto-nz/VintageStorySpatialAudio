@@ -23,7 +23,7 @@ constexpr float kCentre = 0.70710678f;
 SpatialRenderer::SpatialRenderer(const steam::SteamContext& steam, uint32_t pool_size)
     : steam_(steam), pool_size_(pool_size) {}
 
-void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames) {
+void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames, uint32_t channels) {
     const auto started = std::chrono::steady_clock::now();
 
     // Release everything before recreating (Steam Audio objects are reference counted).
@@ -45,7 +45,13 @@ void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames) {
     IPLBinauralEffectSettings binaural{};
     binaural.hrtf = hrtf_.get();
     IPLPanningEffectSettings panning{};
-    panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_STEREO;
+    switch (channels) {
+        case 4: panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_QUADRAPHONIC; break;
+        case 6: panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_SURROUND_5_1; break;
+        case 8: panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_SURROUND_7_1; break;
+        default: panning.speakerLayout.type = IPL_SPEAKERLAYOUTTYPE_STEREO; break;
+    }
+    speaker_channels_ = channels == 4 || channels == 6 || channels == 8 ? channels : 2;
 
     sets_.resize(pool_size_);
     for (EffectSet& set : sets_) {
@@ -61,8 +67,8 @@ void SpatialRenderer::prepare(uint32_t sample_rate, uint32_t block_frames) {
     frames_ = block_frames;
 
     const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-    Log::writef(VSA_LOG_INFO, "spatial: HRTF and %u effect sets ready for %u Hz / %u frames (%.0f ms)", pool_size_,
-                sample_rate, block_frames, ms);
+    Log::writef(VSA_LOG_INFO, "spatial: HRTF and %u effect sets ready for %u Hz / %u frames, %u-speaker panning (%.0f ms)",
+                pool_size_, sample_rate, block_frames, speaker_channels_, ms);
 }
 
 int SpatialRenderer::acquire() noexcept {
@@ -100,15 +106,19 @@ void SpatialRenderer::reset_all() noexcept {
     }
 }
 
-void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams& params, float* mono, float* out_left,
-                             float* out_right) noexcept {
+void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams& params, float* mono,
+                             float* const* out) noexcept {
     EffectSet& s = sets_[static_cast<std::size_t>(set)];
     const auto frames = static_cast<IPLint32>(frames_);
 
     float* mono_channels[1] = {mono};
     IPLAudioBuffer mono_buffer{1, frames, mono_channels};
-    float* stereo_channels[2] = {out_left, out_right};
-    IPLAudioBuffer stereo_buffer{2, frames, stereo_channels};
+    float* out_channels[8] = {};
+    const uint32_t count = mode == VSA_RENDER_SPEAKERS ? speaker_channels_ : 2;
+    for (uint32_t c = 0; c < count; ++c) {
+        out_channels[c] = out[c];
+    }
+    IPLAudioBuffer out_buffer{static_cast<IPLint32>(count), frames, out_channels};
 
     IPLDirectEffectParams direct{};
     direct.flags = static_cast<IPLDirectEffectFlags>(IPL_DIRECTEFFECTFLAGS_APPLYDISTANCEATTENUATION |
@@ -123,13 +133,16 @@ void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams&
     if (mode == VSA_RENDER_SPEAKERS) {
         IPLPanningEffectParams panning{};
         panning.direction = direction;
-        iplPanningEffectApply(s.panning.get(), &panning, &mono_buffer, &stereo_buffer);
+        iplPanningEffectApply(s.panning.get(), &panning, &mono_buffer, &out_buffer);
+        // At the head: blend towards the unpositioned rendering (front pair, -3 dB each).
         const float blend = params.spatial_blend;
         if (blend < 1.0f) {
             const float centre = (1.0f - blend) * kCentre;
-            for (IPLint32 j = 0; j < frames; ++j) {
-                out_left[j] = blend * out_left[j] + centre * mono[j];
-                out_right[j] = blend * out_right[j] + centre * mono[j];
+            for (uint32_t c = 0; c < count; ++c) {
+                float* x = out[c];
+                for (IPLint32 j = 0; j < frames; ++j) {
+                    x[j] = blend * x[j] + (c < 2 ? centre * mono[j] : 0.0f);
+                }
             }
         }
         return;
@@ -140,7 +153,7 @@ void SpatialRenderer::render(int set, vsa_render_mode mode, const SpatialParams&
     binaural.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
     binaural.spatialBlend = params.spatial_blend;
     binaural.hrtf = hrtf_.get();
-    iplBinauralEffectApply(s.binaural.get(), &binaural, &mono_buffer, &stereo_buffer);
+    iplBinauralEffectApply(s.binaural.get(), &binaural, &mono_buffer, &out_buffer);
 }
 
 }  // namespace vsa

@@ -38,8 +38,12 @@ public:
     SpatialRenderer(const SpatialRenderer&) = delete;
     SpatialRenderer& operator=(const SpatialRenderer&) = delete;
 
-    /// (Re)creates the HRTF and every effect set for this rate and block size. Throws vsa::Error.
-    void prepare(uint32_t sample_rate, uint32_t block_frames);
+    /// (Re)creates the HRTF and every effect set for this rate, block size and output channel count
+    /// (panning targets stereo, quad, 5.1 or 7.1 for 2/4/6/8 channels). Throws vsa::Error.
+    void prepare(uint32_t sample_rate, uint32_t block_frames, uint32_t channels);
+
+    /// Channels the panning effect writes (the output layout); binaural always writes 2.
+    [[nodiscard]] uint32_t speaker_channels() const noexcept { return speaker_channels_; }
 
     /// An effect set index, or -1 when all are in use.
     int acquire() noexcept;
@@ -53,10 +57,10 @@ public:
     [[nodiscard]] uint32_t pool_size() const noexcept { return pool_size_; }
     [[nodiscard]] uint32_t in_use() const noexcept { return pool_size_ - free_count_; }
 
-    /// Renders one block: `mono` (modified in place by the direct effect) into `out_left` and
-    /// `out_right` (overwritten).
-    void render(int set, vsa_render_mode mode, const SpatialParams& params, float* mono, float* out_left,
-                float* out_right) noexcept;
+    /// Renders one block: `mono` (modified in place by the direct effect) into `out`, which must
+    /// have speaker_channels() channels for VSA_RENDER_SPEAKERS and 2 for headphones (overwritten,
+    /// in the engine's channel order: channels 0/1 are front left/right).
+    void render(int set, vsa_render_mode mode, const SpatialParams& params, float* mono, float* const* out) noexcept;
 
 private:
     struct EffectSet {
@@ -68,6 +72,7 @@ private:
     const steam::SteamContext& steam_;
     uint32_t pool_size_;
     uint32_t frames_ = 0;
+    uint32_t speaker_channels_ = 2;
     steam::Hrtf hrtf_;
     std::vector<EffectSet> sets_;
     std::vector<int> free_;

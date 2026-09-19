@@ -129,7 +129,7 @@ public enum RenderMode : uint
 {
     /// <summary>Binaural (HRTF) for the loudest positional voices, panning for the rest.</summary>
     Headphones = 0,
-    /// <summary>Amplitude panning to the front left/right speakers.</summary>
+    /// <summary>Panning to the output's speakers: stereo, quad, 5.1 or 7.1 (unpositioned sounds stay on the front pair).</summary>
     Speakers = 1,
 }
 

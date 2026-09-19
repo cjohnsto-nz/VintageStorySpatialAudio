@@ -69,6 +69,14 @@ Built and tested offline; **not yet run in the game**. Phase 1 is merged into `m
 - The 250-sound cap is removed with a transpiler on `PlaySoundAtInternal` (reported by `.steamaudio stats`).
 - The mod now compiles against VintagestoryLib and the game's 0Harmony (not shipped). Everything touched is in `AudioPatchTargets` (35 entries, verified before patching).
 
+### Verified in the game (19 Sep 2026)
+
+Chris played a session on the AV receiver (48 kHz, 6 channels, speakers mode): takeover ACTIVE, 35/35, menu music carried over at 43.5 s, sounds all working, clean hand-back to vanilla at the menu. HRTF not tried (no headphones). The takeover now also refuses to run when another mod has Harmony patches on our targets or VintageStorySurroundSound/AcousticLab is enabled.
+
+### Surround (first Phase 3 item, done early)
+
+Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1) with Steam Audio's panning effect. Buses, master and the limiter are N-channel (limiter linked). Channels are routed by speaker using miniaudio's channel map for the device, so a 5.1 device with side instead of rear surrounds still gets the rear channels; the log's "output:" line shows the device order. Unpositioned sounds and binaural voices stay on the front pair; the LFE is unused. Tests: `test_channel_layout.cpp`, and the 5.1/7.1/quad direction cases in `test_spatial.cpp`.
+
 ### Still to do for Phase 2
 
 - In-game verification: a full session with no missing, stuck or misbehaving sounds; category rebalance by ear; join/leave cycles (menu audio must work after leaving).

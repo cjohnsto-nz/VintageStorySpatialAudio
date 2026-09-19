@@ -3,6 +3,7 @@
 
 #include "engine_fixture.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -240,6 +241,83 @@ TEST_CASE("sources that jump in distance every block do not zipper") {
     const double amplitude = peak(left);
     const double natural = 2.0 * std::numbers::pi * 100.0 / 48000.0 * amplitude;
     CHECK(max_step(left.data(), left.size()) < natural * 2.0);
+}
+
+namespace {
+
+/// RMS (dB) per output channel of a positional noise source, on an offline output of `channels`.
+std::vector<double> speaker_levels(uint32_t channels, vsa_render_mode mode, float x, float y, float z) {
+    OfflineEngine e;
+    vsa_output_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.kind = VSA_OUTPUT_NONE;
+    desc.channels = channels;
+    REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+    set_mode(e, mode);
+    // Broadband noise: panning is frequency independent, and the HRTF colours a tone unevenly.
+    std::vector<float> noise(48000);
+    uint32_t seed = 12345;
+    for (float& v : noise) {
+        seed = seed * 1664525u + 1013904223u;
+        v = 0.3f * (static_cast<float>(seed >> 8) / 8388608.0f - 1.0f);
+    }
+    const AssetPtr asset = e.pcm(noise, 1, 48000);
+    const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, x, y, z);
+    REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+    std::vector<float> out(24000 * channels);
+    REQUIRE(vsa_engine_render_offline(e.engine, out.data(), 4800) == VSA_OK);  // settle
+    REQUIRE(vsa_engine_render_offline(e.engine, out.data(), 24000) == VSA_OK);
+    std::vector<double> levels;
+    for (uint32_t c = 0; c < channels; ++c) {
+        levels.push_back(to_db(rms(channel(out, channels, c))));
+    }
+    return levels;
+}
+
+double power_sum_db(const std::vector<double>& levels, std::initializer_list<std::size_t> indices) {
+    double power = 0.0;
+    for (const std::size_t i : indices) {
+        power += std::pow(10.0, levels[i] / 10.0);
+    }
+    return 10.0 * std::log10(std::max(power, 1e-30));
+}
+
+// Offline outputs use the engine's (Steam Audio's) order.
+enum : std::size_t { FL = 0, FR = 1, FC = 2, LFE = 3, BL = 4, BR = 5, SL = 6, SR = 7 };
+
+}  // namespace
+
+TEST_CASE("5.1: front, behind and side sources reach the right speakers; the LFE stays silent") {
+    const auto front = speaker_levels(6, VSA_RENDER_SPEAKERS, 0, 0, -3);
+    CHECK(front[FC] > power_sum_db(front, {BL, BR}) + 12.0);
+    CHECK(front[LFE] < -120.0);
+
+    const auto behind = speaker_levels(6, VSA_RENDER_SPEAKERS, 0, 0, 3);
+    CHECK(power_sum_db(behind, {BL, BR}) > power_sum_db(behind, {FL, FR, FC}) + 10.0);
+
+    const auto left = speaker_levels(6, VSA_RENDER_SPEAKERS, -3, 0, 0);
+    CHECK(power_sum_db(left, {FL, BL}) > power_sum_db(left, {FR, BR}) + 10.0);
+}
+
+TEST_CASE("7.1: a source to the side comes from the side speaker") {
+    const auto left = speaker_levels(8, VSA_RENDER_SPEAKERS, -3, 0, 0);
+    const double strongest = *std::max_element(left.begin(), left.end());
+    CHECK(left[SL] == doctest::Approx(strongest));
+    CHECK(left[SL] > power_sum_db(left, {FR, BR, SR}) + 10.0);
+    CHECK(left[LFE] < -120.0);
+}
+
+TEST_CASE("quad: a source behind comes from the rear pair") {
+    const auto behind = speaker_levels(4, VSA_RENDER_SPEAKERS, 0, 0, 3);
+    CHECK(power_sum_db(behind, {2, 3}) > power_sum_db(behind, {0, 1}) + 10.0);
+}
+
+TEST_CASE("binaural rendering on a surround output uses the front pair only") {
+    const auto levels = speaker_levels(6, VSA_RENDER_HEADPHONES, 3, 0, 0);
+    CHECK(levels[FR] > -40.0);
+    for (const std::size_t c : {FC, LFE, BL, BR}) {
+        CHECK(levels[c] < -120.0);
+    }
 }
 
 TEST_CASE("invalid spatial arguments are rejected") {

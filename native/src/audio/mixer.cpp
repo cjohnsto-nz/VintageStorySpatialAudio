@@ -67,20 +67,26 @@ Mixer::Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot
     voice_out_[0] = voice_storage_.data();
     voice_out_[1] = voice_storage_.data() + block_frames;
     gain_buf_.resize(block_frames);
-    spatial_storage_.resize(static_cast<std::size_t>(block_frames) * 2);
-    spatial_out_[0] = spatial_storage_.data();
-    spatial_out_[1] = spatial_storage_.data() + block_frames;
+    spatial_storage_.resize(static_cast<std::size_t>(block_frames) * kMaxOutputChannels);
+    for (std::size_t c = 0; c < kMaxOutputChannels; ++c) {
+        spatial_out_[c] = spatial_storage_.data() + c * block_frames;
+    }
 
     bus_storage_.resize(static_cast<std::size_t>(block_frames) * bus_.size());
     for (std::size_t i = 0; i < bus_.size(); ++i) {
         bus_[i] = bus_storage_.data() + i * block_frames;
     }
-    master_storage_.resize(static_cast<std::size_t>(block_frames) * 2);
+    master_storage_.resize(static_cast<std::size_t>(block_frames) * kMaxOutputChannels);
+    for (std::size_t c = 0; c < kMaxOutputChannels; ++c) {
+        master_[c] = master_storage_.data() + c * block_frames;
+    }
 }
 
-void Mixer::prepare(uint32_t sample_rate, uint32_t channels) {
+void Mixer::prepare(uint32_t sample_rate, uint32_t channels, const Speaker* device_speakers) {
     sample_rate_ = sample_rate;
-    channels_ = channels;
+    channels_ = std::min(channels, kMaxOutputChannels);
+    const std::array<Speaker, kMaxOutputChannels> standard = steam_layout(channels_);
+    device_map_ = map_to_device(channels_, device_speakers != nullptr ? device_speakers : standard.data());
     smooth_frames_ = std::max(1u, static_cast<uint32_t>(std::lround(kSmoothSeconds * sample_rate)));
     declick_step_ = 1.0f / static_cast<float>(std::max(1L, std::lround(kDeclickSeconds * sample_rate)));
     block_period_ns_ = static_cast<uint64_t>(1e9 * block_frames_ / sample_rate);
@@ -89,7 +95,7 @@ void Mixer::prepare(uint32_t sample_rate, uint32_t channels) {
     block_read_ = block_frames_;  // empty: the next render() starts a block
 
     // New effect sets for the new rate: every voice re-acquires one on its next block.
-    spatial_.prepare(sample_rate, block_frames_);
+    spatial_.prepare(sample_rate, block_frames_, channels_);
     for (uint32_t i = 0; i < active_count_; ++i) {
         RenderVoice& v = slots_[active_[i]].render;
         v.effect_set = -1;
@@ -138,9 +144,9 @@ void Mixer::render_block() noexcept {
         virtual_count += slots_[active_[i]].render.is_virtual ? 1u : 0u;
     }
 
-    float* master_l = master_storage_.data();
-    float* master_r = master_storage_.data() + frames;
-    std::fill(master_l, master_l + 2 * static_cast<std::size_t>(frames), 0.0f);
+    // Buses -> master (all output channels, engine order) -> master gain -> linked limiter.
+    const uint32_t channels = channels_;
+    std::fill(master_storage_.begin(), master_storage_.begin() + static_cast<std::ptrdiff_t>(frames) * channels, 0.0f);
     float* gain = gain_buf_.data();
     for (std::size_t b = 0; b < VSA_BUS_COUNT; ++b) {
         if (!bus_used_[b]) {
@@ -148,32 +154,35 @@ void Mixer::render_block() noexcept {
             continue;
         }
         bus_gain_[b].render(gain, frames);
-        const float* bl = bus_[2 * b];
-        const float* br = bus_[2 * b + 1];
-        for (uint32_t j = 0; j < frames; ++j) {
-            master_l[j] += bl[j] * gain[j];
-            master_r[j] += br[j] * gain[j];
+        for (uint32_t c = 0; c < channels; ++c) {
+            const float* in = bus_[b * kMaxOutputChannels + c];
+            float* sum = master_[c];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += in[j] * gain[j];
+            }
         }
     }
     master_gain_.render(gain, frames);
-    for (uint32_t j = 0; j < frames; ++j) {
-        master_l[j] *= gain[j];
-        master_r[j] *= gain[j];
+    for (uint32_t c = 0; c < channels; ++c) {
+        float* x = master_[c];
+        for (uint32_t j = 0; j < frames; ++j) {
+            x[j] *= gain[j];
+        }
     }
 
-    const float limiter_gain = limiter_.process(master_l, master_r, frames);
+    const float limiter_gain = limiter_.process(master_.data(), channels, frames);
 
+    // Interleave into the device's channel order.
     float* out = block_out_.data();
-    if (channels_ == 2) {
-        for (uint32_t j = 0; j < frames; ++j) {
-            out[2 * j] = master_l[j];
-            out[2 * j + 1] = master_r[j];
+    std::fill(block_out_.begin(), block_out_.end(), 0.0f);
+    for (uint32_t c = 0; c < channels; ++c) {
+        const int d = device_map_[c];
+        if (d < 0) {
+            continue;
         }
-    } else {
-        std::fill(block_out_.begin(), block_out_.end(), 0.0f);
+        const float* x = master_[c];
         for (uint32_t j = 0; j < frames; ++j) {
-            out[static_cast<std::size_t>(j) * channels_] = master_l[j];
-            out[static_cast<std::size_t>(j) * channels_ + 1] = master_r[j];
+            out[static_cast<std::size_t>(j) * channels + static_cast<std::size_t>(d)] = x[j];
         }
     }
 
@@ -573,11 +582,13 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
     }
 
     const std::size_t b = s.bus;
-    float* bl = bus_[2 * b];
-    float* br = bus_[2 * b + 1];
+    float* const* bus = &bus_[b * kMaxOutputChannels];
+    float* bl = bus[0];
+    float* br = bus[1];
     if (!bus_used_[b]) {
-        std::fill(bl, bl + frames, 0.0f);
-        std::fill(br, br + frames, 0.0f);
+        for (uint32_t c = 0; c < channels_; ++c) {
+            std::fill(bus[c], bus[c] + frames, 0.0f);
+        }
         bus_used_[b] = true;
     }
 
@@ -595,13 +606,16 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         if (v.shelf.active()) {
             v.shelf.process(left, frames, 0);
         }
-        spatial_.render(v.effect_set, v.binaural ? VSA_RENDER_HEADPHONES : VSA_RENDER_SPEAKERS, params, left,
-                        spatial_out_[0], spatial_out_[1]);
-        const float* sl = spatial_out_[0];
-        const float* sr = spatial_out_[1];
-        for (uint32_t j = 0; j < frames; ++j) {
-            bl[j] += sl[j];
-            br[j] += sr[j];
+        // Binaural goes to the front pair; panning covers the whole output layout.
+        const vsa_render_mode mode = v.binaural ? VSA_RENDER_HEADPHONES : VSA_RENDER_SPEAKERS;
+        spatial_.render(v.effect_set, mode, params, left, spatial_out_.data());
+        const uint32_t count = v.binaural ? 2u : spatial_.speaker_channels();
+        for (uint32_t c = 0; c < count; ++c) {
+            const float* in = spatial_out_[c];
+            float* sum = bus[c];
+            for (uint32_t j = 0; j < frames; ++j) {
+                sum[j] += in[j];
+            }
         }
         return;
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/channel_layout.hpp"
 #include "audio/spatial.hpp"
 #include "audio/voice.hpp"
 #include "core/latest_value.hpp"
@@ -65,7 +66,9 @@ public:
     /// Sets the output format and resets the limiter, the spatial effects and the output FIFO.
     /// Allocates; must not run while anything renders. Voices, buses and gains are kept. Must be
     /// called once before the first render.
-    void prepare(uint32_t sample_rate, uint32_t channels);
+    /// `device_speakers` (channels entries) is the device's channel order; null = the engine's own
+    /// order (Steam Audio's: stereo, quad, 5.1, 7.1), as for the offline output.
+    void prepare(uint32_t sample_rate, uint32_t channels, const Speaker* device_speakers = nullptr);
 
     /// Produces `frames` interleaved frames of any count: whole engine blocks are rendered as
     /// needed and buffered (the FIFO adapter between fixed blocks and device periods). `hook`
@@ -156,14 +159,16 @@ private:
     std::vector<float> voice_storage_;
     float* voice_out_[2] = {};
     std::vector<float> spatial_storage_;
-    float* spatial_out_[2] = {};
+    std::array<float*, kMaxOutputChannels> spatial_out_{};
     std::vector<float> gain_buf_;
     std::vector<float> bus_storage_;
-    std::array<float*, VSA_BUS_COUNT * 2> bus_{};
+    std::array<float*, VSA_BUS_COUNT * kMaxOutputChannels> bus_{};
     std::array<bool, VSA_BUS_COUNT> bus_used_{};
     std::array<dsp::GainRamp, VSA_BUS_COUNT> bus_gain_{};
     dsp::GainRamp master_gain_;
     std::vector<float> master_storage_;
+    std::array<float*, kMaxOutputChannels> master_{};
+    std::array<int, kMaxOutputChannels> device_map_{};
     dsp::Limiter limiter_;
 
     // Output FIFO: one interleaved block.

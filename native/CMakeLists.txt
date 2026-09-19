@@ -39,6 +39,7 @@ add_library(vsaudio_core STATIC
     src/engine.hpp
     src/audio/asset.cpp
     src/audio/asset.hpp
+    src/audio/channel_layout.hpp
     src/audio/mixer.cpp
     src/audio/mixer.hpp
     src/audio/spatial.cpp
