@@ -1,0 +1,22 @@
+{
+  "$comment": "Single source of truth for fetched dependencies. Read by scripts/fetch-deps.sh and scripts/fetch-deps.ps1. Keep VERSIONS.md in sync.",
+  "dependencies": [
+    {
+      "name": "steamaudio",
+      "version": "4.8.1",
+      "url": "https://github.com/ValveSoftware/steam-audio/releases/download/v4.8.1/steamaudio_4.8.1.zip",
+      "sha256": "4a0aa5ec1176f38f0b0993a37c2259d9e86f27e22d5e24f83ec4c3cb9a1d5449",
+      "kind": "zip",
+      "archiveRoot": "steamaudio",
+      "destination": "third_party/steamaudio"
+    },
+    {
+      "name": "doctest",
+      "version": "2.4.12",
+      "url": "https://raw.githubusercontent.com/doctest/doctest/v2.4.12/doctest/doctest.h",
+      "sha256": "94029a7d32da24a56249658147dbd2b33ff0b9ed665295cbbaf19aafff5b0ced",
+      "kind": "file",
+      "destination": "third_party/doctest/doctest/doctest.h"
+    }
+  ]
+}

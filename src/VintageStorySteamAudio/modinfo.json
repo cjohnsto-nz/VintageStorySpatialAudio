@@ -1,0 +1,14 @@
+{
+  "type": "code",
+  "modid": "vssteamaudio",
+  "name": "Steam Audio",
+  "authors": [ "chrisunfocused" ],
+  "description": "Replaces Vintage Story's audio engine with Steam Audio: physically based occlusion, transmission, reflections, reverb and pathing from real world geometry, with HRTF, surround and Windows Spatial Audio output.",
+  "version": "0.1.0",
+  "side": "Client",
+  "requiredOnClient": false,
+  "requiredOnServer": false,
+  "dependencies": {
+    "game": "1.22.0"
+  }
+}

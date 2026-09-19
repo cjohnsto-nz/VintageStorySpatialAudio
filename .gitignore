@@ -1,0 +1,29 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.idea/
+*.DotSettings.user
+TestResults/
+
+# Native
+/native/build/
+/native/out/
+CMakeUserPresets.json
+compile_commands.json
+
+# Fetched third-party SDKs (see scripts/fetch-deps.*; hashes pinned in third_party/deps.json)
+/third_party/steamaudio/
+/third_party/doctest/
+/third_party/.downloads/
+
+# Packaging output
+/artifacts/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+*.log

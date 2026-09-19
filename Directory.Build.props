@@ -1,0 +1,43 @@
+<Project>
+  <!--
+    Shared build settings for every .NET project in the repo.
+
+    Game path resolution (first match wins):
+      1. -p:VintageStoryPath=... on the command line
+      2. VINTAGE_STORY environment variable
+      3. Platform default install locations
+    The folder must contain VintagestoryAPI.dll. CI points this at the extracted
+    dedicated-server package for the targeted game version.
+  -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <RepoRoot>$(MSBuildThisFileDirectory)</RepoRoot>
+    <NativeArtifactsDir>$(RepoRoot)artifacts/native/</NativeArtifactsDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(VintageStoryPath)' == '' and '$(VINTAGE_STORY)' != ''">
+    <VintageStoryPath>$(VINTAGE_STORY)</VintageStoryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(VintageStoryPath)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">
+    <VintageStoryPath Condition="Exists('$(APPDATA)\Vintagestory\VintagestoryAPI.dll')">$(APPDATA)\Vintagestory</VintageStoryPath>
+    <VintageStoryPath Condition="'$(VintageStoryPath)' == '' and Exists('$(ProgramFiles)\Vintagestory\VintagestoryAPI.dll')">$(ProgramFiles)\Vintagestory</VintageStoryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(VintageStoryPath)' == '' and $([MSBuild]::IsOSPlatform('Linux'))">
+    <VintageStoryPath Condition="Exists('$(HOME)/.local/share/vintagestory/VintagestoryAPI.dll')">$(HOME)/.local/share/vintagestory</VintageStoryPath>
+    <VintageStoryPath Condition="'$(VintageStoryPath)' == '' and Exists('/usr/share/vintagestory/VintagestoryAPI.dll')">/usr/share/vintagestory</VintageStoryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(VintageStoryPath)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">
+    <VintageStoryPath Condition="Exists('/Applications/Vintage Story.app/Contents/Resources/VintagestoryAPI.dll')">/Applications/Vintage Story.app/Contents/Resources</VintageStoryPath>
+  </PropertyGroup>
+
+  <Target Name="VsaCheckGamePath" BeforeTargets="ResolveAssemblyReferences" Condition="'$(RequiresVintageStory)' == 'true'">
+    <Error Condition="'$(VintageStoryPath)' == '' or !Exists('$(VintageStoryPath)/VintagestoryAPI.dll')"
+           Text="Vintage Story not found. Set the VINTAGE_STORY environment variable (or -p:VintageStoryPath=...) to the folder containing VintagestoryAPI.dll. Tried: '$(VintageStoryPath)'." />
+  </Target>
+</Project>
