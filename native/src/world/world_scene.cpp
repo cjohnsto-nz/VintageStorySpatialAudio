@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <tuple>
 #include <cstdio>
 #include <fstream>
 #include <iomanip>
@@ -414,6 +416,109 @@ std::vector<ChunkKey> WorldScene::chunk_keys() const {
         }
     }
     return keys;
+}
+
+bool WorldScene::raycast(const float origin[3], const float direction[3], float max_distance, RayHit& hit) const {
+    const double dir[3] = {static_cast<double>(direction[0]), static_cast<double>(direction[1]),
+                           static_cast<double>(direction[2])};
+    const double len = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    if (!(len > 1e-9) || !(max_distance > 0.0f)) {
+        return false;
+    }
+    const double o[3] = {static_cast<double>(origin[0]), static_cast<double>(origin[1]), static_cast<double>(origin[2])};
+    const double d[3] = {dir[0] / len, dir[1] / len, dir[2] / len};
+
+    std::vector<std::tuple<ChunkKey, std::shared_ptr<const ChunkMesh>, int>> meshes;
+    int32_t scene_origin[3];
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& [key, chunk] : chunks_) {
+            if (chunk.built) {
+                meshes.emplace_back(key, chunk.built->mesh, chunk.built->lod);
+            }
+        }
+        std::copy_n(origin_, 3, scene_origin);
+    }
+
+    double best = static_cast<double>(max_distance);
+    bool found = false;
+    for (const auto& [key, mesh, lod] : meshes) {
+        // Chunk bounds in scene coordinates: skip chunks the ray misses (slab test).
+        const double lo[3] = {static_cast<double>(static_cast<int64_t>(key.x) * kChunkSize - scene_origin[0]),
+                              static_cast<double>(static_cast<int64_t>(key.y) * kChunkSize - scene_origin[1]),
+                              static_cast<double>(static_cast<int64_t>(key.z) * kChunkSize - scene_origin[2])};
+        double t0 = 0.0;
+        double t1 = best;
+        for (int a = 0; a < 3 && t0 <= t1; ++a) {
+            if (std::abs(d[a]) < 1e-12) {
+                if (o[a] < lo[a] || o[a] > lo[a] + kChunkSize) {
+                    t0 = 1.0;
+                    t1 = 0.0;
+                }
+                continue;
+            }
+            double ta = (lo[a] - o[a]) / d[a];
+            double tb = (lo[a] + kChunkSize - o[a]) / d[a];
+            if (ta > tb) {
+                std::swap(ta, tb);
+            }
+            t0 = std::max(t0, ta);
+            t1 = std::min(t1, tb);
+        }
+        if (t0 > t1) {
+            continue;
+        }
+        // Möller–Trumbore against every triangle, in chunk-local coordinates.
+        const double lo_ray[3] = {o[0] - lo[0], o[1] - lo[1], o[2] - lo[2]};
+        for (std::size_t t = 0; t < mesh->triangle_count(); ++t) {
+            const auto vertex = [&](int k, int axis) {
+                return static_cast<double>(
+                    mesh->vertices[static_cast<std::size_t>(mesh->triangles[t * 3 + static_cast<std::size_t>(k)]) * 3 +
+                                   static_cast<std::size_t>(axis)]);
+            };
+            const double e1[3] = {vertex(1, 0) - vertex(0, 0), vertex(1, 1) - vertex(0, 1), vertex(1, 2) - vertex(0, 2)};
+            const double e2[3] = {vertex(2, 0) - vertex(0, 0), vertex(2, 1) - vertex(0, 1), vertex(2, 2) - vertex(0, 2)};
+            const double p[3] = {d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]};
+            const double det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+            if (std::abs(det) < 1e-12) {
+                continue;
+            }
+            const double inv = 1.0 / det;
+            const double s[3] = {lo_ray[0] - vertex(0, 0), lo_ray[1] - vertex(0, 1), lo_ray[2] - vertex(0, 2)};
+            const double u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) * inv;
+            if (u < 0.0 || u > 1.0) {
+                continue;
+            }
+            const double q[3] = {s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0]};
+            const double v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) * inv;
+            if (v < 0.0 || u + v > 1.0) {
+                continue;
+            }
+            const double dist = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+            if (dist <= 1e-6 || dist >= best) {
+                continue;
+            }
+            best = dist;
+            found = true;
+            double n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+            const double nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            for (int a = 0; a < 3; ++a) {
+                n[a] /= nl;
+                hit.point[a] = static_cast<float>(o[a] + d[a] * dist);
+                hit.normal[a] = static_cast<float>(n[a]);
+                // The source block sits just behind the surface's front.
+                const double world = o[a] + d[a] * dist - n[a] * 0.01 + scene_origin[a];
+                hit.cell[a] = static_cast<int32_t>(std::floor(world));
+            }
+            hit.distance = static_cast<float>(dist);
+            hit.chunk = key;
+            hit.triangle = static_cast<uint32_t>(t);
+            hit.material = mesh->materials[t];
+            hit.lod = lod;
+            hit.from_partial = t >= mesh->first_partial_triangle;
+        }
+    }
+    return found;
 }
 
 std::size_t WorldScene::material_count() const {

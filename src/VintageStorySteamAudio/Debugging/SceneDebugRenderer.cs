@@ -44,8 +44,13 @@ internal sealed class SceneDebugRenderer : IRenderer
     private readonly Vec4f fullColor = new(0.3f, 1f, 0.3f, 0.8f);
     private readonly Vec4f coarseColor = new(0.3f, 0.6f, 1f, 0.6f);
     private readonly Vec4f emptyColor = new(0.6f, 0.6f, 0.6f, 0.35f);
+    private readonly Vec4f probeColor = new(1f, 0.9f, 0.1f, 1f);
+    private readonly Vec4f probeFill = new(1f, 1f, 1f, 0.55f);
     private long nextRefresh;
     private bool disposed;
+    private SceneRayHit? probe;
+    private MeshRef? probeLines;
+    private MeshRef? probeFace;
 
     public SceneDebugRenderer(ICoreClientAPI capi, AudioEngine engine, Func<MaterialTable?> materials, Func<ChunkKey?> centre)
     {
@@ -67,6 +72,48 @@ internal sealed class SceneDebugRenderer : IRenderer
 
     /// <summary>Triangles currently shown (for the HUD).</summary>
     public long TrianglesShown { get; private set; }
+
+    /// <summary>The ray probe's hit, highlighted: the triangle it hit and the block that produced it.</summary>
+    public void SetProbe(SceneRayHit? hit)
+    {
+        if (hit is not null && probe is not null && hit.Chunk == probe.Chunk && hit.Triangle == probe.Triangle && probeLines is not null)
+        {
+            probe = hit;
+            return;
+        }
+
+        probeLines?.Dispose();
+        probeFace?.Dispose();
+        probeLines = null;
+        probeFace = null;
+        probe = hit;
+        if (hit is null || engine.GetChunkMesh(hit.Chunk.X, hit.Chunk.Y, hit.Chunk.Z) is not { } mesh || hit.Triangle * 3 + 2 >= mesh.Triangles.Length)
+        {
+            return;
+        }
+
+        var lines = new MeshData(6, 6, withNormals: false, withUv: false, withRgba: true, withFlags: true);
+        lines.SetMode(EnumDrawMode.Lines);
+        var face = new MeshData(3, 3, withNormals: false, withUv: false, withRgba: true, withFlags: true);
+        face.SetMode(EnumDrawMode.Triangles);
+        int yellow = ToRgba(unchecked((int)0xFFFFE619), 255);
+        for (int k = 0; k < 3; k++)
+        {
+            int a = mesh.Triangles[(hit.Triangle * 3) + k] * 3;
+            int b = mesh.Triangles[(hit.Triangle * 3) + ((k + 1) % 3)] * 3;
+            lines.AddVertexSkipTex(mesh.Vertices[a], mesh.Vertices[a + 1], mesh.Vertices[a + 2], yellow);
+            lines.AddIndex(lines.VerticesCount - 1);
+            lines.AddVertexSkipTex(mesh.Vertices[b], mesh.Vertices[b + 1], mesh.Vertices[b + 2], yellow);
+            lines.AddIndex(lines.VerticesCount - 1);
+            face.AddVertexSkipTex(mesh.Vertices[a], mesh.Vertices[a + 1], mesh.Vertices[a + 2], ToRgba(unchecked((int)0xFFFFE619), 120));
+            face.AddIndex(face.VerticesCount - 1);
+        }
+
+        lines.Flags = Enumerable.Repeat(512, lines.VerticesCount).ToArray();
+        face.Flags = Enumerable.Repeat(512, face.VerticesCount).ToArray();
+        probeLines = capi.Render.UploadMesh(lines);
+        probeFace = capi.Render.UploadMesh(face);
+    }
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
@@ -129,6 +176,42 @@ internal sealed class SceneDebugRenderer : IRenderer
         }
 
         TrianglesShown = shown;
+        RenderProbe(camera, program);
+    }
+
+    private void RenderProbe(Vec3d camera, IShaderProgram program)
+    {
+        if (probe is not { } hit)
+        {
+            return;
+        }
+
+        // The block that produced the surface, then the triangle itself.
+        box.Render(capi, hit.Cell.X - 0.002, hit.Cell.Y - 0.002, hit.Cell.Z - 0.002, 1.004f, 1.004f, 1.004f, 3f, probeColor);
+        if (probeLines is null)
+        {
+            return;
+        }
+
+        double ox = hit.Chunk.X * (double)VsaNative.ChunkSize;
+        double oy = hit.Chunk.Y * (double)VsaNative.ChunkSize;
+        double oz = hit.Chunk.Z * (double)VsaNative.ChunkSize;
+        matrix.Identity().Set(capi.Render.CameraMatrixOrigin).Translate(ox - camera.X, oy - camera.Y, oz - camera.Z);
+        program.Use();
+        capi.Render.GLEnableDepthTest();
+        capi.Render.GLDepthMask(on: false);
+        capi.Render.GlToggleBlend(blend: true);
+        program.Uniform("origin", 0f, 0f, 0f);
+        program.UniformMatrix("projectionMatrix", capi.Render.CurrentProjectionMatrix);
+        program.UniformMatrix("modelViewMatrix", matrix.Values);
+        program.Uniform("colorIn", probeFill);
+        capi.Render.RenderMesh(probeFace);
+        capi.Render.LineWidth = 3f;
+        program.Uniform("colorIn", white);
+        capi.Render.RenderMesh(probeLines);
+        capi.Render.LineWidth = 1.6f;
+        program.Stop();
+        capi.Render.GLDepthMask(on: true);
     }
 
     public void Dispose()
@@ -140,6 +223,7 @@ internal sealed class SceneDebugRenderer : IRenderer
 
         disposed = true;
         Clear();
+        SetProbe(null);
         box.Dispose();
     }
 

@@ -78,6 +78,8 @@ Phases 2 and 3 are merged into `main` (not pushed; Linux and macOS CI deferred t
 - The wireframe is the mesh read back from the engine (exactly what Steam Audio has), coloured by material, and uses the game's own wireframe shader. Chunk bounds are green for full detail, blue for coarse and grey for empty.
 - A HUD panel shows scene stats (chunks, triangles, memory, meshing and commit times), streaming state, the origin, and the acoustic material of the block under the crosshair.
 - `.steamaudio scene` takes `status | wire | faces | bounds | off | radius N | legend | export | reload`. `export` writes an OBJ + MTL to the Logs folder.
+- **Ray probe** (whenever the overlay is on): a ray from the camera along the view, tested against the scene's meshes as submitted (`vsa_scene_raycast`, native, Möller–Trumbore per chunk). The hit triangle and the block that produced it are highlighted in yellow. The HUD gives distance, material, whether it came from a whole cell's face or a partial block's box, the chunk and triangle, and the game block at that cell (code, class, block material, block entity, fluid, and a multi-block filler's control block).
+- The probe's first catch: a door's upper half is a `BlockMultiblock` filler, whose static collision box is a full cube, so it had become a solid wooden block. Fillers (`IMultiblockOffset`) are now dynamic: their real boxes come from the door, and their material from its control block.
 
 ### To check in game (Chris)
 

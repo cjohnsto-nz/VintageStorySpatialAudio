@@ -706,6 +706,34 @@ VSA_API vsa_result VSA_CALL vsa_scene_get_chunk_mesh(vsa_engine* engine, int32_t
 VSA_API vsa_result VSA_CALL vsa_scene_list_chunks(vsa_engine* engine, int32_t* out, uint32_t capacity,
                                                   uint32_t* out_count);
 
+/** A ray's first hit on the scene's meshes (debugging: exactly the geometry Steam Audio has). */
+typedef struct vsa_ray_hit {
+    uint32_t struct_size;
+    /** Out: non-zero if something was hit within the distance. */
+    uint32_t hit;
+    float distance;
+    /** Scene coordinates (relative to the origin). */
+    float point[3];
+    /** The surface's front: its open side. */
+    float normal[3];
+    int32_t chunk[3];
+    /** Index into the chunk's mesh (vsa_scene_get_chunk_mesh). */
+    uint32_t triangle;
+    uint32_t material;
+    /** Non-zero: a partial block's box; zero: the face of a whole cell. */
+    uint32_t from_partial;
+    /** World block position that produced the surface (the cell just behind it). */
+    int32_t cell[3];
+    uint32_t lod;
+} vsa_ray_hit;
+
+/**
+ * Casts a ray (scene coordinates; the direction need not be normalised) against the meshed
+ * scene and reports the first hit within `max_distance`, from either side of a triangle.
+ */
+VSA_API vsa_result VSA_CALL vsa_scene_raycast(vsa_engine* engine, const float origin[3], const float direction[3],
+                                              float max_distance, vsa_ray_hit* hit);
+
 /** Writes the scene as an OBJ file (plus .mtl) in world block coordinates. UTF-8 path. */
 VSA_API vsa_result VSA_CALL vsa_scene_save_obj(vsa_engine* engine, const char* path);
 

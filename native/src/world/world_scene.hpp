@@ -32,6 +32,19 @@ struct AcousticMaterial {
     float attenuation_db_per_metre[3] = {0.0f, 0.0f, 0.0f};
 };
 
+/// A ray's first hit on the scene's meshes (see WorldScene::raycast).
+struct RayHit {
+    float distance = 0.0f;
+    float point[3] = {};   // scene coordinates (relative to the origin)
+    float normal[3] = {};  // the surface's front (the open side)
+    ChunkKey chunk;
+    uint32_t triangle = 0;
+    uint16_t material = 0;
+    int lod = 0;
+    bool from_partial = false;   // a partial block's box, else a whole cell's face
+    int32_t cell[3] = {};        // world block that produced the surface (just behind it)
+};
+
 struct SceneStats {
     uint32_t chunks = 0;          // chunks the scene holds (voxels)
     uint32_t meshed_chunks = 0;   // with geometry in the Steam Audio scene
@@ -87,6 +100,9 @@ public:
     /// chunk and one material per acoustic material. Throws vsa::Error on I/O failure.
     void save_obj(const std::string& path) const;
     [[nodiscard]] std::vector<AcousticMaterial> materials() const;
+    /// The first triangle of the meshed scene a ray hits (scene coordinates), for debugging:
+    /// exactly the geometry Steam Audio has. Either side of a triangle counts.
+    [[nodiscard]] bool raycast(const float origin[3], const float direction[3], float max_distance, RayHit& hit) const;
     [[nodiscard]] std::size_t material_count() const;
 
     /// The top-level Steam Audio scene. A simulator using it must hold scene_lock() while it

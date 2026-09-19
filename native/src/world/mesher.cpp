@@ -165,6 +165,7 @@ ChunkMesh Mesher::mesh(const ChunkVoxels& chunk, const Neighbours& neighbours, i
         }
     }
 
+    mesh.first_partial_triangle = mesh.triangle_count();
     if (lod == 0) {
         for (const PartialBlock& block : chunk.partials) {
             if (kind(block.material) == MaterialKind::Air) {

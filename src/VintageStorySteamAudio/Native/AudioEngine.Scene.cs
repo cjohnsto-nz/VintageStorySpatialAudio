@@ -96,6 +96,27 @@ public sealed record SceneStats(
     (int X, int Y, int Z) Origin,
     int MaterialCount);
 
+/// <summary>A ray's first hit on the acoustic scene.</summary>
+/// <param name="Distance">Metres along the ray.</param>
+/// <param name="Point">Scene coordinates (relative to the origin).</param>
+/// <param name="Normal">The surface's front (its open side).</param>
+/// <param name="Chunk">The chunk whose mesh was hit.</param>
+/// <param name="Triangle">Index into that chunk's mesh.</param>
+/// <param name="Material">Acoustic material id.</param>
+/// <param name="FromPartial">A partial block's box rather than a whole cell's face.</param>
+/// <param name="Cell">World block that produced the surface.</param>
+/// <param name="Lod">The chunk's level of detail.</param>
+public sealed record SceneRayHit(
+    float Distance,
+    (float X, float Y, float Z) Point,
+    (float X, float Y, float Z) Normal,
+    (int X, int Y, int Z) Chunk,
+    int Triangle,
+    ushort Material,
+    bool FromPartial,
+    (int X, int Y, int Z) Cell,
+    int Lod);
+
 /// <summary>A chunk's mesh as submitted to Steam Audio, in chunk-local block units.</summary>
 public sealed record ChunkMeshData(int Lod, uint Version, float[] Vertices, int[] Triangles, ushort[] Materials);
 
@@ -283,6 +304,31 @@ public sealed partial class AudioEngine
         }
 
         return result;
+    }
+
+    /// <summary>The first surface of the acoustic scene along a ray (scene coordinates), or null.</summary>
+    public unsafe SceneRayHit? RaycastScene((float X, float Y, float Z) origin, (float X, float Y, float Z) direction, float maxDistance)
+    {
+        using Lease lease = new(handle);
+        var hit = new VsaRayHit { StructSize = (uint)sizeof(VsaRayHit) };
+        float* o = stackalloc float[3] { origin.X, origin.Y, origin.Z };
+        float* d = stackalloc float[3] { direction.X, direction.Y, direction.Z };
+        NativeException.ThrowIfFailed(VsaNative.SceneRaycast(lease.Engine, o, d, maxDistance, ref hit), "vsa_scene_raycast");
+        if (hit.Hit == 0)
+        {
+            return null;
+        }
+
+        return new SceneRayHit(
+            hit.Distance,
+            (hit.Point[0], hit.Point[1], hit.Point[2]),
+            (hit.Normal[0], hit.Normal[1], hit.Normal[2]),
+            (hit.Chunk[0], hit.Chunk[1], hit.Chunk[2]),
+            (int)hit.Triangle,
+            (ushort)hit.Material,
+            hit.FromPartial != 0,
+            (hit.Cell[0], hit.Cell[1], hit.Cell[2]),
+            (int)hit.Lod);
     }
 
     /// <summary>Writes the scene as OBJ + MTL in world block coordinates.</summary>

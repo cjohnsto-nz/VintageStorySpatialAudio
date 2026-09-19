@@ -413,6 +413,22 @@ internal unsafe struct VsaChunkMesh
     public ushort* Materials;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct VsaRayHit
+{
+    public uint StructSize;
+    public uint Hit;
+    public float Distance;
+    public fixed float Point[3];
+    public fixed float Normal[3];
+    public fixed int Chunk[3];
+    public uint Triangle;
+    public uint Material;
+    public uint FromPartial;
+    public fixed int Cell[3];
+    public uint Lod;
+}
+
 internal static unsafe partial class VsaNative
 {
     public const int ChunkSize = 32;
@@ -583,6 +599,10 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_scene_list_chunks")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult SceneListChunks(nint engine, int* keys, uint capacity, out uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_scene_raycast")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult SceneRaycast(nint engine, float* origin, float* direction, float maxDistance, ref VsaRayHit hit);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_scene_save_obj")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

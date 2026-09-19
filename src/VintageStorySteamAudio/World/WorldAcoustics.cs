@@ -105,6 +105,38 @@ internal sealed class WorldAcoustics : IDisposable
         tickListener >= 0, streamer.Centre, streamer.DesiredCount, streamer.SentCount, streamer.DirtyCount,
         chunksRead, chunksSent, lastTickMs, maxReadMs, origin, materialSource, blocks?.Materials.Count ?? 0);
 
+    /// <summary>
+    /// What the game has at a block position, for the ray probe: the solid and fluid blocks (code,
+    /// class, block material, block entity), a multi-block filler's control block, and how the
+    /// scene classifies it.
+    /// </summary>
+    public string DescribeCell(BlockPos pos)
+    {
+        IBlockAccessor ba = capi.World.BlockAccessor;
+        Block solid = ba.GetBlock(pos, BlockLayersAccess.Solid);
+        Block fluid = ba.GetBlock(pos, BlockLayersAccess.Fluid);
+        var text = new System.Text.StringBuilder();
+        text.Append(solid.Code).Append(" [").Append(solid.GetType().Name).Append(", ").Append(solid.BlockMaterial);
+        if (!string.IsNullOrEmpty(solid.EntityClass))
+        {
+            text.Append(", entity ").Append(solid.EntityClass);
+        }
+
+        text.Append(']');
+        if (fluid.BlockId != 0)
+        {
+            text.Append(" + fluid ").Append(fluid.Code);
+        }
+
+        if (solid is IMultiblockOffset filler)
+        {
+            BlockPos control = filler.GetControlBlockPos(pos);
+            text.Append(" -> part of ").Append(ba.GetBlock(control).Code).Append(" at ").Append(control.X).Append(',').Append(control.Y).Append(',').Append(control.Z);
+        }
+
+        return text.ToString();
+    }
+
     /// <summary>The acoustic material of the block at a position (as the scene sees it), for the HUD.</summary>
     public string DescribeBlock(BlockPos pos)
     {

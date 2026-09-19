@@ -23,7 +23,11 @@ public enum CellShape : byte
 /// <param name="BlockMaterial">The EnumBlockMaterial name.</param>
 /// <param name="CollisionBoxes">Its collision boxes in block units, or null.</param>
 /// <param name="HasBlockEntity">Whether it has a block entity (its collision may change without the block changing).</param>
-public readonly record struct BlockInfo(string Code, string BlockMaterial, IReadOnlyList<VsaBox>? CollisionBoxes, bool HasBlockEntity);
+/// <param name="DelegatesShape">
+/// Whether its shape belongs to another block: the filler blocks of a multi-block door or gate
+/// (IMultiblockOffset), whose static collision box is a full cube but whose real one is the door's.
+/// </param>
+public readonly record struct BlockInfo(string Code, string BlockMaterial, IReadOnlyList<VsaBox>? CollisionBoxes, bool HasBlockEntity, bool DelegatesShape = false);
 
 /// <summary>A block type's acoustic classification.</summary>
 public readonly record struct BlockAcoustics(ushort Material, CellShape Shape, VsaBox[]? Boxes)
@@ -52,6 +56,11 @@ public static class BlockClassifier
                 return new BlockAcoustics(material, CellShape.Full, null);
             default:
                 break;
+        }
+
+        if (block.DelegatesShape)
+        {
+            return new BlockAcoustics(material, CellShape.Dynamic, null);
         }
 
         IReadOnlyList<VsaBox>? boxes = block.CollisionBoxes;

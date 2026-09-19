@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.MathTools;
 using VintageStorySteamAudio.Native;
 using VintageStorySteamAudio.World;
 
@@ -30,6 +31,7 @@ internal sealed class SceneDebugTools : IDisposable
     private readonly SceneDebugRenderer renderer;
     private readonly SceneHud hud;
     private readonly long hudListener;
+    private SceneRayHit? probe;
     private bool disposed;
 
     public SceneDebugTools(ICoreClientAPI capi, AudioEngine engine, WorldAcoustics world)
@@ -40,7 +42,7 @@ internal sealed class SceneDebugTools : IDisposable
         renderer = new SceneDebugRenderer(capi, engine, () => world.Materials, () => world.Status().Centre);
         capi.Event.RegisterRenderer(renderer, EnumRenderStage.Opaque, "vssteamaudio-scene");
         hud = new SceneHud(capi);
-        hudListener = capi.Event.RegisterGameTickListener(_ => UpdateHud(), 250);
+        hudListener = capi.Event.RegisterGameTickListener(_ => UpdateHud(), 100);
         capi.Input.RegisterHotKey(HotkeyCode, "Steam Audio: cycle the acoustic scene overlay", GlKeys.F7, HotkeyType.DevTool, ctrlPressed: true);
         capi.Input.SetHotKeyHandler(HotkeyCode, _ =>
         {
@@ -58,6 +60,8 @@ internal sealed class SceneDebugTools : IDisposable
         {
             hud.TryClose();
             renderer.Clear();
+            probe = null;
+            renderer.SetProbe(null);
         }
         else
         {
@@ -134,12 +138,50 @@ internal sealed class SceneDebugTools : IDisposable
 
         try
         {
+            UpdateProbe();
             hud.SetText(StatusText());
         }
         catch (NativeException)
         {
             // The engine is shutting down.
         }
+    }
+
+    /// <summary>Casts a ray from the camera along the view into the acoustic scene (what Steam Audio's rays would meet).</summary>
+    private void UpdateProbe()
+    {
+        if (capi.World.Player?.Entity is not { } player)
+        {
+            return;
+        }
+
+        WorldStatus w = world.Status();
+        Vintagestory.API.MathTools.Vec3d camera = player.CameraPos;
+        Vintagestory.API.MathTools.Vec3f view = player.Pos.GetViewVector();
+        probe = engine.RaycastScene(
+            ((float)(camera.X - w.Origin.X), (float)(camera.Y - w.Origin.Y), (float)(camera.Z - w.Origin.Z)),
+            (view.X, view.Y, view.Z),
+            64f);
+        renderer.SetProbe(probe);
+    }
+
+    private string ProbeText()
+    {
+        if (probe is not { } hit)
+        {
+            return "Acoustic ray: nothing within 64 m";
+        }
+
+        string material = world.Materials?.NameOf(hit.Material) ?? hit.Material.ToString(CultureInfo.InvariantCulture);
+        string source = hit.FromPartial ? "a partial block's box" : "a whole block's face";
+        string facing = Math.Abs(hit.Normal.Y) > 0.5f ? (hit.Normal.Y > 0 ? "up" : "down")
+            : Math.Abs(hit.Normal.X) > 0.5f ? (hit.Normal.X > 0 ? "east" : "west")
+            : hit.Normal.Z > 0 ? "south" : "north";
+        var cell = new BlockPos(hit.Cell.X, hit.Cell.Y, hit.Cell.Z);
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"Acoustic ray: {hit.Distance:0.00} m, {material}, {source} facing {facing}; chunk {hit.Chunk.X},{hit.Chunk.Y},{hit.Chunk.Z} triangle {hit.Triangle}{(hit.Lod > 0 ? " (coarse ring)" : string.Empty)}\n" +
+            $"  made by block {hit.Cell.X},{hit.Cell.Y},{hit.Cell.Z}: {world.DescribeCell(cell)}");
     }
 
     private string StatusText()
@@ -155,8 +197,10 @@ internal sealed class SceneDebugTools : IDisposable
             .Append(CultureInfo.InvariantCulture, $"Materials: {w.MaterialCount} from {w.MaterialSource}");
         if (capi.World.Player?.CurrentBlockSelection?.Position is { } pos)
         {
-            text.Append("\nLooking at: ").Append(world.DescribeBlock(pos));
+            text.Append("\nGame selection: ").Append(world.DescribeBlock(pos));
         }
+
+        text.Append('\n').Append(ProbeText());
 
         return text.ToString();
     }

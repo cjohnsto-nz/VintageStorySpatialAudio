@@ -151,3 +151,61 @@ TEST_CASE("scene ABI: invalid materials and chunks are rejected") {
     CHECK(vsa_scene_clear(e.engine) == VSA_OK);
     CHECK(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
 }
+
+TEST_CASE("scene ABI: a ray finds the surface, its material, and the block behind it") {
+    OfflineEngine e;
+    const auto table = materials();
+    REQUIRE(vsa_scene_set_materials(e.engine, table.data(), static_cast<uint32_t>(table.size())) == VSA_OK);
+    // Chunk 1000,2,-5 with the origin at its corner: a stone block at local 4,4,4 and a slab at 10,4,4.
+    std::vector<uint16_t> cells(VSA_CHUNK_CELLS, 0);
+    cells[cell(4, 4, 4)] = 1;
+    const vsa_box box{{0.0f, 0.0f, 0.0f}, {1.0f, 0.5f, 1.0f}};
+    const vsa_partial_block slab{static_cast<uint32_t>(cell(10, 4, 4)), 1, 0, 1};
+    vsa_chunk_desc desc = chunk_desc(cells, 1000, 2, -5);
+    desc.partials = &slab;
+    desc.partial_count = 1;
+    desc.boxes = &box;
+    desc.box_count = 1;
+    REQUIRE(vsa_scene_set_origin(e.engine, 32000, 64, -160) == VSA_OK);
+    REQUIRE(vsa_scene_set_chunk(e.engine, &desc) == VSA_OK);
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+
+    vsa_ray_hit hit{};
+    hit.struct_size = sizeof hit;
+    // From above the stone block, straight down: its top at scene y 5.
+    const float down[3] = {0.0f, -1.0f, 0.0f};
+    const float above_stone[3] = {4.5f, 10.0f, 4.5f};
+    REQUIRE(vsa_scene_raycast(e.engine, above_stone, down, 50.0f, &hit) == VSA_OK);
+    REQUIRE(hit.hit == 1);
+    CHECK(static_cast<double>(hit.distance) == doctest::Approx(5.0));
+    CHECK(static_cast<double>(hit.normal[1]) == doctest::Approx(1.0));
+    CHECK(hit.material == 1);
+    CHECK(hit.from_partial == 0);
+    CHECK(hit.cell[0] == 32004);
+    CHECK(hit.cell[1] == 68);
+    CHECK(hit.cell[2] == -156);
+    CHECK(hit.chunk[0] == 1000);
+    CHECK(hit.lod == 0);
+
+    // Onto the slab: its top at scene y 4.5, from a partial block.
+    const float above_slab[3] = {10.5f, 10.0f, 4.5f};
+    REQUIRE(vsa_scene_raycast(e.engine, above_slab, down, 50.0f, &hit) == VSA_OK);
+    REQUIRE(hit.hit == 1);
+    CHECK(static_cast<double>(hit.distance) == doctest::Approx(5.5));
+    CHECK(hit.from_partial == 1);
+    CHECK(hit.cell[0] == 32010);
+    CHECK(hit.cell[1] == 68);
+
+    // Sideways into the stone block's -x face, and a miss beyond the distance.
+    const float west[3] = {1.0f, 0.0f, 0.0f};
+    const float beside[3] = {0.5f, 4.5f, 4.5f};
+    REQUIRE(vsa_scene_raycast(e.engine, beside, west, 50.0f, &hit) == VSA_OK);
+    CHECK(static_cast<double>(hit.distance) == doctest::Approx(3.5));
+    CHECK(static_cast<double>(hit.normal[0]) == doctest::Approx(-1.0));
+    CHECK(hit.cell[0] == 32004);
+    REQUIRE(vsa_scene_raycast(e.engine, beside, west, 3.0f, &hit) == VSA_OK);
+    CHECK(hit.hit == 0);
+    const float nowhere[3] = {0.0f, 0.0f, 0.0f};
+    CHECK(vsa_scene_raycast(e.engine, beside, nowhere, 50.0f, &hit) == VSA_OK);
+    CHECK(hit.hit == 0);
+}

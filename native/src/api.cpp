@@ -43,6 +43,7 @@ static_assert(sizeof(vsa_chunk_desc) == 56 && offsetof(vsa_chunk_desc, materials
 static_assert(sizeof(vsa_scene_stats) == 88 && offsetof(vsa_scene_stats, last_build_ms) == 48 &&
               offsetof(vsa_scene_stats, origin) == 72);
 static_assert(sizeof(vsa_chunk_mesh) == 56 && offsetof(vsa_chunk_mesh, vertices) == 32);
+static_assert(sizeof(vsa_ray_hit) == 76 && offsetof(vsa_ray_hit, triangle) == 48 && offsetof(vsa_ray_hit, cell) == 60);
 static_assert(sizeof(vsa_event) == 32);
 
 struct vsa_engine {
@@ -595,6 +596,36 @@ VSA_API vsa_result VSA_CALL vsa_scene_list_chunks(vsa_engine* engine, int32_t* o
             out[i * 3 + 1] = keys[i].y;
             out[i * 3 + 2] = keys[i].z;
         }
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_raycast(vsa_engine* engine, const float origin[3], const float direction[3],
+                                              float max_distance, vsa_ray_hit* hit) {
+    return guarded([&] {
+        check_out_struct(hit, "vsa_ray_hit");
+        if (origin == nullptr || direction == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "origin and direction must not be null");
+        }
+        vsa::world::RayHit found;
+        const bool any = engine_of(engine).scene().raycast(origin, direction, max_distance, found);
+        vsa_ray_hit out{};
+        out.struct_size = sizeof out;
+        out.hit = any ? 1u : 0u;
+        if (any) {
+            out.distance = found.distance;
+            std::copy_n(found.point, 3, out.point);
+            std::copy_n(found.normal, 3, out.normal);
+            out.chunk[0] = found.chunk.x;
+            out.chunk[1] = found.chunk.y;
+            out.chunk[2] = found.chunk.z;
+            out.triangle = found.triangle;
+            out.material = found.material;
+            out.from_partial = found.from_partial ? 1u : 0u;
+            std::copy_n(found.cell, 3, out.cell);
+            out.lod = static_cast<uint32_t>(found.lod);
+        }
+        *hit = out;
         return VSA_OK;
     });
 }

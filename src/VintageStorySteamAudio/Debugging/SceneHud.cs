@@ -10,7 +10,7 @@ internal sealed class SceneHud : HudElement
     public SceneHud(ICoreClientAPI capi)
         : base(capi)
     {
-        ElementBounds text = ElementBounds.Fixed(EnumDialogArea.None, 0, 0, 560, 150);
+        ElementBounds text = ElementBounds.Fixed(EnumDialogArea.None, 0, 0, 640, 190);
         ElementBounds background = text.ForkBoundingParent(6, 6, 6, 6);
         ElementBounds dialog = ElementStdBounds.AutosizedMainDialog
             .WithAlignment(EnumDialogArea.LeftTop)

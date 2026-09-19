@@ -103,6 +103,10 @@ public sealed class WorldSceneTests
         Assert.Equal(1f, fence.Boxes![0].MaxY);
 
         Assert.Equal(CellShape.Dynamic, BlockClassifier.Classify(new BlockInfo("game:door-oak", "Wood", [new VsaBox(0, 0, 0.875f, 1, 1, 1)], true), table).Shape);
+        // A door's filler block (upper half): its static box is a full cube, but its real shape is the door's.
+        BlockAcoustics filler = BlockClassifier.Classify(new BlockInfo("game:multiblock-monolithic-0-p1-0", "Wood", [unit], false, DelegatesShape: true), table);
+        Assert.Equal(CellShape.Dynamic, filler.Shape);
+
         // A full cube with a block entity (a chest-sized crate) is simply full.
         Assert.Equal(CellShape.Full, BlockClassifier.Classify(new BlockInfo("game:crate", "Wood", [unit], true), table).Shape);
     }

@@ -13,6 +13,8 @@ struct ChunkMesh {
     std::vector<float> vertices;      // x, y, z per vertex
     std::vector<int32_t> triangles;   // three vertex indices per triangle
     std::vector<uint16_t> materials;  // material id per triangle
+    /// Triangles from here on are partial blocks' boxes; before it, faces of whole cells.
+    std::size_t first_partial_triangle = 0;
 
     [[nodiscard]] std::size_t triangle_count() const noexcept { return materials.size(); }
     [[nodiscard]] std::size_t vertex_count() const noexcept { return vertices.size() / 3; }

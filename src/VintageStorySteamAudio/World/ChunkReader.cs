@@ -46,7 +46,8 @@ internal sealed class BlockTable
         block.Code?.ToString() ?? string.Empty,
         block.BlockMaterial.ToString(),
         boxes?.Where(b => b is not null).Select(b => new VsaBox(b.X1, b.Y1, b.Z1, b.X2, b.Y2, b.Z2)).ToArray(),
-        !string.IsNullOrEmpty(block.EntityClass));
+        !string.IsNullOrEmpty(block.EntityClass),
+        block is IMultiblockOffset);
 }
 
 /// <summary>
@@ -140,9 +141,16 @@ internal sealed class ChunkReader(ICoreClientAPI capi)
             BlockAcoustics type = table[blockId];
             pos.Set((key.X * VsaNative.ChunkSize) + (cell % 32), (key.Y * VsaNative.ChunkSize) + (cell / 1024), (key.Z * VsaNative.ChunkSize) + ((cell / 32) % 32));
             Cuboidf[]? boxes = block.GetCollisionBoxes(capi.World.BlockAccessor, pos);
+            if (block is IMultiblockOffset filler)
+            {
+                // Part of a door or gate: its material is the door's.
+                Block control = capi.World.BlockAccessor.GetBlock(filler.GetControlBlockPos(pos));
+                type = control.BlockId != 0 && control is not IMultiblockOffset ? table[control.BlockId] with { Shape = CellShape.Dynamic } : type;
+            }
+
             BlockAcoustics current = boxes is null
                 ? BlockAcoustics.Air
-                : BlockClassifier.Classify(BlockTable.Describe(block, boxes) with { HasBlockEntity = false }, table.Materials);
+                : BlockClassifier.Classify(BlockTable.Describe(block, boxes) with { HasBlockEntity = false, DelegatesShape = false }, table.Materials);
             if (current.Shape == CellShape.Full)
             {
                 materials[cell] = type.Material;
