@@ -121,7 +121,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                     : sceneTools.Command(args[0] as string, args[1] as string)))
             .EndSubCommand()
             .BeginSubCommand("reverb")
-                .WithDescription("Reverb from the world: status, gain N (0-4, 1 = as simulated), rays (show sound paths)")
+                .WithDescription("Reverb from the world: status, gain N (all of it, 0-4, 1 = as simulated), early N (early reflections), tail N (the reverb after them), rays (show sound paths)")
                 .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
                 .HandleWith(args => WithEngine(() => sceneTools is null
                     ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + "): nothing to reflect off."
@@ -314,6 +314,8 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             EngineVersion version = AudioEngine.GetVersion();
             engine = AudioEngine.Create(config.ToEngineOptions(modConfigDirectory), new GameLoggerEngineLog(logger));
             engine.SetReflectionGain(config.ReflectionGainClamped());
+            (float early, float tail) = config.ReflectionMixClamped();
+            engine.SetReflectionMix(early, tail);
             SelfTestResult? selfTest = config.RunSelfTestOnStartup ? engine.RunSelfTest() : null;
             return new StatusReport { Version = version, Engine = engine.Info, SelfTest = selfTest, Verification = verification };
         }

@@ -136,7 +136,7 @@ internal sealed class SceneDebugTools : IDisposable
         }
     }
 
-    /// <summary>".steamaudio reverb [status|gain N|rays]".</summary>
+    /// <summary>".steamaudio reverb [status|gain N|early N|tail N|rays]".</summary>
     public string ReverbCommand(string? action, string? argument)
     {
         switch ((action ?? string.Empty).ToLowerInvariant())
@@ -152,11 +152,21 @@ internal sealed class SceneDebugTools : IDisposable
 
                 engine.SetReflectionGain(gain);
                 return string.Create(CultureInfo.InvariantCulture, $"Reflection gain {gain:0.##} ({20 * Math.Log10(Math.Max(gain, 1e-4f)):0.#} dB).");
+            case "early":
+            case "tail":
+                if (!float.TryParse(argument, NumberStyles.Float, CultureInfo.InvariantCulture, out float part) || !float.IsFinite(part) || part < 0f || part > 4f)
+                {
+                    return $"Usage: .steamaudio reverb {action!.ToLowerInvariant()} <0-4> (1 = as simulated, 0 = off)";
+                }
+
+                bool early = action!.Equals("early", StringComparison.OrdinalIgnoreCase);
+                engine.SetReflectionMix(early ? part : engine.ReflectionEarlyGain, early ? engine.ReflectionTailGain : part);
+                return string.Create(CultureInfo.InvariantCulture, $"Early reflections {engine.ReflectionEarlyGain:0.##}, reverb tail {engine.ReflectionTailGain:0.##}.");
             case "rays":
                 SetOverlay(renderer.Overlay ^ SceneOverlay.Reflections);
                 return $"Overlay: {Describe(renderer.Overlay)}";
             default:
-                return "Usage: .steamaudio reverb [status|gain N|rays]";
+                return "Usage: .steamaudio reverb [status|gain N|early N|tail N|rays]";
         }
     }
 
@@ -266,7 +276,7 @@ internal sealed class SceneDebugTools : IDisposable
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture, $"Reflections: RT60 here {r.ListenerReverbTimes.Low:0.00}/{r.ListenerReverbTimes.Mid:0.00}/{r.ListenerReverbTimes.High:0.00} s ({DescribeSpace(r.ListenerReverbTimes.Mid)}), ")
-            .Append(CultureInfo.InvariantCulture, $"level {r.OutputDb:0} dB, gain {r.Gain:0.##}\n")
+            .Append(CultureInfo.InvariantCulture, $"level {r.OutputDb:0} dB, gain {r.Gain:0.##} (early {engine.ReflectionEarlyGain:0.##}, tail {engine.ReflectionTailGain:0.##})\n")
             .Append(CultureInfo.InvariantCulture, $"  {r.LiveSlots}/{r.Slots} sounds or spots with their own ({r.WaitingSlots} waiting, {r.DrainingSlots} fading); ")
             .Append(CultureInfo.InvariantCulture, $"simulation {r.LastTickMs:0} ms (max {r.MaxTickMs:0}), {r.Rays} rays x {r.Bounces} bounces, {r.DurationSeconds:0.0} s, order {r.Order}, up to {r.RateHz} Hz on {r.Threads} threads");
         if (!detailed && (renderer.Overlay & SceneOverlay.Reflections) == 0)

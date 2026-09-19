@@ -85,6 +85,8 @@ void ReflectionRenderer::prepare(uint32_t sample_rate, uint32_t channels, world:
         }
     }
     silence_.assign(frames_, 0.0f);
+    early_gain_buf_.assign(frames_, 1.0f);
+    tail_gain_buf_.assign(frames_, 1.0f);
     early_storage_.assign(static_cast<std::size_t>(frames_) * channels_, 0.0f);
     for (uint32_t c = 0; c < channels_; ++c) {
         early_out_[c] = early_storage_.data() + static_cast<std::size_t>(c) * frames_;
@@ -110,6 +112,11 @@ void ReflectionRenderer::prepare(uint32_t sample_rate, uint32_t channels, world:
     decoder_ = std::make_unique<SpeakerDecoder>(channels, static_cast<int>(simulator->settings().order));
     meter_alpha_ = static_cast<float>(1.0 - std::exp(-static_cast<double>(frames_) / (kMeterSeconds * sample_rate)));
     simulator_ = simulator;
+}
+
+void ReflectionRenderer::set_mix(float early, float tail, uint32_t frames) noexcept {
+    early_gain_.linear(early, frames);
+    tail_gain_.linear(tail, frames);
 }
 
 void ReflectionRenderer::begin_block() noexcept {
@@ -205,11 +212,12 @@ void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush, bool li
         params.numChannels = static_cast<IPLint32>(channels_);
         params.irSize = static_cast<IPLint32>(early_blocks_ * frames_);
         iplReflectionEffectApply(slot.early.get(), &params, &in_buffer, &out_buffer, nullptr);
+        const float* g = early_gain_buf_.data();
         for (uint32_t c = 0; c < channels_; ++c) {
             const float* x = early_out_[c];
             float* sum = bus_[c];
             for (uint32_t j = 0; j < frames_; ++j) {
-                sum[j] += x[j];
+                sum[j] += x[j] * g[j];
             }
         }
         bus_used_ = true;
@@ -226,6 +234,7 @@ void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush, bool li
                  : static_cast<uint32_t>(std::max(0, slot.delay));
     slot.late_sounding = slot.late.process(in, frames_, slot.reverb_times, slot.eq, predelay, late_out_.data());
     if (slot.late_sounding) {
+        const float* tail = tail_gain_buf_.data();
         for (int k = 0; k < dsp::LateReverb::kOutputs; ++k) {
             const float* x = late_out_[static_cast<std::size_t>(k)];
             const auto& sh = late_sh_[static_cast<std::size_t>(k)];
@@ -233,7 +242,7 @@ void ReflectionRenderer::render_slot(Slot& slot, bool input, bool flush, bool li
                 const float g = sh[c];
                 float* sum = bus_[c];
                 for (uint32_t j = 0; j < frames_; ++j) {
-                    sum[j] += g * x[j];
+                    sum[j] += g * tail[j] * x[j];
                 }
             }
         }
@@ -249,6 +258,8 @@ bool ReflectionRenderer::render(const float* gain) noexcept {
         std::fill(bus_storage_.begin(), bus_storage_.end(), 0.0f);
         bus_used_ = false;
     }
+    early_gain_.render(early_gain_buf_.data(), frames_);
+    tail_gain_.render(tail_gain_buf_.data(), frames_);
     uint32_t live = 0;
     uint32_t waiting = 0;
     uint32_t draining = 0;

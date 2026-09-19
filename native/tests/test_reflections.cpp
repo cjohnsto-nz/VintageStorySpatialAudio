@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <string>
 #include <vector>
 
 using namespace vsa_test;
@@ -436,6 +437,27 @@ TEST_CASE("reflections: the gain scales them") {
     CHECK(stats(e).output_db < on_db - 12.0f);  // the meter falls with a 0.3 s time constant
     CHECK(vsa_engine_set_reflection_gain(e.engine, 5.0f) == VSA_ERROR_INVALID_ARGUMENT);
     CHECK(vsa_engine_set_reflection_gain(e.engine, NAN) == VSA_ERROR_INVALID_ARGUMENT);
+
+    // The two parts separately: the looping voice has early reflections of its own and a tail.
+    REQUIRE(vsa_engine_set_reflection_gain(e.engine, 1.0f) == VSA_OK);
+    e.render(kRate);
+    const float both_db = stats(e).output_db;
+    REQUIRE(vsa_engine_set_reflection_mix(e.engine, 0.0f, 1.0f) == VSA_OK);
+    e.render(kRate);
+    const float tail_db = stats(e).output_db;
+    REQUIRE(vsa_engine_set_reflection_mix(e.engine, 1.0f, 0.0f) == VSA_OK);
+    e.render(kRate);
+    const float early_db = stats(e).output_db;
+    MESSAGE("both " << both_db << " dB, tail only " << tail_db << " dB, early only " << early_db << " dB");
+    // In a small room nearly all the reflected energy comes in the first 0.1 s (a 0.4 s decay
+    // drops 15 dB in it): the early part is most of it.
+    CHECK(tail_db < both_db - 6.0f);
+    CHECK(std::abs(early_db - both_db) < 1.0f);
+    REQUIRE(vsa_engine_set_reflection_mix(e.engine, 0.0f, 0.0f) == VSA_OK);
+    e.render(kRate * 2);
+    CHECK(stats(e).output_db < both_db - 20.0f);
+    CHECK(vsa_engine_set_reflection_mix(e.engine, -1.0f, 1.0f) == VSA_ERROR_INVALID_ARGUMENT);
+    CHECK(vsa_engine_set_reflection_mix(e.engine, 1.0f, 4.5f) == VSA_ERROR_INVALID_ARGUMENT);
 }
 
 TEST_CASE("reflections: settings out of range are refused") {
@@ -483,3 +505,52 @@ TEST_CASE("trace rays: paths stay in a closed room, and leave an open field") {
     }
 }
 
+TEST_CASE("reflections: a strike behind a wall is heard by its reflections, every time alike") {
+    // A 1-block stone wall between the listener and a short sound in a closed room: the direct
+    // path is blocked, the sound goes round. Its first strike makes a spot; every strike after it
+    // has its reflections from the first sample, at much the same level each time.
+    vsa_engine_config config = reflection_config();
+    config.flags = 0;  // the direct simulation too
+    OfflineEngine e(config);
+    set_materials(e);
+    std::vector<uint16_t> cells(VSA_CHUNK_CELLS, Air);
+    for (int y = 1; y <= 8; ++y) {
+        for (int z = 1; z <= 14; ++z) {
+            for (int x = 1; x <= 14; ++x) {
+                const bool shell = x == 1 || x == 14 || y == 1 || y == 8 || z == 1 || z == 14;
+                const bool wall = x == 8 && y >= 2 && y <= 7 && z >= 6 && z <= 10;
+                if (shell || wall) {
+                    cells[cell(x, y, z)] = Stone;
+                }
+            }
+        }
+    }
+    vsa_chunk_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.materials = cells.data();
+    REQUIRE(vsa_scene_set_chunk(e.engine, &desc) == VSA_OK);
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+    e.listener(5.0f, 3.7f, 8.5f, 0.0f, 0.0f, -1.0f);
+    e.render(kRate / 2);
+    const AssetPtr strike = e.pcm(burst(0.05), 1, kRate);
+    std::vector<double> peaks;
+    for (int i = 0; i < 6; ++i) {
+        REQUIRE(vsa_voice_start(e.engine, one_shot(e, strike, 11.5f, 3.5f, 8.5f)) == VSA_OK);
+        double peak = -200.0;
+        for (int k = 0; k < 8; ++k) {
+            e.render(kRate / 16);
+            peak = std::max(peak, static_cast<double>(stats(e).output_db));
+        }
+        e.render(kRate);  // the tail dies away
+        peaks.push_back(peak);
+    }
+    std::string list;
+    for (const double p : peaks) {
+        list += std::to_string(static_cast<int>(std::lround(p))) + " ";
+    }
+    MESSAGE("reflection peaks per strike (dB): " << list);
+    CHECK(peaks[0] < -80.0);  // no spot yet: the listener's reverb, and nothing reaches it directly
+    const auto [lo, hi] = std::minmax_element(peaks.begin() + 1, peaks.end());
+    CHECK(*lo > -60.0);
+    CHECK(*hi - *lo < 3.0);
+}

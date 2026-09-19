@@ -35,6 +35,22 @@ IPLCoordinateSpace3 pose_at(const float origin[3]) {
 // Of the convolved part, the fraction at its end that cross-fades into the parametric tail.
 constexpr float kOverlap = 0.25f;
 
+// Steam Audio averages its runs for as long as the listener and a source stay exactly where they
+// are, and starts afresh the moment either moves at all: the listener and the sources are
+// simulated from where they were until they have moved this far, so the noise of single runs
+// settles while one stands and works.
+constexpr double kHoldMetres = 0.5;
+
+/// Moves `held` to `now` if it is further away than kHoldMetres (or `fresh`).
+void hold(double held[3], const double now[3], bool fresh) {
+    const double dx = now[0] - held[0];
+    const double dy = now[1] - held[1];
+    const double dz = now[2] - held[2];
+    if (fresh || dx * dx + dy * dy + dz * dz > kHoldMetres * kHoldMetres) {
+        std::copy_n(now, 3, held);
+    }
+}
+
 }  // namespace
 
 ReflectionSimulator::ReflectionSimulator(const steam::SteamContext& steam, WorldScene& scene,
@@ -172,6 +188,9 @@ void ReflectionSimulator::tick() {
     const int32_t* origin = view->origin();
     double listener_world[3];
     DirectSimulator::listen_from(*view, pose, listener_world);
+    hold(held_listener_, listener_world, !listener_held_);
+    listener_held_ = true;
+    std::copy_n(held_listener_, 3, listener_world);
     float listener_scene[3];
     for (int k = 0; k < 3; ++k) {
         listener_scene[k] = static_cast<float>(listener_world[k] - origin[k]);
@@ -239,6 +258,9 @@ void ReflectionSimulator::tick() {
             // a solid block would never get out.
             view->escape(world, listener_world, 2, 0.25);
             view->clearance(world, 0.25);
+            hold(source.held, world, source.held_generation != generation);
+            source.held_generation = generation;
+            std::copy_n(source.held, 3, world);
         }
         for (int k = 0; k < 3; ++k) {
             d.position[k] = static_cast<float>(world[k] - origin[k]);

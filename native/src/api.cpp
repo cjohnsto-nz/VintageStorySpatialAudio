@@ -773,6 +773,13 @@ VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_gain(vsa_engine* engine, f
     });
 }
 
+VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_mix(vsa_engine* engine, float early_gain, float tail_gain) {
+    return guarded([&] {
+        engine_of(engine).set_reflection_mix(early_gain, tail_gain);
+        return VSA_OK;
+    });
+}
+
 VSA_API vsa_result VSA_CALL vsa_scene_trace_rays(vsa_engine* engine, const float origin[3], uint32_t rays,
                                                  uint32_t bounces, float max_distance, vsa_ray_segment* out,
                                                  uint32_t capacity, uint32_t* out_count) {

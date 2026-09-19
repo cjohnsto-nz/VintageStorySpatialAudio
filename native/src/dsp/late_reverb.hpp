@@ -26,7 +26,7 @@ public:
     /// Adds this block's kOutputs outputs (each `frames` long) to `out`.
     /// `rt60`: decay times per band, seconds. `level`: amplitude per band of the tail's start
     /// (Steam Audio's hybrid EQ). `predelay`: samples from the input to the tail's first echoes.
-    /// Parameters are smoothed across blocks. Returns false (writing nothing) when the input is
+    /// Parameters are smoothed over about a second: each simulation run's estimate is noisy. Returns false (writing nothing) when the input is
     /// silent and the tail has died away.
     bool process(const float* in, uint32_t frames, const float rt60[3], const float level[3], uint32_t predelay,
                  float* const* out) noexcept;
@@ -59,7 +59,7 @@ private:
         alignas(32) float gain[kLines];
     };
 
-    void update(const float rt60[3], const float level[3]) noexcept;
+    void update(const float rt60[3], const float level[3], uint32_t frames) noexcept;
 
     uint32_t rate_ = 48000;
     std::array<uint32_t, kLines> lengths_{};
@@ -77,6 +77,9 @@ private:
 
     float rt_[3] = {0.0f, 0.0f, 0.0f};
     float level_[3] = {0.0f, 0.0f, 0.0f};
+    // The same, smoothed in the log domain (a level halving and doubling are equal steps).
+    float log_rt_[3] = {0.0f, 0.0f, 0.0f};
+    float log_level_[3] = {0.0f, 0.0f, 0.0f};
     bool primed_ = false;
     // Silence detection: blocks since the input was last non-silent, and the network's energy.
     uint32_t quiet_samples_ = 0;

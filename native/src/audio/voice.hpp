@@ -32,6 +32,7 @@ enum class Op : uint32_t {
     SetMasterGain,
     SetRenderMode,
     SetReflectionGain,
+    SetReflectionMix,  // value: early reflections' gain, seconds: the tail's
 };
 
 struct Command {
@@ -97,6 +98,8 @@ struct RenderVoice {
     int spot_slot = -1;
     uint32_t spot_generation = 0;
     bool spot_searched = false;
+    /// Has sent to the reflections since it started (its onset goes straight to a ready slot).
+    bool reverb_routed = false;
     /// 0 = sends to the listener's reverb, 1 = to its own or its spot's slot (cross-fades when
     /// that is ready).
     float reverb_own = 0.0f;

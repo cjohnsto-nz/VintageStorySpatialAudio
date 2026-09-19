@@ -138,6 +138,26 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
   - spots are made, shared and let go.
 - **Open:** the direct sound has no propagation delay, so far sounds' reflections come late after it (58 ms at 20 m). A physical propagation delay would fix that.
 
+### After Chris's second test
+
+- **Reported:**
+  - still strong (gain 0.2);
+  - poor, jumpy quality;
+  - an anvil behind a block heard only by reflections, at very inconsistent levels, sometimes none;
+  - walls too absolute for the direct sound.
+- **Fixes:**
+  - **Tail smoothing:** the tail's level and decay time are smoothed in the log domain over 0.7 s and 1 s (before: ~20 ms). Each run's estimate is noisy.
+  - **Onsets:** a sound's onset goes straight to its ready slot or spot. The old 43 ms crossfade from the listener's reverb (which gets nothing from behind a wall) lost a strike's attack.
+  - **Holding positions:** the reflection simulation holds the listener's and each source's position until they move 0.5 m. Steam Audio averages its runs only while nothing moves at all, so the noise now settles.
+  - **Rays doubled in every preset:** Medium is 4096. They are cheap next to impulse-response rebuilding.
+  - **Separate controls:** `vsa_engine_set_reflection_mix(early, tail)`, `.steamaudio reverb early N` / `tail N`, and `ReflectionEarlyGain` / `ReflectionTailGain` in the config.
+  - **Direct sound through materials:** half the dB (stone 27.5 dB mid-band per block, was 55).
+- **Tests:**
+  - a strike behind a wall has the same reflection level on every repeat (-19 dB on strikes 2–6; the first has none, its spot not existing yet);
+  - a 6 dB level change reaches the tail in steps of at most 0.5 dB per 50 ms;
+  - early and tail can each be turned off.
+- **Worth knowing:** in a small room about 97% of the reflected energy is early reflections (the first 0.1 s). `.steamaudio reverb early 0` shows how much is them.
+
 ### To check in game (Chris)
 
 - **Reverb that follows the space:** walk from outdoors into a small stone room, a big hall, a cave. The HUD's RT60 and space name should follow; outdoors should be nearly dry.

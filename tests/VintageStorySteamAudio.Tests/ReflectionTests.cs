@@ -14,7 +14,7 @@ public sealed class ReflectionPresetTests
         // vsaudio.h documents these defaults; Medium must not quietly differ from them.
         ReflectionQualitySettings medium = ReflectionPresets.For(ReflectionQuality.Medium);
         Assert.Equal(8, medium.Sources);
-        Assert.Equal(2048, medium.Rays);
+        Assert.Equal(4096, medium.Rays);
         Assert.Equal(16, medium.Bounces);
         Assert.Equal(1.0f, medium.DurationSeconds);
         Assert.Equal(2, medium.Order);
@@ -39,7 +39,7 @@ public sealed class ReflectionPresetTests
         foreach (ReflectionQualitySettings p in presets)
         {
             Assert.InRange(p.Sources, 4, 32);
-            Assert.InRange(p.Rays, 1024, 8192);
+            Assert.InRange(p.Rays, 2048, 16384);
             Assert.InRange(p.Bounces, 8, 32);
             Assert.InRange(p.DurationSeconds, 1.0f, 2.5f);
             Assert.InRange(p.Order, 1, 2);
@@ -71,6 +71,7 @@ public sealed class ReflectionPresetTests
         Assert.Equal(4, options.ReflectionQuality.Sources);
         Assert.Equal(12, options.ReflectionQuality.Bounces);
         Assert.Equal(4f, config.ReflectionGainClamped());
+        Assert.Equal((1f, 0f), new SteamAudioConfig { ReflectionTailGain = -2f }.ReflectionMixClamped());
         Assert.Equal(1f, new SteamAudioConfig { ReflectionGain = float.NaN }.ReflectionGainClamped());
     }
 
@@ -156,6 +157,10 @@ public sealed class ReflectionEngineTests
 
         engine.SetReflectionGain(0.5f);
         Assert.Equal(0.5f, engine.GetReflectionStats().Gain);
+        engine.SetReflectionMix(0f, 0.7f);
+        Assert.Equal(0f, engine.ReflectionEarlyGain);
+        Assert.Equal(0.7f, engine.ReflectionTailGain);
+        Assert.Throws<NativeException>(() => engine.SetReflectionMix(5f, 1f));
         Assert.Throws<NativeException>(() => engine.SetReflectionGain(-1f));
     }
 

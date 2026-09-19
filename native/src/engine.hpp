@@ -77,6 +77,7 @@ public:
     void set_listener(const vsa_listener& listener);
     void set_render_mode(uint32_t mode);
     void set_reflection_gain(float gain);
+    void set_reflection_mix(float early, float tail);
 
     // Output.
     [[nodiscard]] std::vector<vsa_device_info> enumerate_devices();

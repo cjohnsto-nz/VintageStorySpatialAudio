@@ -30,7 +30,7 @@ class WorldScene;
 struct ReflectionSettings {
     /// Voices with reflections of their own; the rest share the listener's reverb.
     uint32_t sources = 8;
-    uint32_t rays = 2048;
+    uint32_t rays = 4096;
     uint32_t bounces = 16;
     /// Impulse response length, seconds.
     float duration = 1.0f;
@@ -116,6 +116,8 @@ private:
         uint32_t generation = 0;
         uint32_t simulated = 0;    // the generation its latest results are for
         ReflectionSlotDebug last;  // for the debugging view while it waits its turn
+        double held[3] = {};       // where it is simulated from (see kHoldMetres)
+        uint32_t held_generation = 0;
     };
 
     /// Voice slots simulated per run: at most half of them (at least 4), round-robin, so each
@@ -134,6 +136,8 @@ private:
     steam::Simulator simulator_;
     std::vector<Source> sources_;
     uint32_t cursor_ = 1;  // where the round-robin over voice slots continues
+    double held_listener_[3] = {};
+    bool listener_held_ = false;
     LatestValue<ListenerPose> listener_;
     double next_offline_ = 0.0;
     bool have_ticked_ = false;

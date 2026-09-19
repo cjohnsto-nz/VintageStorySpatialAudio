@@ -28,6 +28,12 @@ constexpr float kDecayExponent = -0.385f;
 // Each output is a pair of lines, at unit power.
 constexpr float kPairScale = 0.70710678f;
 
+// The simulation's level and decay estimates are noisy from one run to the next (a level is
+// read from one 10 ms slice of a ray-traced energy field): they are followed this slowly.
+constexpr float kLevelSeconds = 0.7f;
+constexpr float kDecaySeconds = 1.0f;
+constexpr float kLevelFloor = 1e-6f;
+
 // Tails quieter than this (sum of squares over a block) are over.
 constexpr float kSilentEnergy = 1e-14f;
 
@@ -113,19 +119,22 @@ void LateReverb::reset() noexcept {
     energy_ = 0.0f;
 }
 
-void LateReverb::update(const float rt60[3], const float level[3]) noexcept {
-    // Smoothed towards the new values (simulation results arrive a few times a second).
-    constexpr float kSmooth = 0.25f;
+void LateReverb::update(const float rt60[3], const float level[3], uint32_t frames) noexcept {
+    const auto seconds = static_cast<float>(frames) / static_cast<float>(rate_);
+    const float level_step = 1.0f - std::exp(-seconds / kLevelSeconds);
+    const float decay_step = 1.0f - std::exp(-seconds / kDecaySeconds);
     for (int b = 0; b < 3; ++b) {
-        const float rt = std::clamp(std::isfinite(rt60[b]) ? rt60[b] : 0.0f, 0.05f, 20.0f);
-        const float lv = std::clamp(std::isfinite(level[b]) ? level[b] : 0.0f, 0.0f, 16.0f);
+        const float rt = std::log(std::clamp(std::isfinite(rt60[b]) ? rt60[b] : 0.0f, 0.05f, 20.0f));
+        const float lv = std::log(std::clamp(std::isfinite(level[b]) ? level[b] : 0.0f, 0.0f, 16.0f) + kLevelFloor);
         if (!primed_) {
-            rt_[b] = rt;
-            level_[b] = lv;
+            log_rt_[b] = rt;
+            log_level_[b] = lv;
         } else {
-            rt_[b] += kSmooth * (rt - rt_[b]);
-            level_[b] += kSmooth * (lv - level_[b]);
+            log_rt_[b] += decay_step * (rt - log_rt_[b]);
+            log_level_[b] += level_step * (lv - log_level_[b]);
         }
+        rt_[b] = std::exp(log_rt_[b]);
+        level_[b] = std::max(0.0f, std::exp(log_level_[b]) - kLevelFloor);
     }
     primed_ = true;
 
@@ -186,7 +195,7 @@ bool LateReverb::process(const float* in, uint32_t frames, const float rt60[3], 
         }
     }
 
-    update(rt60, level);
+    update(rt60, level, frames);
     // The network's first echoes (after its shortest line) arrive when the tail starts.
     predelay = predelay > lengths_[0] ? std::min(predelay - lengths_[0], pre_mask_ - lengths_[0]) : 0u;
 

@@ -728,6 +728,10 @@ internal static unsafe partial class VsaNative
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult EngineSetReflectionGain(nint engine, float gain);
 
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_set_reflection_mix")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineSetReflectionMix(nint engine, float earlyGain, float tailGain);
+
     [LibraryImport(LibraryName, EntryPoint = "vsa_scene_trace_rays")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult SceneTraceRays(nint engine, float* origin, uint rays, uint bounces, float maxDistance, VsaRaySegment* segments, uint capacity, out uint count);

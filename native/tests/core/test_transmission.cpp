@@ -14,7 +14,8 @@ namespace {
 
 enum : uint16_t { Air = 0, Stone = 1, Wood = 2, Glass = 3, Leaves = 4 };
 
-/// The shipped defaults' losses (acousticmaterials.json), as the engine derives them.
+/// Losses as the engine derives them from the Phase 5 material table (the shipped one now has
+/// half the dB; these tests are about the walk, not the values).
 std::vector<TransmissionMaterial> materials() {
     auto m = [](MaterialKind kind, std::array<float, 3> crossing, std::array<float, 3> bulk) {
         TransmissionMaterial t;

@@ -276,6 +276,11 @@ void Mixer::apply(const Command& c) noexcept {
             return;
         case Op::SetMasterGain: master_gain_.linear(c.value, smooth_frames_); return;
         case Op::SetReflectionGain: reflection_gain_.linear(c.value, smooth_frames_); return;
+        case Op::SetReflectionMix:
+            if (reflections_ != nullptr) {
+                reflections_->set_mix(c.value, c.seconds, smooth_frames_);
+            }
+            return;
         case Op::SetRenderMode:
             render_mode_ = c.flags == VSA_RENDER_SPEAKERS ? VSA_RENDER_SPEAKERS : VSA_RENDER_HEADPHONES;
             spatial_.reset_all();  // the other effect kind's state is stale
@@ -385,6 +390,7 @@ void Mixer::start(VoiceSlot& s) noexcept {
     v.state = VSA_VOICE_PLAYING;
     v.sounded = false;
     v.spot_searched = false;  // a restarted sound looks for a spot again
+    v.reverb_routed = false;
     v.env_target = 1.0f;  // env == 1 after a clean stop (instant start), 0 after pause/seek (ramp in)
 }
 
@@ -1065,6 +1071,13 @@ void Mixer::send_reflections(VoiceSlot& s, const SpatialParams& params, const fl
         }
     }
     const bool own = target > 0 && reflections_->ready(target);
+    if (!v.reverb_routed) {
+        // An onset goes straight where it belongs: a strike's attack is its loudest part, and a
+        // cross-fade from the listener's reverb (which gets only what reaches the listener, nothing
+        // behind a wall) would lose it.
+        v.reverb_routed = true;
+        v.reverb_own = own ? 1.0f : 0.0f;
+    }
     const float from = v.reverb_own;
     const float to = own ? std::min(1.0f, from + 1.0f / kReverbSwitchBlocks) : 0.0f;
     v.reverb_own = to;

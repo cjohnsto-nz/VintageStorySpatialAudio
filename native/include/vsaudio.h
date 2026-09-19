@@ -177,7 +177,7 @@ typedef struct vsa_engine_config {
      */
     /** Voices with reflections of their own, 0 = 8; 1..64. */
     uint32_t reflection_sources;
-    /** Rays traced from the listener per simulation, 0 = 2048; 256..32768. */
+    /** Rays traced from the listener per simulation, 0 = 4096; 256..32768. */
     uint32_t reflection_rays;
     /** Bounces per ray, 0 = 16; 1..64. */
     uint32_t reflection_bounces;
@@ -921,6 +921,13 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_reflection_sources(vsa_engine* engine
 
 /** Scales every reflection (smoothly): 1 = as simulated; 0..4. */
 VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_gain(vsa_engine* engine, float gain);
+
+/**
+ * Scales the two parts of the reflections separately (smoothly, on top of the reflection gain):
+ * the convolved early reflections, and the diffuse tail. 1 = as simulated; 0 turns a part off;
+ * 0..4.
+ */
+VSA_API vsa_result VSA_CALL vsa_engine_set_reflection_mix(vsa_engine* engine, float early_gain, float tail_gain);
 
 /** One leg of a traced sound path (vsa_scene_trace_rays). */
 typedef struct vsa_ray_segment {

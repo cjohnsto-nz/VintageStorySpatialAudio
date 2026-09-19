@@ -214,3 +214,53 @@ TEST_CASE("late reverb: processing never allocates") {
     }
     CHECK(scope.count() == 0);
 }
+
+TEST_CASE("late reverb: a new level from the simulation is followed smoothly, not stepped") {
+    // Each simulation run's level estimate is noisy; a jump of 6 dB must come in gradually.
+    LateReverb reverb;
+    reverb.prepare(kRate, 4800);
+    const float rts[3] = {1.0f, 1.0f, 1.0f};
+    const float before[3] = {0.4f, 0.4f, 0.4f};
+    const float after[3] = {0.2f, 0.2f, 0.2f};
+    std::vector<float> in(kBlock);
+    std::array<std::vector<float>, LateReverb::kOutputs> storage;
+    std::array<float*, LateReverb::kOutputs> ptr{};
+    for (int k = 0; k < LateReverb::kOutputs; ++k) {
+        storage[static_cast<std::size_t>(k)].assign(kBlock, 0.0f);
+        ptr[static_cast<std::size_t>(k)] = storage[static_cast<std::size_t>(k)].data();
+    }
+    uint32_t noise = 12345;
+    std::vector<double> window_db;
+    double window = 0.0;
+    int blocks = 0;
+    for (int block = 0; block < 6 * static_cast<int>(kRate / kBlock); ++block) {
+        for (float& x : in) {
+            noise = noise * 1664525u + 1013904223u;
+            x = static_cast<float>(noise >> 8) / 16777216.0f - 0.5f;
+        }
+        for (auto& c : storage) {
+            std::fill(c.begin(), c.end(), 0.0f);
+        }
+        const bool switched = block >= 3 * static_cast<int>(kRate / kBlock);
+        reverb.process(in.data(), kBlock, rts, switched ? after : before, 0, ptr.data());
+        for (const auto& c : storage) {
+            for (const float x : c) {
+                window += static_cast<double>(x) * static_cast<double>(x);
+            }
+        }
+        if (++blocks == 9) {  // ~50 ms windows
+            window_db.push_back(10.0 * std::log10(window));
+            window = 0.0;
+            blocks = 0;
+        }
+    }
+    const std::size_t at_switch = window_db.size() / 2;
+    double largest_step = 0.0;
+    for (std::size_t i = at_switch; i + 1 < window_db.size(); ++i) {
+        largest_step = std::max(largest_step, std::abs(window_db[i + 1] - window_db[i]));
+    }
+    const double settled = window_db[at_switch - 1] - window_db.back();
+    MESSAGE("largest 50 ms step after the change " << largest_step << " dB; settled " << settled << " dB lower");
+    CHECK(largest_step < 1.5);
+    CHECK(settled == doctest::Approx(6.02).epsilon(0.15));
+}

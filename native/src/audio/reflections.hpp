@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/speaker_decoder.hpp"
+#include "dsp/gain_ramp.hpp"
 #include "dsp/late_reverb.hpp"
 #include "steam/ipl_handle.hpp"
 #include "vsaudio.h"
@@ -83,6 +84,9 @@ public:
     [[nodiscard]] float* send(int slot) noexcept;
     [[nodiscard]] uint32_t free_slots() const noexcept;
 
+    /// Render thread: the early reflections' and the tail's gains (smoothly, over `frames`).
+    void set_mix(float early, float tail, uint32_t frames) noexcept;
+
     /// Renders every slot into the bus, times `gain` (per frame). Returns false if the bus is
     /// silent this block.
     bool render(const float* gain) noexcept;
@@ -128,6 +132,10 @@ private:
     // a voice from before it can never match a new voice.
     std::vector<uint32_t> generations_;
     std::vector<float> silence_;
+    dsp::GainRamp early_gain_;
+    dsp::GainRamp tail_gain_;
+    std::vector<float> early_gain_buf_;
+    std::vector<float> tail_gain_buf_;
     std::vector<float> early_storage_;
     std::array<float*, 16> early_out_{};
     std::vector<float> late_storage_;

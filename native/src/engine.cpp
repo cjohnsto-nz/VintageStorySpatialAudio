@@ -585,6 +585,17 @@ void Engine::set_reflection_gain(float gain) {
     post_global_command(command);
 }
 
+void Engine::set_reflection_mix(float early, float tail) {
+    if (!std::isfinite(early) || !std::isfinite(tail) || early < 0.0f || tail < 0.0f || early > 4.0f || tail > 4.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "reflection early and tail gains must be finite values in 0..4");
+    }
+    Command command{};
+    command.op = Op::SetReflectionMix;
+    command.value = early;
+    command.seconds = tail;
+    post_global_command(command);
+}
+
 Engine::ReflectionReport Engine::reflection_report() {
     ReflectionReport report;
     std::lock_guard lock(api_mutex_);

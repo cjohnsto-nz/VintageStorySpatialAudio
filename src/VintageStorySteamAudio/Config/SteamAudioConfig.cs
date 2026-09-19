@@ -138,6 +138,12 @@ public sealed class SteamAudioConfig
     /// <summary>Scales all reverb (1 = as simulated, 0..4; also .steamaudio reverb gain).</summary>
     public float ReflectionGain { get; set; } = 1f;
 
+    /// <summary>Scales the early reflections, the first 0.1 s or so (0 = off, 0..4; also .steamaudio reverb early).</summary>
+    public float ReflectionEarlyGain { get; set; } = 1f;
+
+    /// <summary>Scales the reverb tail after them (0 = off, 0..4; also .steamaudio reverb tail).</summary>
+    public float ReflectionTailGain { get; set; } = 1f;
+
     /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 
@@ -172,7 +178,12 @@ public sealed class SteamAudioConfig
     };
 
     /// <summary>The reflection gain, clamped to what the engine accepts.</summary>
-    public float ReflectionGainClamped() => float.IsFinite(ReflectionGain) ? Math.Clamp(ReflectionGain, 0f, 4f) : 1f;
+    public float ReflectionGainClamped() => ClampGain(ReflectionGain);
+
+    /// <summary>The early reflections' and the tail's gains, clamped to what the engine accepts.</summary>
+    public (float Early, float Tail) ReflectionMixClamped() => (ClampGain(ReflectionEarlyGain), ClampGain(ReflectionTailGain));
+
+    private static float ClampGain(float gain) => float.IsFinite(gain) ? Math.Clamp(gain, 0f, 4f) : 1f;
 
     /// <summary>The trims by bus; unknown names are ignored.</summary>
     public IReadOnlyDictionary<AudioBus, float> CategoryTrimsDb()

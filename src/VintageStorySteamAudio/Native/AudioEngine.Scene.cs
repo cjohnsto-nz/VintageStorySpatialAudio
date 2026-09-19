@@ -542,6 +542,24 @@ public sealed partial class AudioEngine
     }
 
     /// <summary>
+    /// Scales the early reflections and the reverb tail separately (smoothly, on top of
+    /// <see cref="SetReflectionGain"/>): 1 = as simulated, 0 = off; 0..4.
+    /// </summary>
+    public void SetReflectionMix(float earlyGain, float tailGain)
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineSetReflectionMix(lease.Engine, earlyGain, tailGain), "vsa_engine_set_reflection_mix");
+        ReflectionEarlyGain = earlyGain;
+        ReflectionTailGain = tailGain;
+    }
+
+    /// <summary>The early reflections' gain last set (<see cref="SetReflectionMix"/>).</summary>
+    public float ReflectionEarlyGain { get; private set; } = 1f;
+
+    /// <summary>The reverb tail's gain last set (<see cref="SetReflectionMix"/>).</summary>
+    public float ReflectionTailGain { get; private set; } = 1f;
+
+    /// <summary>
     /// Debugging: sound paths from <paramref name="origin"/> (scene coordinates) bouncing off the
     /// voxel world, <paramref name="rays"/> directions and up to <paramref name="bounces"/> reflections.
     /// </summary>

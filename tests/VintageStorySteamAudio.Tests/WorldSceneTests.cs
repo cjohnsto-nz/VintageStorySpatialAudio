@@ -269,8 +269,8 @@ public sealed class WorldSceneEngineTests
             Assert.True(s.Occlusion < 0.05f);
             Assert.Equal(1, s.Crossings);
             Assert.Equal(1f, s.SolidMetres, 3);
-            // Shipped stone: 35 dB crossing + 20 dB/m in the mid band.
-            Assert.Equal(-55.0, 20 * Math.Log10(s.Gain.Mid), 1);
+            // Shipped stone: 17.5 dB crossing + 10 dB/m in the mid band.
+            Assert.Equal(-27.5, 20 * Math.Log10(s.Gain.Mid), 1);
             Assert.True(engine.GetSimulationStats().Ticks > 3);
         }
     }
