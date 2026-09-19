@@ -1057,8 +1057,13 @@ void Mixer::update_path(VoiceSlot& s, const SpatialParams& params) noexcept {
         return;
     }
     // Wanted when the straight path is blocked (or nothing says otherwise: no direct simulation).
+    // Rendered by how blocked it is: full when nothing of the source is seen, nothing at
+    // kPathWanted. A hard gate would flap with the occlusion estimate (a partly seen source
+    // hovering about the threshold), and Steam Audio answers a clear centre ray with the direct
+    // path itself, which would double a source in plain view.
     const DirectState& direct = direct_state_[set];
     const bool wanted = direct_ == nullptr || (direct.primed && direct.occlusion < kPathWanted);
+    const float weight = direct_ == nullptr ? 1.0f : std::clamp((kPathWanted - direct.occlusion) / kPathWanted, 0.0f, 1.0f);
     const uint32_t generation = set_generation_[set];
     in.x.store(v.position[0], std::memory_order_relaxed);
     in.y.store(v.position[1], std::memory_order_relaxed);
@@ -1075,7 +1080,7 @@ void Mixer::update_path(VoiceSlot& s, const SpatialParams& params) noexcept {
     bool have = false;
     if (wanted && out.generation.load(std::memory_order_acquire) == generation) {
         for (int c = 0; c < 4; ++c) {
-            sh[c] = out.sh[c].load(std::memory_order_relaxed);
+            sh[c] = weight * out.sh[c].load(std::memory_order_relaxed);
         }
         for (int b = 0; b < 3; ++b) {
             eq[b] = out.eq[b].load(std::memory_order_relaxed);

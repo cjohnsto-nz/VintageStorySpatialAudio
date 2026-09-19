@@ -4,6 +4,9 @@
     Builds the mod and installs it into your local VintagestoryData/Mods folder.
 .PARAMETER NoBuild
     Install the zip already in artifacts/ without rebuilding.
+.PARAMETER Configuration
+    Release (the default: the engine is a real-time renderer, and Debug runs several times slower)
+    or Debug.
 .PARAMETER RunTests
     Run native and managed tests as part of the build (off by default for fast iteration).
 .PARAMETER StopGame
@@ -13,7 +16,7 @@
 #>
 param(
     [ValidateSet('Debug', 'Release')]
-    [string]$Configuration = 'Debug',
+    [string]$Configuration = 'Release',
     [switch]$NoBuild,
     [switch]$RunTests,
     [switch]$StopGame,
