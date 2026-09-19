@@ -218,6 +218,30 @@ TEST_CASE("transmission: a sound inside a partial block (an anvil) leaves it, an
     CHECK(!view.escape(open, listener, 2, 0.25));
 }
 
+TEST_CASE("transmission: a listener beside an open door's leaf stays; one inside the leaf leaves the leaf, not the cell") {
+    auto c = std::make_shared<ChunkVoxels>();
+    PartialBlock door;
+    door.cell = static_cast<uint16_t>(cell_index(10, 16, 16));
+    door.material = Wood;
+    door.boxes.push_back({{0.0f, 0.0f, 0.0f}, {0.125f, 1.0f, 1.0f}});  // open: the leaf along the cell's west side
+    c->partials.push_back(door);
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView view(std::move(chunks), materials());
+    const double ahead[3] = {10.5, 16.5, 10.0};
+    // Walking through the doorway: the cell is open where the listener is.
+    double walking[3] = {10.5, 16.6, 16.7};
+    CHECK(!view.escape(walking, ahead, 2));
+    CHECK(walking[2] == 16.7);
+    // A camera pressed into the leaf comes out of the leaf's face, still in the doorway.
+    double in_leaf[3] = {10.06, 16.6, 16.7};
+    const double east[3] = {14.0, 16.6, 16.7};
+    CHECK(view.escape(in_leaf, east, 2, 0.25));
+    CHECK(in_leaf[0] > 10.125);
+    CHECK(in_leaf[0] < 10.5);
+    CHECK(in_leaf[2] == 16.7);
+}
+
 TEST_CASE("first hit: a wall's face, its outward normal, and a partial block's box") {
     const VoxelView view = wall(Stone, 2);  // x 10..12
     VoxelHit hit;

@@ -70,11 +70,16 @@ public:
     /// blocks' boxes. Chunks that are not loaded count as air.
     [[nodiscard]] TransmissionTrace trace(const double from[3], const double to[3]) const;
 
-    /// Moves `point` towards `target` until it is out of occupied cells (solid, or holding a
-    /// partial block's boxes; at most `max_cells` cells), ending `beyond` metres past the last
-    /// one's face: sounds are placed at the centre of their block (breaking, placing, a door, an
-    /// anvil being struck), which must not muffle its own sound. Returns true if the point moved.
+    /// Moves `point` towards `target` until nothing encloses it (a solid cell, or a partial
+    /// block's box it is inside; at most `max_cells` steps), ending `beyond` metres past the
+    /// last face: sounds are placed at the centre of their block (breaking, placing, a door, an
+    /// anvil being struck), which must not muffle its own sound; a camera pressed into a wall
+    /// listens from outside it. A point in a partial block's cell but outside its boxes (the
+    /// listener walking through an open door) stays. Returns true if the point moved.
     bool escape(double point[3], const double target[3], int max_cells, double beyond = 1e-3) const;
+    /// The bounds of what encloses `point`: its cell when that is solid, else the partial block
+    /// box it is inside; false in the open (the cell of a partial block counts as open).
+    bool enclosure(const double point[3], double lo[3], double hi[3]) const;
 
     /// Keeps `point` at least `radius` from the faces of solid cells next to its own (a sound on
     /// the floor would otherwise have half its occlusion volume inside the floor).

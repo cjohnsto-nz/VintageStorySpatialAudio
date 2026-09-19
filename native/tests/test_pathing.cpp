@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <string>
 #include <vector>
 
 using namespace vsa_test;
@@ -269,4 +270,80 @@ TEST_CASE("pathing: a sound with no path inherits none from the sound before it"
     CHECK(s.wanted == 1);
     CHECK(s.found == 0);
     CHECK(sealed.energy < 1e-4 * through_doorway.energy);
+}
+
+TEST_CASE("pathing: walking in through an open door, nothing drops") {
+    // A one-block doorway (x 7, z 12, y 2..3) with an open door leaf along its west side (the
+    // game sends the leaf's collision box); a sound inside off to the west and one straight
+    // ahead. The listener walks in along x 7.5: neither sound gets quieter at any step, and the
+    // listener is simulated from where it is (the leaf beside it is not a block to escape from,
+    // which used to throw the listener a metre through the doorway and put the wall between it
+    // and the sounds on the side it came from).
+    OfflineEngine e(pathing_config());
+    REQUIRE(vsa_engine_set_render_mode(e.engine, VSA_RENDER_SPEAKERS) == VSA_OK);
+    vsa_output_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.kind = VSA_OUTPUT_NONE;
+    desc.channels = 12;
+    REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+    set_materials(e);
+    std::vector<uint16_t> cells = room(false);
+    cells[cell(7, 2, 12)] = Air;
+    cells[cell(7, 3, 12)] = Air;
+    vsa_box leaf{{0.0f, 0.0f, 0.0f}, {0.125f, 1.0f, 1.0f}};
+    vsa_partial_block partials[2] = {{static_cast<uint32_t>(cell(7, 2, 12)), Stone, 0, 1}, {static_cast<uint32_t>(cell(7, 3, 12)), Stone, 0, 1}};
+    vsa_chunk_desc chunk{};
+    chunk.struct_size = sizeof chunk;
+    chunk.materials = cells.data();
+    chunk.partials = partials;
+    chunk.partial_count = 2;
+    chunk.boxes = &leaf;
+    chunk.box_count = 1;
+    REQUIRE(vsa_scene_set_chunk(e.engine, &chunk) == VSA_OK);
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+    enum Where { Aside, Ahead, Behind };
+    for (const Where where : {Aside, Ahead, Behind}) {
+        // Behind: outside, off to the east of the door, the sound being walked away from.
+        const vsa_voice v = where == Behind ? e.positioned(tone, VSA_SPATIAL_WORLD, 11.0f, 3.0f, 15.0f)
+                                            : e.positioned(tone, VSA_SPATIAL_WORLD, where == Aside ? 5.0f : 7.5f, 3.0f, 6.0f);
+        REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+        double previous_db = -200.0;
+        double at_door_db = 0.0;
+        for (const float z : {16.0f, 14.0f, 13.2f, 12.8f, 12.5f, 12.2f, 11.8f, 11.0f, 10.0f}) {
+            e.listener(7.5f, 3.6f, z, 0.0f, 0.0f, -1.0f);
+            render12(e, kRate / 2);
+            const Lean l = lean(render12(e, kRate / 4));
+            vsa_source_debug d{};
+            d.struct_size = sizeof d;
+            uint32_t n = 0;
+            REQUIRE(vsa_engine_get_sources(e.engine, &d, 1, &n) == VSA_OK);
+            const vsa_pathing_stats ps = stats(e);
+            MESSAGE(std::string(where == Aside ? "aside" : where == Ahead ? "ahead" : "behind") << " z " << z << ": " << 10.0 * std::log10(l.energy) << " dB; occlusion " << d.occlusion
+                    << " transmission " << d.transmission[0] << "/" << d.transmission[1] << "/" << d.transmission[2] << " solid m " << d.solid_metres
+                    << " listened from " << d.simulated_position[0] << "," << d.simulated_position[1] << "," << d.simulated_position[2]
+                    << "; listener " << ps.listener[0] << "," << ps.listener[1] << "," << ps.listener[2] << "; path wanted " << ps.wanted << " found " << ps.found);
+            const double db = 10.0 * std::log10(l.energy);
+            if (where != Behind) {
+                CHECK(db > previous_db - 0.5);  // never quieter on the way in
+            } else if (z >= 12.2f) {
+                // Walking away from it, through the doorway. Once the jamb hides it (halfway
+                // through the metre-thick wall) its path round the jamb carries it, a few dB
+                // down as diffraction just past the shadow boundary is: not the wall's 27 dB,
+                // which the listener thrown to the inner face used to get.
+                if (z == 12.8f) {
+                    at_door_db = db;
+                }
+                if (z < 12.8f) {
+                    CHECK(ps.found == 1);
+                    CHECK(db > at_door_db - 8.0);
+                }
+            }
+            previous_db = db;
+            CHECK(ps.listener[0] == doctest::Approx(7.5f));
+            CHECK(ps.listener[2] == doctest::Approx(z));
+        }
+        REQUIRE(vsa_voice_stop(e.engine, v) == VSA_OK);
+        render12(e, kRate / 4);
+    }
 }
