@@ -1,18 +1,137 @@
 #include "engine.hpp"
 
+#include "audio/asset.hpp"
+#include "audio/stream.hpp"
+#include "core/error.hpp"
 #include "core/log.hpp"
 #include "steam/self_test.hpp"
 
-namespace vsa {
+#include <algorithm>
+#include <cmath>
+#include <string>
 
-Engine::Engine(const vsa_engine_config& config) {
+namespace vsa {
+namespace {
+
+constexpr std::size_t kCommandCapacity = 16384;
+constexpr std::size_t kEventRingCapacity = 4096;
+constexpr std::size_t kEventQueueLimit = 65536;
+constexpr auto kWorkerPeriod = std::chrono::milliseconds(2);
+constexpr auto kReopenInterval = std::chrono::seconds(1);
+constexpr float kMaxGain = 64.0f;
+constexpr float kMinPitch = 0.05f;
+constexpr float kMaxPitch = 8.0f;
+
+Engine::Settings validate(const vsa_engine_config& config) {
+    Engine::Settings settings;
+    const auto invalid = [](const std::string& message) { return Error(VSA_ERROR_INVALID_ARGUMENT, message); };
+    if (config.sample_rate != 0) {
+        if (config.sample_rate < 8000 || config.sample_rate > 384000) {
+            throw invalid("sample_rate " + std::to_string(config.sample_rate) + " is outside 8000..384000");
+        }
+        settings.sample_rate = config.sample_rate;
+    }
+    if (config.block_frames != 0) {
+        if (config.block_frames < 32 || config.block_frames > 4096) {
+            throw invalid("block_frames " + std::to_string(config.block_frames) + " is outside 32..4096");
+        }
+        settings.block_frames = config.block_frames;
+    }
+    if (config.max_voices != 0) {
+        if (config.max_voices > 65536) {
+            throw invalid("max_voices " + std::to_string(config.max_voices) + " exceeds 65536");
+        }
+        settings.max_voices = config.max_voices;
+    }
+    switch (config.resampler_quality) {
+        case VSA_RESAMPLER_DEFAULT: settings.resampler_quality = VSA_RESAMPLER_MEDIUM; break;
+        case VSA_RESAMPLER_LOW: settings.resampler_quality = VSA_RESAMPLER_LOW; break;
+        case VSA_RESAMPLER_MEDIUM: settings.resampler_quality = VSA_RESAMPLER_MEDIUM; break;
+        case VSA_RESAMPLER_HIGH: settings.resampler_quality = VSA_RESAMPLER_HIGH; break;
+        default: throw invalid("unknown resampler_quality " + std::to_string(config.resampler_quality));
+    }
+    if (config.stream_threshold_ms != 0) {
+        settings.stream_threshold_ms = config.stream_threshold_ms;
+    }
+    return settings;
+}
+
+void check_gain(float gain, const char* what) {
+    if (!std::isfinite(gain) || gain < 0.0f || gain > kMaxGain) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, std::string(what) + " must be a finite value in 0..64");
+    }
+}
+
+void check_pitch(float pitch) {
+    if (!std::isfinite(pitch) || pitch < kMinPitch || pitch > kMaxPitch) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "pitch must be in 0.05..8");
+    }
+}
+
+const char* quality_name(vsa_resampler_quality quality) noexcept {
+    switch (quality) {
+        case VSA_RESAMPLER_LOW: return "low";
+        case VSA_RESAMPLER_HIGH: return "high";
+        default: return "medium";
+    }
+}
+
+vsa_event make_event(vsa_event_type type) noexcept {
+    vsa_event event{};
+    event.struct_size = sizeof event;
+    event.type = static_cast<uint32_t>(type);
+    return event;
+}
+
+}  // namespace
+
+Engine::Engine(const vsa_engine_config& config)
+    : settings_(validate(config)),
+      kernel_(settings_.resampler_quality),
+      slots_(std::make_unique<VoiceSlot[]>(settings_.max_voices)),
+      commands_(kCommandCapacity),
+      events_(kEventRingCapacity),
+      retired_(settings_.max_voices),
+      mixer_(kernel_, slots_.get(), settings_.max_voices, commands_, events_, retired_, rt_log_, settings_.block_frames),
+      stream_history_frames_(static_cast<uint32_t>(kernel_.max_taps_per_side())),
+      stream_window_frames_(kernel_.max_span_frames(settings_.block_frames)) {
     steam::SteamContext::Options options;
     options.ray_tracer = static_cast<vsa_ray_tracer>(config.ray_tracer);  // validated in api.cpp
     options.validation = (config.flags & VSA_ENGINE_FLAG_STEAM_AUDIO_VALIDATION) != 0;
     steam_ = std::make_unique<steam::SteamContext>(options);
+
+    free_slots_.reserve(settings_.max_voices);
+    for (uint32_t i = settings_.max_voices; i > 0; --i) {
+        free_slots_.push_back(i - 1);  // hand out low slots first
+    }
+    mixer_.prepare(settings_.sample_rate, 2);
+
+    worker_ = std::thread(&Engine::worker_main, this);
+    Log::writef(VSA_LOG_INFO, "engine: %u-frame blocks, %u voice slots, %s-quality resampler", settings_.block_frames,
+                settings_.max_voices, quality_name(settings_.resampler_quality));
 }
 
 Engine::~Engine() {
+    {
+        std::lock_guard lock(output_mutex_);
+        device_.close();
+        output_kind_ = VSA_OUTPUT_NONE;
+    }
+    running_.store(false, std::memory_order_release);
+    if (worker_.joinable()) {
+        worker_.join();
+    }
+    // Nothing renders any more: drop what live and retired voices still hold.
+    for (uint32_t i = 0; i < settings_.max_voices; ++i) {
+        VoiceSlot& slot = slots_[i];
+        delete slot.stream;
+        slot.stream = nullptr;
+        if (slot.asset != nullptr) {
+            slot.asset->release();
+            slot.asset = nullptr;
+        }
+    }
+    rt_log_.drain();
     steam_.reset();
     Log::write(VSA_LOG_INFO, "engine destroyed");
 }
@@ -26,5 +145,497 @@ vsa_engine_info Engine::info() const noexcept {
 }
 
 vsa_self_test_report Engine::run_self_test() const { return steam::run_self_test(*steam_); }
+
+Asset* Engine::create_asset(const vsa_asset_desc& desc) const {
+    return Asset::create(desc, settings_.stream_threshold_ms);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Voices
+
+VoiceSlot& Engine::checked_slot(vsa_voice voice) const {
+    const uint32_t index = handle_slot(voice);
+    if (voice == 0 || index >= settings_.max_voices) {
+        throw Error(VSA_ERROR_INVALID_HANDLE, "invalid voice handle");
+    }
+    VoiceSlot& slot = slots_[index];
+    if (!slot.in_use.load(std::memory_order_acquire) ||
+        slot.generation.load(std::memory_order_acquire) != handle_generation(voice)) {
+        throw Error(VSA_ERROR_INVALID_HANDLE, "voice handle is stale (the voice was released)");
+    }
+    return slot;
+}
+
+uint32_t Engine::reported_state(const VoiceSlot& slot) noexcept {
+    const uint32_t applied = slot.applied_seq.load(std::memory_order_acquire);
+    const uint32_t issued = slot.cmd_seq.load(std::memory_order_acquire);
+    return applied != issued ? slot.requested_state.load(std::memory_order_acquire)
+                             : slot.render_state.load(std::memory_order_acquire);
+}
+
+vsa_voice Engine::create_voice(const vsa_voice_desc& desc) {
+    auto* asset = reinterpret_cast<Asset*>(desc.asset);
+    if (asset == nullptr) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "voice asset must not be null");
+    }
+    if (desc.bus >= VSA_BUS_COUNT) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown bus " + std::to_string(desc.bus));
+    }
+    check_gain(desc.gain, "gain");
+    check_pitch(desc.pitch);
+
+    // Streams are opened and pre-filled here, on the caller's thread, so the voice can start
+    // without an underrun; they are registered with the worker before the render thread sees them.
+    std::unique_ptr<Stream> stream;
+    if (asset->streamed()) {
+        stream = std::make_unique<Stream>(*asset, stream_history_frames_, stream_window_frames_);
+        stream->service();
+        std::lock_guard lock(streams_mutex_);
+        streams_.push_back(stream.get());
+    }
+    const auto unregister_stream = [&] {
+        if (stream) {
+            std::lock_guard lock(streams_mutex_);
+            streams_.erase(std::remove(streams_.begin(), streams_.end(), stream.get()), streams_.end());
+        }
+    };
+
+    std::unique_lock lock(api_mutex_);
+    if (free_slots_.empty() || commands_.free_space() == 0) {
+        const bool no_slots = free_slots_.empty();
+        lock.unlock();
+        unregister_stream();
+        throw Error(VSA_ERROR_CAPACITY, no_slots ? "all " + std::to_string(settings_.max_voices) +
+                                                       " voice slots are in use (see max_voices)"
+                                                 : std::string("the command queue is full"));
+    }
+    const uint32_t index = free_slots_.back();
+    free_slots_.pop_back();
+    ++allocated_voices_;
+
+    VoiceSlot& slot = slots_[index];
+    slot.handle = make_handle(index, slot.generation.load(std::memory_order_relaxed));
+    asset->add_ref();
+    slot.asset = asset;
+    slot.stream = stream.release();
+    slot.bus = desc.bus;
+    slot.initial_gain = desc.gain;
+    slot.initial_pitch = desc.pitch;
+    slot.initial_looping = desc.looping != 0;
+    slot.requested_state.store(VSA_VOICE_STOPPED, std::memory_order_relaxed);
+    slot.cmd_seq.store(0, std::memory_order_relaxed);
+    slot.render_state.store(VSA_VOICE_STOPPED, std::memory_order_relaxed);
+    slot.applied_seq.store(0, std::memory_order_relaxed);
+    slot.requested_position.store(0.0, std::memory_order_relaxed);
+    slot.seek_seq.store(0, std::memory_order_relaxed);
+    slot.seek_applied.store(0, std::memory_order_relaxed);
+    slot.position.store(0.0, std::memory_order_relaxed);
+    slot.in_use.store(true, std::memory_order_release);
+
+    Command command{};
+    command.op = Op::Activate;
+    command.slot = index;
+    commands_.try_push(command);  // space checked above; the lock keeps it
+    return slot.handle;
+}
+
+void Engine::post_voice_command(vsa_voice voice, Command command, StateChange change,
+                                std::optional<double> new_position) {
+    std::lock_guard lock(api_mutex_);
+    VoiceSlot& slot = checked_slot(voice);
+    if (commands_.free_space() == 0) {
+        throw Error(VSA_ERROR_CAPACITY, "the command queue is full");
+    }
+    command.slot = handle_slot(voice);
+
+    if (change != StateChange::None) {
+        const uint32_t current = reported_state(slot);
+        uint32_t next = current;
+        switch (change) {
+            case StateChange::Start: next = VSA_VOICE_PLAYING; break;
+            case StateChange::Pause: next = current == VSA_VOICE_PLAYING ? VSA_VOICE_PAUSED : current; break;
+            case StateChange::Stop: next = VSA_VOICE_STOPPED; break;
+            case StateChange::None: break;
+        }
+        slot.requested_state.store(next, std::memory_order_relaxed);
+        command.seq = slot.cmd_seq.load(std::memory_order_relaxed) + 1;
+        slot.cmd_seq.store(command.seq, std::memory_order_release);
+    }
+    if (new_position) {
+        const double duration = static_cast<double>(slot.asset->frames()) / slot.asset->sample_rate();
+        command.position = std::clamp(*new_position, 0.0, duration);
+        slot.requested_position.store(command.position, std::memory_order_relaxed);
+        command.seek_seq = slot.seek_seq.load(std::memory_order_relaxed) + 1;
+        slot.seek_seq.store(command.seek_seq, std::memory_order_release);
+    }
+    commands_.try_push(command);
+}
+
+void Engine::post_global_command(const Command& command) {
+    std::lock_guard lock(api_mutex_);
+    if (commands_.free_space() == 0) {
+        throw Error(VSA_ERROR_CAPACITY, "the command queue is full");
+    }
+    commands_.try_push(command);
+}
+
+void Engine::release_voice(vsa_voice voice) {
+    std::lock_guard lock(api_mutex_);
+    VoiceSlot& slot = checked_slot(voice);
+    if (commands_.free_space() == 0) {
+        throw Error(VSA_ERROR_CAPACITY, "the command queue is full");
+    }
+    // The handle stops validating immediately; the slot returns to the free list once the render
+    // thread has retired it and the worker has dropped its references.
+    slot.in_use.store(false, std::memory_order_release);
+    uint32_t generation = slot.generation.load(std::memory_order_relaxed) + 1;
+    if (generation == 0) {
+        generation = 1;  // handle 0 is never valid
+    }
+    slot.generation.store(generation, std::memory_order_release);
+
+    Command command{};
+    command.op = Op::Release;
+    command.slot = handle_slot(voice);
+    commands_.try_push(command);
+}
+
+void Engine::start_voice(vsa_voice voice) {
+    Command command{};
+    command.op = Op::Start;
+    post_voice_command(voice, command, StateChange::Start);
+}
+
+void Engine::pause_voice(vsa_voice voice) {
+    Command command{};
+    command.op = Op::Pause;
+    post_voice_command(voice, command, StateChange::Pause);
+}
+
+void Engine::stop_voice(vsa_voice voice) {
+    Command command{};
+    command.op = Op::Stop;
+    post_voice_command(voice, command, StateChange::Stop, 0.0);
+}
+
+void Engine::set_voice_gain(vsa_voice voice, float gain) {
+    check_gain(gain, "gain");
+    Command command{};
+    command.op = Op::SetGain;
+    command.value = gain;
+    post_voice_command(voice, command, StateChange::None);
+}
+
+void Engine::set_voice_pitch(vsa_voice voice, float pitch) {
+    check_pitch(pitch);
+    Command command{};
+    command.op = Op::SetPitch;
+    command.value = pitch;
+    post_voice_command(voice, command, StateChange::None);
+}
+
+void Engine::set_voice_looping(vsa_voice voice, bool looping) {
+    Command command{};
+    command.op = Op::SetLooping;
+    command.value = looping ? 1.0f : 0.0f;
+    post_voice_command(voice, command, StateChange::None);
+}
+
+void Engine::seek_voice(vsa_voice voice, double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "seek position must be a finite, non-negative number of seconds");
+    }
+    Command command{};
+    command.op = Op::Seek;
+    post_voice_command(voice, command, StateChange::None, seconds);
+}
+
+void Engine::fade_voice(vsa_voice voice, float target, float seconds, uint32_t flags, uint64_t token) {
+    check_gain(target, "fade target");
+    if (!std::isfinite(seconds) || seconds < 0.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "fade duration must be a finite, non-negative number of seconds");
+    }
+    if ((flags & ~static_cast<uint32_t>(VSA_FADE_STOP_WHEN_DONE)) != 0) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown fade flags " + std::to_string(flags));
+    }
+    Command command{};
+    command.op = Op::Fade;
+    command.value = target;
+    command.seconds = seconds;
+    command.flags = flags;
+    command.token = token;
+    post_voice_command(voice, command, StateChange::None);
+}
+
+vsa_voice_status Engine::voice_status(vsa_voice voice) const {
+    const VoiceSlot& slot = checked_slot(voice);
+    vsa_voice_status status{};
+    status.struct_size = sizeof status;
+    status.state = reported_state(slot);
+    const uint32_t applied = slot.seek_applied.load(std::memory_order_acquire);
+    const uint32_t issued = slot.seek_seq.load(std::memory_order_acquire);
+    status.position_seconds = applied != issued ? slot.requested_position.load(std::memory_order_acquire)
+                                                : slot.position.load(std::memory_order_acquire);
+    return status;
+}
+
+void Engine::set_bus_gain(uint32_t bus, float gain) {
+    if (bus >= VSA_BUS_COUNT) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown bus " + std::to_string(bus));
+    }
+    check_gain(gain, "bus gain");
+    Command command{};
+    command.op = Op::SetBusGain;
+    command.slot = bus;
+    command.value = gain;
+    post_global_command(command);
+}
+
+void Engine::set_master_gain(float gain) {
+    check_gain(gain, "master gain");
+    Command command{};
+    command.op = Op::SetMasterGain;
+    command.value = gain;
+    post_global_command(command);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Output
+
+std::vector<vsa_device_info> Engine::enumerate_devices() {
+    std::lock_guard lock(output_mutex_);
+    return device_.enumerate();
+}
+
+void Engine::render_callback(void* user, float* out, uint32_t frames) noexcept {
+    static_cast<Engine*>(user)->mixer_.render(out, frames, nullptr, nullptr);
+}
+
+void Engine::prepare_callback(void* user, uint32_t sample_rate, uint32_t channels) {
+    static_cast<Engine*>(user)->mixer_.prepare(sample_rate, channels);
+}
+
+void Engine::offline_block_hook(void* user) noexcept { static_cast<Engine*>(user)->service_streams(); }
+
+void Engine::open_device_locked(const vsa_device_id* id, uint32_t channels) {
+    device_.open(id, channels, &render_callback, &prepare_callback, this);
+}
+
+void Engine::open_output(const vsa_output_desc& desc) {
+    if (desc.kind != VSA_OUTPUT_NONE && desc.kind != VSA_OUTPUT_DEVICE) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown output kind " + std::to_string(desc.kind));
+    }
+    if (desc.channels != 0 && desc.channels != 2 && desc.channels != 4 && desc.channels != 6 && desc.channels != 8) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "channels must be 0, 2, 4, 6 or 8");
+    }
+    const uint32_t rate = desc.sample_rate == 0 ? settings_.sample_rate : desc.sample_rate;
+    if (desc.kind == VSA_OUTPUT_NONE && (rate < 8000 || rate > 384000)) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "sample_rate is outside 8000..384000");
+    }
+
+    std::lock_guard lock(output_mutex_);
+    device_.close();
+    reopen_pending_ = false;
+    if (desc.kind == VSA_OUTPUT_NONE) {
+        mixer_.prepare(rate, desc.channels == 0 ? 2 : desc.channels);
+        output_kind_ = VSA_OUTPUT_NONE;
+        device_id_.reset();
+        return;
+    }
+
+    device_id_ = desc.device_id != nullptr ? std::optional<vsa_device_id>(*desc.device_id) : std::nullopt;
+    device_channels_ = desc.channels;
+    try {
+        open_device_locked(device_id_ ? &*device_id_ : nullptr, device_channels_);
+        output_kind_ = VSA_OUTPUT_DEVICE;
+    } catch (...) {
+        // Stay consistent: back to offline output at the configured rate.
+        mixer_.prepare(settings_.sample_rate, 2);
+        output_kind_ = VSA_OUTPUT_NONE;
+        device_id_.reset();
+        throw;
+    }
+}
+
+void Engine::render_offline(float* out, uint32_t frames) {
+    if (out == nullptr && frames != 0) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "out must not be null");
+    }
+    std::lock_guard lock(output_mutex_);
+    if (output_kind_ != VSA_OUTPUT_NONE) {
+        throw Error(VSA_ERROR_INVALID_STATE, "offline rendering needs the NONE output (a device is open)");
+    }
+    mixer_.render(out, frames, &offline_block_hook, this);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Worker
+
+void Engine::worker_main() {
+    while (running_.load(std::memory_order_acquire)) {
+        try {
+            service_streams();
+            drain_retired();
+            {
+                std::lock_guard lock(events_mutex_);
+                drain_events_locked();
+            }
+            rt_log_.drain();
+            check_device();
+        } catch (const std::exception& e) {
+            Log::writef(VSA_LOG_ERROR, "worker: %s", e.what());
+        } catch (...) {
+            Log::write(VSA_LOG_ERROR, "worker: unknown error");
+        }
+        std::this_thread::sleep_for(kWorkerPeriod);
+    }
+}
+
+void Engine::service_streams() noexcept {
+    std::lock_guard lock(streams_mutex_);
+    for (Stream* stream : streams_) {
+        stream->service();
+    }
+}
+
+void Engine::drain_retired() {
+    uint32_t index = 0;
+    while (retired_.try_pop(index)) {
+        VoiceSlot& slot = slots_[index];
+        if (slot.stream != nullptr) {
+            {
+                std::lock_guard lock(streams_mutex_);
+                streams_.erase(std::remove(streams_.begin(), streams_.end(), slot.stream), streams_.end());
+            }
+            delete slot.stream;
+            slot.stream = nullptr;
+        }
+        if (slot.asset != nullptr) {
+            slot.asset->release();
+            slot.asset = nullptr;
+        }
+        std::lock_guard lock(api_mutex_);
+        free_slots_.push_back(index);
+        --allocated_voices_;
+    }
+}
+
+void Engine::push_event_locked(const vsa_event& event) {
+    if (event_queue_.size() >= kEventQueueLimit) {
+        event_queue_.pop_front();
+        ++events_dropped_;
+    }
+    event_queue_.push_back(event);
+}
+
+void Engine::drain_events_locked() {
+    vsa_event event{};
+    while (events_.try_pop(event)) {
+        push_event_locked(event);
+    }
+}
+
+void Engine::check_device() {
+    std::lock_guard lock(output_mutex_);
+    if (output_kind_ != VSA_OUTPUT_DEVICE) {
+        return;
+    }
+    if (device_.take_rerouted()) {
+        Log::write(VSA_LOG_INFO, "output followed the new default device");
+        std::lock_guard events(events_mutex_);
+        push_event_locked(make_event(VSA_EVENT_DEVICE_REROUTED));
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (device_.take_lost() && !reopen_pending_) {
+        Log::write(VSA_LOG_WARNING, "output device lost; reopening");
+        reopen_pending_ = true;
+        next_reopen_ = now;
+        std::lock_guard events(events_mutex_);
+        push_event_locked(make_event(VSA_EVENT_DEVICE_LOST));
+    }
+    if (!reopen_pending_ || now < next_reopen_) {
+        return;
+    }
+
+    bool reopened = false;
+    try {
+        open_device_locked(device_id_ ? &*device_id_ : nullptr, device_channels_);
+        reopened = true;
+    } catch (const Error& e) {
+        if (device_id_) {
+            Log::writef(VSA_LOG_WARNING, "reopening the selected device failed (%s); trying the default device",
+                        e.what());
+            try {
+                open_device_locked(nullptr, device_channels_);
+                reopened = true;
+            } catch (const Error&) {
+            }
+        }
+    }
+    if (reopened) {
+        reopen_pending_ = false;
+        std::lock_guard events(events_mutex_);
+        push_event_locked(make_event(VSA_EVENT_DEVICE_RESTORED));
+    } else {
+        next_reopen_ = now + kReopenInterval;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Telemetry and events
+
+vsa_engine_stats Engine::stats() {
+    vsa_engine_stats stats{};
+    stats.struct_size = sizeof stats;
+    {
+        std::lock_guard lock(output_mutex_);
+        stats.output_kind = output_kind_;
+        stats.sample_rate = mixer_.sample_rate();
+        stats.channels = mixer_.channels();
+        if (output_kind_ == VSA_OUTPUT_DEVICE && device_.is_open()) {
+            const auto& format = device_.format();
+            stats.device_period_frames = format.period_frames;
+            const std::size_t length = std::min(format.name.size(), sizeof stats.device_name - 1);
+            std::copy_n(format.name.data(), length, stats.device_name);
+            stats.device_name[length] = '\0';
+        }
+    }
+    stats.block_frames = settings_.block_frames;
+    stats.max_voices = settings_.max_voices;
+    {
+        std::lock_guard lock(api_mutex_);
+        stats.allocated_voices = allocated_voices_;
+    }
+
+    MixerStats& m = mixer_.stats();
+    stats.active_voices = m.active_voices.load(std::memory_order_relaxed);
+    stats.blocks_rendered = m.blocks.load(std::memory_order_relaxed);
+    stats.overloads = m.overloads.load(std::memory_order_relaxed);
+    stats.stream_underruns = m.underruns.load(std::memory_order_relaxed);
+    {
+        std::lock_guard lock(events_mutex_);
+        stats.events_dropped = m.events_dropped.load(std::memory_order_relaxed) + events_dropped_;
+    }
+    const uint64_t sum = m.time_sum_ns.exchange(0, std::memory_order_relaxed);
+    const uint64_t count = m.time_count.exchange(0, std::memory_order_relaxed);
+    const uint64_t max = m.time_max_ns.exchange(0, std::memory_order_relaxed);
+    stats.render_time_avg_us = count == 0 ? 0.0 : static_cast<double>(sum) / static_cast<double>(count) / 1000.0;
+    stats.render_time_max_us = static_cast<double>(max) / 1000.0;
+    stats.block_period_us = stats.sample_rate == 0 ? 0.0 : 1e6 * settings_.block_frames / stats.sample_rate;
+    const float min_gain = m.min_limiter_gain.exchange(1.0f, std::memory_order_relaxed);
+    stats.limiter_peak_reduction_db = min_gain >= 1.0f ? 0.0f : 20.0f * std::log10(std::max(min_gain, 1e-6f));
+    return stats;
+}
+
+uint32_t Engine::poll_events(vsa_event* out, uint32_t capacity) {
+    std::lock_guard lock(events_mutex_);
+    drain_events_locked();
+    const auto count = static_cast<uint32_t>(std::min<std::size_t>(capacity, event_queue_.size()));
+    for (uint32_t i = 0; i < count; ++i) {
+        out[i] = event_queue_.front();
+        event_queue_.pop_front();
+    }
+    return count;
+}
 
 }  // namespace vsa

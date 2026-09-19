@@ -1,0 +1,141 @@
+#pragma once
+
+#include "audio/voice.hpp"
+#include "core/rt_log.hpp"
+#include "core/spsc_ring.hpp"
+#include "dsp/gain_ramp.hpp"
+#include "dsp/limiter.hpp"
+#include "dsp/resampler.hpp"
+#include "vsaudio.h"
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <vector>
+
+namespace vsa {
+
+class Asset;
+
+/// Counters the render thread publishes; read (and partly reset) by API threads.
+struct MixerStats {
+    std::atomic<uint64_t> blocks{0};
+    std::atomic<uint64_t> overloads{0};
+    std::atomic<uint64_t> underruns{0};
+    std::atomic<uint64_t> events_dropped{0};
+    std::atomic<uint64_t> time_sum_ns{0};
+    std::atomic<uint64_t> time_count{0};
+    std::atomic<uint64_t> time_max_ns{0};
+    std::atomic<float> min_limiter_gain{1.0f};
+    std::atomic<uint32_t> active_voices{0};
+};
+
+/// The render core. Everything here runs on the render thread (the device callback, or the
+/// caller of an offline render) except the constructor and prepare(). It never allocates,
+/// locks, logs directly or calls into managed code: it talks to the rest of the engine only
+/// through the lock-free rings and the voice slots' atomics.
+///
+/// Per block: apply queued commands -> for each active voice, resample (+ stream window) ->
+/// voice gain x declick envelope -> pan into its bus -> buses x bus gain -> master gain ->
+/// true-peak limiter -> interleave to the output channel layout (front L/R; Phase 1 has no
+/// spatialisation, other channels are silent).
+class Mixer {
+public:
+    using BlockHook = void (*)(void* user) noexcept;
+
+    Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
+          SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, uint32_t block_frames);
+
+    Mixer(const Mixer&) = delete;
+    Mixer& operator=(const Mixer&) = delete;
+
+    /// Sets the output format and resets the limiter and the output FIFO. Allocates; must not
+    /// run while anything renders. Voices, buses and their gains are kept.
+    void prepare(uint32_t sample_rate, uint32_t channels);
+
+    /// Produces `frames` interleaved frames of any count: whole engine blocks are rendered as
+    /// needed and buffered (the FIFO adapter between fixed blocks and device periods). `hook`
+    /// runs before each block (the offline path uses it to refill streams synchronously).
+    void render(float* out, uint32_t frames, BlockHook hook, void* user) noexcept;
+
+    [[nodiscard]] uint32_t sample_rate() const noexcept { return sample_rate_; }
+    [[nodiscard]] uint32_t channels() const noexcept { return channels_; }
+    [[nodiscard]] uint32_t block_frames() const noexcept { return block_frames_; }
+    [[nodiscard]] double block_period_seconds() const noexcept {
+        return static_cast<double>(block_frames_) / sample_rate_;
+    }
+    [[nodiscard]] MixerStats& stats() noexcept { return stats_; }
+
+private:
+    enum class Generated { Silent, Produced, ProducedAndEnded };
+
+    void render_block() noexcept;
+    void apply(const Command& command) noexcept;
+
+    // Voice life cycle (render thread).
+    void activate(uint32_t slot) noexcept;
+    void start(VoiceSlot& s) noexcept;
+    void pause(VoiceSlot& s) noexcept;
+    void stop(VoiceSlot& s) noexcept;
+    void seek(VoiceSlot& s, double seconds) noexcept;
+    void fade(VoiceSlot& s, const Command& command) noexcept;
+    /// Returns true if the voice was retired (removed from the active list).
+    bool release(uint32_t slot) noexcept;
+    void retire(uint32_t slot) noexcept;
+    void finish_stop(VoiceSlot& s) noexcept;
+    void finish_seek(VoiceSlot& s) noexcept;
+    void set_position(VoiceSlot& s, double seconds) noexcept;
+    void end_voice(VoiceSlot& s) noexcept;
+    void complete_fade(VoiceSlot& s) noexcept;
+    void cancel_fade(VoiceSlot& s) noexcept;
+
+    /// Returns true if the voice was retired.
+    bool render_voice(uint32_t slot) noexcept;
+    Generated generate(VoiceSlot& s) noexcept;
+    void gather(const Asset& asset, int64_t first, int64_t end, bool loop, bool wrap_before_start) noexcept;
+    void publish_position(VoiceSlot& s) noexcept;
+    void post_event(vsa_event_type type, vsa_voice voice, uint64_t token, uint32_t flags) noexcept;
+
+    const dsp::ResamplerKernel& kernel_;
+    VoiceSlot* slots_;
+    uint32_t slot_count_;
+    SpscRing<Command>& commands_;
+    SpscRing<vsa_event>& events_;
+    SpscRing<uint32_t>& retired_;
+    RtLog& rt_log_;
+    const uint32_t block_frames_;
+
+    uint32_t sample_rate_ = 48000;
+    uint32_t channels_ = 2;
+    uint32_t smooth_frames_ = 240;
+    float declick_step_ = 1.0f / 240.0f;
+    uint64_t block_period_ns_ = 0;
+
+    // Active voices: dense list of slot indices.
+    std::vector<uint32_t> active_;
+    uint32_t active_count_ = 0;
+
+    // Scratch, sized once in the constructor.
+    std::vector<float> coef_;
+    std::vector<float> window_storage_;
+    float* window_[2] = {};
+    uint32_t window_capacity_ = 0;
+    std::vector<float> voice_storage_;
+    float* voice_out_[2] = {};
+    std::vector<float> gain_buf_;
+    std::vector<float> bus_storage_;
+    std::array<float*, VSA_BUS_COUNT * 2> bus_{};
+    std::array<bool, VSA_BUS_COUNT> bus_used_{};
+    std::array<dsp::GainRamp, VSA_BUS_COUNT> bus_gain_{};
+    dsp::GainRamp master_gain_;
+    std::vector<float> master_storage_;
+    dsp::Limiter limiter_;
+
+    // Output FIFO: one interleaved block.
+    std::vector<float> block_out_;
+    uint32_t block_read_ = 0;
+
+    MixerStats stats_;
+};
+
+}  // namespace vsa

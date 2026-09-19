@@ -22,7 +22,53 @@ set(VSA_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party" CACHE PATH
     "Directory populated by scripts/fetch-deps")
 
 include(VsaPlatform)       # sets VSA_RID
+include(VsaWarnings)       # vsa_enable_warnings(), vsa_disable_warnings()
 include(SteamAudio)        # defines SteamAudio::phonon and vsa_copy_phonon_runtime()
+include(Miniaudio)         # vsa_miniaudio
+include(Vorbis)            # vsa_ogg, vsa_vorbis
+
+find_package(Threads REQUIRED)
+
+# ---------------------------------------------------------------------------
+# vsaudio_core: the whole engine as a static library. The shared library adds
+# only the C boundary; the internal unit tests link the core directly.
+# ---------------------------------------------------------------------------
+add_library(vsaudio_core STATIC
+    include/vsaudio.h
+    src/engine.cpp
+    src/engine.hpp
+    src/audio/asset.cpp
+    src/audio/asset.hpp
+    src/audio/mixer.cpp
+    src/audio/mixer.hpp
+    src/audio/stream.cpp
+    src/audio/stream.hpp
+    src/audio/voice.hpp
+    src/backend/device.cpp
+    src/backend/device.hpp
+    src/core/error.cpp
+    src/core/error.hpp
+    src/core/log.cpp
+    src/core/log.hpp
+    src/core/rt_log.cpp
+    src/core/rt_log.hpp
+    src/core/spsc_ring.hpp
+    src/decode/decoders.cpp
+    src/decode/decoders.hpp
+    src/dsp/gain_ramp.hpp
+    src/dsp/limiter.cpp
+    src/dsp/limiter.hpp
+    src/dsp/resampler.cpp
+    src/dsp/resampler.hpp
+    src/steam/ipl_handle.hpp
+    src/steam/self_test.cpp
+    src/steam/self_test.hpp
+    src/steam/steam_context.cpp
+    src/steam/steam_context.hpp)
+target_include_directories(vsaudio_core
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(vsaudio_core PUBLIC SteamAudio::phonon vsa_miniaudio vsa_vorbis Threads::Threads)
+vsa_enable_warnings(vsaudio_core)
 
 # ---------------------------------------------------------------------------
 # vsaudio shared library
@@ -30,28 +76,13 @@ include(SteamAudio)        # defines SteamAudio::phonon and vsa_copy_phonon_runt
 set(VSA_BUILD_DESCRIPTION "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}, ${VSA_RID}")
 configure_file(src/vsaudio_build_info.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/vsaudio_build_info.h" @ONLY)
 
-add_library(vsaudio SHARED
-    include/vsaudio.h
-    src/api.cpp
-    src/engine.cpp
-    src/engine.hpp
-    src/core/error.cpp
-    src/core/error.hpp
-    src/core/log.cpp
-    src/core/log.hpp
-    src/steam/ipl_handle.hpp
-    src/steam/self_test.cpp
-    src/steam/self_test.hpp
-    src/steam/steam_context.cpp
-    src/steam/steam_context.hpp)
-
+add_library(vsaudio SHARED src/api.cpp)
 target_include_directories(vsaudio
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(vsaudio
     PRIVATE VSA_BUILDING_LIBRARY VSA_BUILD_CONFIG="$<CONFIG>")
-target_link_libraries(vsaudio PRIVATE SteamAudio::phonon)
-include(VsaWarnings)
+target_link_libraries(vsaudio PRIVATE vsaudio_core)
 vsa_enable_warnings(vsaudio)
 
 # Find phonon next to vsaudio at runtime on every platform.

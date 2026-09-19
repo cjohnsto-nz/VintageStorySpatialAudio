@@ -54,6 +54,21 @@ TEST_CASE("engine config is validated") {
         config.ray_tracer = 42;
         CHECK(vsa_engine_create(&config, &engine) == VSA_ERROR_INVALID_ARGUMENT);
     }
+    SUBCASE("render settings out of range") {
+        auto config = make_config(VSA_RAY_TRACER_STEAM);
+        config.block_frames = 16;
+        CHECK(vsa_engine_create(&config, &engine) == VSA_ERROR_INVALID_ARGUMENT);
+        config.block_frames = 0;
+        config.sample_rate = 1000;
+        CHECK(vsa_engine_create(&config, &engine) == VSA_ERROR_INVALID_ARGUMENT);
+        config.sample_rate = 0;
+        config.resampler_quality = 9;
+        CHECK(vsa_engine_create(&config, &engine) == VSA_ERROR_INVALID_ARGUMENT);
+        config.resampler_quality = 0;
+        config.max_voices = 1u << 20;
+        CHECK(vsa_engine_create(&config, &engine) == VSA_ERROR_INVALID_ARGUMENT);
+        CHECK(engine == nullptr);
+    }
 }
 
 TEST_CASE("only one engine may exist at a time, and it can be recreated") {

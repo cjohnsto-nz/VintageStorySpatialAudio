@@ -1,9 +1,11 @@
 #pragma once
 
+#include "support/signals.hpp"
 #include "vsaudio.h"
 
 #include <doctest/doctest.h>
 
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -50,6 +52,99 @@ struct ScopedEngine {
     ~ScopedEngine() { vsa_engine_destroy(engine); }
     ScopedEngine(const ScopedEngine&) = delete;
     ScopedEngine& operator=(const ScopedEngine&) = delete;
+};
+
+struct AssetDeleter {
+    void operator()(vsa_asset* asset) const noexcept { vsa_asset_release(asset); }
+};
+using AssetPtr = std::unique_ptr<vsa_asset, AssetDeleter>;
+
+/// Output latency of the master limiter at 48 kHz (detector lag 4 + 2 ms look-ahead - 1).
+inline constexpr std::size_t kLimiterLatency = 99;
+inline constexpr double kMonoPan = 0.70710678;
+
+/// An engine on the offline (NONE) output at 48 kHz stereo, with helpers.
+struct OfflineEngine : ScopedEngine {
+    explicit OfflineEngine(vsa_engine_config config = make_config(VSA_RAY_TRACER_STEAM)) : ScopedEngine(config) {
+        REQUIRE(result == VSA_OK);
+    }
+
+    /// Interleaved stereo.
+    std::vector<float> render(std::size_t frames) {
+        std::vector<float> out(frames * 2);
+        REQUIRE(vsa_engine_render_offline(engine, out.data(), static_cast<uint32_t>(frames)) == VSA_OK);
+        return out;
+    }
+
+    AssetPtr asset(const std::vector<uint8_t>& bytes, uint32_t storage = VSA_ASSET_STORAGE_AUTO,
+                   uint32_t format = VSA_ASSET_FORMAT_AUTO) {
+        vsa_asset_desc desc{};
+        desc.struct_size = sizeof desc;
+        desc.format = format;
+        desc.storage = storage;
+        desc.data = bytes.data();
+        desc.size = bytes.size();
+        desc.name = "test";
+        vsa_asset* out = nullptr;
+        const vsa_result r = vsa_asset_create(engine, &desc, &out);
+        INFO(vsa_get_last_error());
+        REQUIRE(r == VSA_OK);
+        return AssetPtr(out);
+    }
+
+    AssetPtr pcm(const std::vector<float>& samples, uint32_t channels, uint32_t rate) {
+        const std::vector<int16_t> s16 = to_s16(samples);
+        vsa_asset_desc desc{};
+        desc.struct_size = sizeof desc;
+        desc.format = VSA_ASSET_FORMAT_PCM_S16;
+        desc.data = s16.data();
+        desc.size = s16.size() * sizeof(int16_t);
+        desc.pcm_channels = channels;
+        desc.pcm_sample_rate = rate;
+        vsa_asset* out = nullptr;
+        REQUIRE(vsa_asset_create(engine, &desc, &out) == VSA_OK);
+        return AssetPtr(out);
+    }
+
+    vsa_voice voice(const AssetPtr& asset, float gain = 1.0f, bool looping = false, float pitch = 1.0f,
+                    uint32_t bus = VSA_BUS_SOUND) {
+        vsa_voice_desc desc{};
+        desc.struct_size = sizeof desc;
+        desc.asset = asset.get();
+        desc.bus = bus;
+        desc.gain = gain;
+        desc.pitch = pitch;
+        desc.looping = looping ? 1u : 0u;
+        vsa_voice v = 0;
+        const vsa_result r = vsa_voice_create(engine, &desc, &v);
+        INFO(vsa_get_last_error());
+        REQUIRE(r == VSA_OK);
+        REQUIRE(v != 0);
+        return v;
+    }
+
+    vsa_voice_status status(vsa_voice v) {
+        vsa_voice_status s{};
+        s.struct_size = sizeof s;
+        REQUIRE(vsa_voice_get_status(engine, v, &s) == VSA_OK);
+        return s;
+    }
+
+    std::vector<vsa_event> events() {
+        std::vector<vsa_event> out(64);
+        out[0].struct_size = sizeof(vsa_event);
+        uint32_t count = 0;
+        REQUIRE(vsa_engine_poll_events(engine, out.data(), static_cast<uint32_t>(out.size()), &count) == VSA_OK);
+        out.resize(count);
+        return out;
+    }
+
+    vsa_engine_stats stats() {
+        vsa_engine_stats s{};
+        s.struct_size = sizeof s;
+        REQUIRE(vsa_engine_get_stats(engine, &s) == VSA_OK);
+        return s;
+    }
 };
 
 }  // namespace vsa_test
