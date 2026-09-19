@@ -52,6 +52,12 @@ public sealed class SteamAudioConfig
         ["Music"] = 0f,
     };
 
+    /// <summary>
+    /// Metres the listener sits behind the player's eyes (horizontally), so the player's own sounds
+    /// come from the front rather than flipping to the rear speakers. 0 disables it.
+    /// </summary>
+    public float ListenerBackwardOffset { get; set; } = 0.5f;
+
     /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 

@@ -22,6 +22,11 @@ public sealed class ListenerBasis
 
     public float UpZ { get; private set; }
 
+    /// <summary>Unit horizontal direction the listener faces (kept while looking straight up or down).</summary>
+    public float HeadingX => headingX;
+
+    public float HeadingZ => headingZ;
+
     /// <summary>Updates from a view direction (any length). Returns false and keeps the previous basis if it is degenerate.</summary>
     public bool Update(float x, float y, float z)
     {

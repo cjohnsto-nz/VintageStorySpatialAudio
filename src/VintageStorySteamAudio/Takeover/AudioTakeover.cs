@@ -75,7 +75,10 @@ internal sealed class AudioTakeover : IDisposable
     {
         ArgumentNullException.ThrowIfNull(config);
         Members members = Members.Resolve(game);
-        var session = new AudioSession(engine, logger, config.CategoryTrimsDb());
+        var session = new AudioSession(engine, logger, config.CategoryTrimsDb())
+        {
+            ListenerBackwardOffset = float.IsFinite(config.ListenerBackwardOffset) ? Math.Clamp(config.ListenerBackwardOffset, 0f, 3f) : 0f,
+        };
         var takeover = new AudioTakeover(api, logger, session, members);
         try
         {

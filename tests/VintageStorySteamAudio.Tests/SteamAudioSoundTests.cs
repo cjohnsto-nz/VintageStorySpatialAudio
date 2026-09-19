@@ -219,6 +219,40 @@ public sealed class SteamAudioSoundTests
         Assert.True(Math.Abs((rig.RenderRms(0.1) / full) - 0.25) < 0.01);
     }
 
+    [Fact]
+    public void The_listener_offset_puts_the_players_own_sounds_in_front()
+    {
+        using var rig = new Rig();
+        rig.Session.Engine.OpenOffline(Rate, 6);
+        rig.Session.Engine.SetRenderMode(RenderMode.Speakers);
+        rig.Session.ListenerBackwardOffset = 0.5f;
+        rig.Session.SetListener(100, 70, 100, 0, 0, -1);  // eyes at y 70, facing -z (north)
+
+        // A footstep straight below the eyes: without the offset its direction is purely vertical,
+        // and the tiniest horizontal error flips it between the front and rear speakers.
+        SteamAudioSound step = rig.Session.CreateSound(
+            new SoundParams { Location = new AssetLocation("game:sounds/tone.ogg"), ShouldLoop = true, Position = new Vec3f(100, 68.4f, 100) },
+            () => rig.Asset,
+            1);
+        step.Start();
+        rig.Render6(0.1);
+        float[] output = rig.Render6(0.2);
+        double front = Power(output, 6, 0) + Power(output, 6, 1) + Power(output, 6, 2);
+        double rear = Power(output, 6, 4) + Power(output, 6, 5);
+        Assert.True(front > rear * 4, $"front {front}, rear {rear}");
+    }
+
+    private static double Power(float[] interleaved, int channels, int channel)
+    {
+        double sum = 0;
+        for (int i = channel; i < interleaved.Length; i += channels)
+        {
+            sum += interleaved[i] * (double)interleaved[i];
+        }
+
+        return sum;
+    }
+
     private static Dictionary<AudioBus, int> AllBuses(int level, int? music = null) =>
         Enum.GetValues<AudioBus>().ToDictionary(b => b, b => b == AudioBus.Music && music is int m ? m : level);
 
@@ -243,6 +277,13 @@ public sealed class SteamAudioSoundTests
             Session.CreateSound(new SoundParams { Location = new AssetLocation("game:sounds/tone.ogg"), ShouldLoop = loop, SoundType = type }, () => Asset, 1);
 
         public void Render(double seconds) => engine.RenderOffline(new float[(int)(seconds * Rate) * 2]);
+
+        public float[] Render6(double seconds)
+        {
+            float[] output = new float[(int)(seconds * Rate) * 6];
+            engine.RenderOffline(output);
+            return output;
+        }
 
         public double RenderRms(double seconds)
         {

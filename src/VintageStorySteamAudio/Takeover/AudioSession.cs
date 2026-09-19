@@ -143,10 +143,21 @@ public sealed class AudioSession : IDisposable
         }
     }
 
-    /// <summary>Listener at the eye position, facing along the (unflattened) view vector.</summary>
+    /// <summary>
+    /// Metres the listener sits behind the eye, horizontally. The player's own sounds (footsteps,
+    /// blocks at their feet) are almost straight below the ears, where a few centimetres decide
+    /// between the front and rear speakers; moving the listener back puts them clearly in front.
+    /// From Chris's VintageStorySurroundSound, where the same fix settled it.
+    /// </summary>
+    public float ListenerBackwardOffset { get; set; }
+
+    /// <summary>Listener at the eye position (moved back by <see cref="ListenerBackwardOffset"/>), facing along the (unflattened) view vector.</summary>
     public void SetListener(float x, float y, float z, float viewX, float viewY, float viewZ)
     {
         basis.Update(viewX, viewY, viewZ);
+        float back = ListenerBackwardOffset;
+        x -= basis.HeadingX * back;
+        z -= basis.HeadingZ * back;
         Guard(() => Engine.SetListener(x, y, z, basis.ForwardX, basis.ForwardY, basis.ForwardZ, basis.UpX, basis.UpY, basis.UpZ));
     }
 
