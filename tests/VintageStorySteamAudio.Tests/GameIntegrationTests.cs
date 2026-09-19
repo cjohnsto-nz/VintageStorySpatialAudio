@@ -10,6 +10,7 @@ namespace VintageStorySteamAudio.Tests;
 /// (artifacts/native). They are skipped, not failed, when either is absent, so the
 /// pure unit tests still run anywhere; CI provides both.
 /// </summary>
+[Collection(NativeEngineGroup.Name)]
 public sealed class GameIntegrationTests
 {
     private static readonly Lazy<GameAssemblies?> GameInstall = new(LoadGame);
@@ -48,13 +49,8 @@ public sealed class GameIntegrationTests
     [Fact]
     public void Native_engine_loads_and_passes_its_self_test()
     {
-        string native = Path.Combine(RepoRoot(), "artifacts", "native", NativeLibraryResolver.RuntimeFolderName);
-        if (!File.Exists(Path.Combine(native, NativeLibraryResolver.PlatformFileName(VsaNative.LibraryName))))
-        {
-            Assert.Skip($"native engine not built at {native}");
-        }
+        NativeTestEnvironment.RequireNatives();
 
-        NativeLibraryResolver.Register(native);
         EngineVersion version = AudioEngine.GetVersion();
         Assert.Equal(VsaNative.AbiVersion, version.AbiVersion);
         Assert.Equal(new Version(4, 8, 1), version.SteamAudio);
@@ -72,16 +68,6 @@ public sealed class GameIntegrationTests
         Assert.Equal("AlreadyExists", second.Result);
     }
 
-    private static string RepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "global.json")))
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName ?? throw new InvalidOperationException("repo root not found");
-    }
 
     private sealed class ListLog : IEngineLog
     {

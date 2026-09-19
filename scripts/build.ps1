@@ -82,20 +82,39 @@ if (-not $SkipDoctor) {
     dotnet $doctor --native (Join-Path $NativeArtifacts $rid)
 }
 
+if (-not $SkipTests) {
+    # Golden scenes with pass/fail expectations (levels, underruns, render load).
+    Step 'SceneLab: render scenarios'
+    $sceneLab = Join-Path $Root "tools/SceneLab/bin/$Configuration/net10.0/SceneLab.dll"
+    $scenarios = Get-ChildItem (Join-Path $Root 'tools/SceneLab/scenarios') -Filter *.json | ForEach-Object FullName
+    dotnet $sceneLab @scenarios --native (Join-Path $NativeArtifacts $rid) --out (Join-Path $Artifacts 'scenelab')
+}
+
 Step 'Packaging'
 $modBuild = Join-Path $Root "src/VintageStorySteamAudio/bin/$Configuration/net10.0/mod"
 $modArtifact = Join-Path $Artifacts 'mod'
 if (Test-Path $modArtifact) { Remove-Item -Recurse -Force $modArtifact }
 Copy-Item -Recurse $modBuild $modArtifact
 
-# Licence notices for everything we redistribute (Steam Audio and the components it bundles).
+# Licence notices for everything we redistribute: Steam Audio and the components it bundles, and
+# libogg/libvorbis (BSD-3-Clause, linked into vsaudio). miniaudio is public domain / MIT-0.
 $notices = @(
     '# Third-party notices',
     '',
     'This mod redistributes Steam Audio (Copyright Valve Corporation, Apache License 2.0; the full',
-    'Apache 2.0 text is reproduced below) and the components Steam Audio bundles.',
+    'Apache 2.0 text is reproduced below) and the components Steam Audio bundles, and contains',
+    'libogg and libvorbis (Xiph.Org Foundation, BSD-3-Clause, reproduced below) and miniaudio',
+    '(David Reid, public domain / MIT-0).',
     '',
     (Get-Content -Raw (Join-Path $Root 'third_party/VERSIONS.md')),
+    '',
+    '## libogg',
+    '',
+    (Get-Content -Raw (Join-Path $Root 'third_party/libogg/COPYING')),
+    '',
+    '## libvorbis',
+    '',
+    (Get-Content -Raw (Join-Path $Root 'third_party/libvorbis/COPYING')),
     '',
     (Get-Content -Raw (Join-Path $Root 'third_party/steamaudio/THIRDPARTY.md'))
 ) -join [Environment]::NewLine

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace VintageStorySteamAudio.Native;
 
@@ -23,6 +24,20 @@ public sealed record EngineOptions
 
     /// <summary>Steam Audio's API validation layer. Slow; development only.</summary>
     public bool SteamAudioValidation { get; init; }
+
+    /// <summary>Rate of the offline output; devices run at their native rate. 0 = 48000.</summary>
+    public int SampleRate { get; init; }
+
+    /// <summary>Frames per engine block. 0 = 256.</summary>
+    public int BlockFrames { get; init; }
+
+    /// <summary>Voice slot capacity (a storage bound, not an audibility cap). 0 = 4096.</summary>
+    public int MaxVoices { get; init; }
+
+    public ResamplerQuality ResamplerQuality { get; init; } = ResamplerQuality.Default;
+
+    /// <summary>Ogg assets longer than this are streamed. 0 = 20 s.</summary>
+    public int StreamThresholdMs { get; init; }
 }
 
 public sealed record EngineVersion(
@@ -35,13 +50,38 @@ public sealed record EngineInfo(RayTracer ActiveRayTracer, bool EmbreeAvailable)
 
 public sealed record SelfTestResult(bool Passed, float OcclusionThroughWall, float OcclusionClearPath, double ElapsedMs);
 
+/// <summary>A playback device. <see cref="Id"/> is opaque and only meaningful to the engine that listed it.</summary>
+public sealed record AudioDevice(string Name, bool IsDefault, ReadOnlyMemory<byte> Id);
+
+public sealed record EngineStats(
+    OutputKind Output,
+    int SampleRate,
+    int Channels,
+    int BlockFrames,
+    int DevicePeriodFrames,
+    string DeviceName,
+    int ActiveVoices,
+    int AllocatedVoices,
+    int MaxVoices,
+    ulong BlocksRendered,
+    ulong Overloads,
+    ulong StreamUnderruns,
+    ulong EventsDropped,
+    double RenderTimeAvgUs,
+    double RenderTimeMaxUs,
+    double BlockPeriodUs,
+    float LimiterPeakReductionDb);
+
+public readonly record struct EngineEvent(EngineEventType Type, ulong Voice, ulong Token, bool FadeCancelled);
+
 /// <summary>
-/// Owns the native engine. At most one exists per process (enforced natively).
-/// Dispose it before a new world session creates another.
+/// Owns the native engine. At most one exists per process (enforced natively). Thread-safe: every
+/// method may be called from any thread. Dispose it before a new world session creates another.
 /// </summary>
 public sealed class AudioEngine : IDisposable
 {
     private readonly EngineHandle handle;
+    private int offlineChannels = 2;
 
     private AudioEngine(EngineHandle handle, EngineInfo info)
     {
@@ -50,6 +90,8 @@ public sealed class AudioEngine : IDisposable
     }
 
     public EngineInfo Info { get; }
+
+    public bool IsDisposed => handle.IsClosed;
 
     /// <summary>Reads the native library's version and checks ABI compatibility.</summary>
     public static EngineVersion GetVersion()
@@ -86,6 +128,11 @@ public sealed class AudioEngine : IDisposable
                 LogUserData = log is null ? 0 : GCHandle.ToIntPtr(logHandle),
                 RayTracer = (uint)options.RayTracer,
                 Flags = options.SteamAudioValidation ? VsaNative.EngineFlagSteamAudioValidation : 0,
+                SampleRate = checked((uint)options.SampleRate),
+                BlockFrames = checked((uint)options.BlockFrames),
+                MaxVoices = checked((uint)options.MaxVoices),
+                ResamplerQuality = (uint)options.ResamplerQuality,
+                StreamThresholdMs = checked((uint)options.StreamThresholdMs),
             };
 
             NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out nint engine), "vsa_engine_create");
@@ -115,25 +162,236 @@ public sealed class AudioEngine : IDisposable
     /// <summary>Runs the native end-to-end self-test (scene, ray tracer, direct simulation).</summary>
     public SelfTestResult RunSelfTest()
     {
-        bool added = false;
-        handle.DangerousAddRef(ref added);
-        try
+        using Lease lease = new(handle);
+        var report = new VsaSelfTestReport { StructSize = (uint)Unsafe.SizeOf<VsaSelfTestReport>() };
+        NativeException.ThrowIfFailed(VsaNative.EngineRunSelfTest(lease.Engine, ref report), "vsa_engine_run_self_test");
+        return new SelfTestResult(report.Passed != 0, report.OcclusionThroughWall, report.OcclusionClearPath, report.ElapsedMs);
+    }
+
+    // ---- assets and voices ----
+
+    /// <summary>Decodes (or, for streamed storage, validates and copies) audio on the calling thread.</summary>
+    public unsafe AudioAsset CreateAsset(
+        ReadOnlySpan<byte> data, string? name = null, AssetFormat format = AssetFormat.Auto, AssetStorage storage = AssetStorage.Auto)
+    {
+        byte[]? nameBytes = name is null ? null : Encoding.UTF8.GetBytes(name + "\0");
+        using Lease lease = new(handle);
+        fixed (byte* bytes = data)
+        fixed (byte* namePtr = nameBytes)
         {
-            var report = new VsaSelfTestReport { StructSize = (uint)Unsafe.SizeOf<VsaSelfTestReport>() };
-            NativeException.ThrowIfFailed(
-                VsaNative.EngineRunSelfTest(handle.DangerousGetHandle(), ref report), "vsa_engine_run_self_test");
-            return new SelfTestResult(report.Passed != 0, report.OcclusionThroughWall, report.OcclusionClearPath, report.ElapsedMs);
-        }
-        finally
-        {
-            if (added)
+            var desc = new VsaAssetDesc
             {
-                handle.DangerousRelease();
-            }
+                StructSize = (uint)sizeof(VsaAssetDesc),
+                Format = (uint)format,
+                Storage = (uint)storage,
+                Data = bytes,
+                Size = (ulong)data.Length,
+                Name = namePtr,
+            };
+            NativeException.ThrowIfFailed(VsaNative.AssetCreate(lease.Engine, in desc, out nint asset), "vsa_asset_create");
+            return new AudioAsset(asset);
         }
     }
 
+    /// <summary>Wraps interleaved 16-bit PCM.</summary>
+    public unsafe AudioAsset CreatePcmAsset(ReadOnlySpan<short> interleaved, int channels, int sampleRate, string? name = null)
+    {
+        byte[]? nameBytes = name is null ? null : Encoding.UTF8.GetBytes(name + "\0");
+        using Lease lease = new(handle);
+        fixed (short* samples = interleaved)
+        fixed (byte* namePtr = nameBytes)
+        {
+            var desc = new VsaAssetDesc
+            {
+                StructSize = (uint)sizeof(VsaAssetDesc),
+                Format = (uint)AssetFormat.PcmS16,
+                Data = samples,
+                Size = (ulong)interleaved.Length * sizeof(short),
+                Name = namePtr,
+                PcmChannels = checked((uint)channels),
+                PcmSampleRate = checked((uint)sampleRate),
+            };
+            NativeException.ThrowIfFailed(VsaNative.AssetCreate(lease.Engine, in desc, out nint asset), "vsa_asset_create");
+            return new AudioAsset(asset);
+        }
+    }
+
+    /// <summary>Creates a stopped voice. The voice keeps the asset alive; the caller may dispose its asset.</summary>
+    public Voice CreateVoice(AudioAsset asset, AudioBus bus = AudioBus.Sound, float gain = 1f, float pitch = 1f, bool looping = false)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        using Lease lease = new(handle);
+        using AudioAsset.Lease assetLease = asset.Acquire();
+        var desc = new VsaVoiceDesc
+        {
+            StructSize = (uint)Unsafe.SizeOf<VsaVoiceDesc>(),
+            Bus = (uint)bus,
+            Asset = assetLease.Handle,
+            Gain = gain,
+            Pitch = pitch,
+            Looping = looping ? 1u : 0u,
+        };
+        NativeException.ThrowIfFailed(VsaNative.VoiceCreate(lease.Engine, in desc, out ulong voice), "vsa_voice_create");
+        return new Voice(this, voice);
+    }
+
+    public void SetBusGain(AudioBus bus, float gain)
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.BusSetGain(lease.Engine, (uint)bus, gain), "vsa_bus_set_gain");
+    }
+
+    public void SetMasterGain(float gain)
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineSetMasterGain(lease.Engine, gain), "vsa_engine_set_master_gain");
+    }
+
+    // ---- output ----
+
+    public unsafe IReadOnlyList<AudioDevice> EnumerateDevices()
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.DeviceEnumerate(lease.Engine, null, 0, out uint count), "vsa_device_enumerate");
+        var records = new VsaDeviceInfo[count + 4]; // headroom for a device appearing in between
+        records[0].StructSize = (uint)sizeof(VsaDeviceInfo);
+        fixed (VsaDeviceInfo* ptr = records)
+        {
+            NativeException.ThrowIfFailed(
+                VsaNative.DeviceEnumerate(lease.Engine, ptr, (uint)records.Length, out count), "vsa_device_enumerate");
+            int written = (int)Math.Min(count, (uint)records.Length);
+            var devices = new List<AudioDevice>(written);
+            for (int i = 0; i < written; i++)
+            {
+                VsaDeviceInfo* record = ptr + i;
+                string name = Utf8(record->Name, VsaDeviceInfo.NameLength);
+                byte[] id = new ReadOnlySpan<byte>(record->Id.Bytes, VsaDeviceId.Length).ToArray();
+                devices.Add(new AudioDevice(name, record->IsDefault != 0, id));
+            }
+
+            return devices;
+        }
+    }
+
+    /// <summary>Opens a device (null = the system default, followed when it changes).</summary>
+    public unsafe void OpenDevice(AudioDevice? device = null, int channels = 0)
+    {
+        using Lease lease = new(handle);
+        VsaDeviceId id = default;
+        if (device is not null)
+        {
+            if (device.Id.Length != VsaDeviceId.Length)
+            {
+                throw new ArgumentException("Device id has the wrong length; it must come from EnumerateDevices.", nameof(device));
+            }
+
+            device.Id.Span.CopyTo(new Span<byte>(id.Bytes, VsaDeviceId.Length));
+        }
+
+        var desc = new VsaOutputDesc
+        {
+            StructSize = (uint)sizeof(VsaOutputDesc),
+            Kind = (uint)OutputKind.Device,
+            DeviceId = device is null ? null : &id,
+            Channels = checked((uint)channels),
+        };
+        NativeException.ThrowIfFailed(VsaNative.OutputOpen(lease.Engine, in desc), "vsa_output_open");
+    }
+
+    /// <summary>Switches to the offline output (audio only through <see cref="RenderOffline"/>).</summary>
+    public unsafe void OpenOffline(int sampleRate = 0, int channels = 2)
+    {
+        using Lease lease = new(handle);
+        var desc = new VsaOutputDesc
+        {
+            StructSize = (uint)sizeof(VsaOutputDesc),
+            Kind = (uint)OutputKind.None,
+            Channels = checked((uint)channels),
+            SampleRate = checked((uint)sampleRate),
+        };
+        NativeException.ThrowIfFailed(VsaNative.OutputOpen(lease.Engine, in desc), "vsa_output_open");
+        offlineChannels = channels == 0 ? 2 : channels;
+    }
+
+    /// <summary>Renders interleaved frames on the calling thread (offline output only). Deterministic.</summary>
+    public unsafe void RenderOffline(Span<float> interleaved)
+    {
+        int channels = offlineChannels;
+        if (interleaved.Length % channels != 0)
+        {
+            throw new ArgumentException($"Length must be a multiple of the channel count ({channels}).", nameof(interleaved));
+        }
+
+        using Lease lease = new(handle);
+        fixed (float* output = interleaved)
+        {
+            NativeException.ThrowIfFailed(
+                VsaNative.EngineRenderOffline(lease.Engine, output, (uint)(interleaved.Length / channels)), "vsa_engine_render_offline");
+        }
+    }
+
+    /// <summary>Engine telemetry. Render times and limiter reduction cover the time since the previous call.</summary>
+    public unsafe EngineStats GetStats()
+    {
+        using Lease lease = new(handle);
+        var stats = new VsaEngineStats { StructSize = (uint)sizeof(VsaEngineStats) };
+        NativeException.ThrowIfFailed(VsaNative.EngineGetStats(lease.Engine, ref stats), "vsa_engine_get_stats");
+        return new EngineStats(
+            (OutputKind)stats.OutputKind,
+            (int)stats.SampleRate,
+            (int)stats.Channels,
+            (int)stats.BlockFrames,
+            (int)stats.DevicePeriodFrames,
+            Utf8(stats.DeviceName, 256),
+            (int)stats.ActiveVoices,
+            (int)stats.AllocatedVoices,
+            (int)stats.MaxVoices,
+            stats.BlocksRendered,
+            stats.Overloads,
+            stats.StreamUnderruns,
+            stats.EventsDropped,
+            stats.RenderTimeAvgUs,
+            stats.RenderTimeMaxUs,
+            stats.BlockPeriodUs,
+            stats.LimiterPeakReductionDb);
+    }
+
+    /// <summary>Takes up to <paramref name="buffer"/>.Length pending events; returns how many were written.</summary>
+    public unsafe int PollEvents(Span<EngineEvent> buffer)
+    {
+        if (buffer.IsEmpty)
+        {
+            return 0;
+        }
+
+        using Lease lease = new(handle);
+        Span<VsaEvent> raw = buffer.Length <= 64 ? stackalloc VsaEvent[buffer.Length] : new VsaEvent[buffer.Length];
+        raw[0].StructSize = (uint)sizeof(VsaEvent);
+        uint count;
+        fixed (VsaEvent* ptr = raw)
+        {
+            NativeException.ThrowIfFailed(VsaNative.EnginePollEvents(lease.Engine, ptr, (uint)raw.Length, out count), "vsa_engine_poll_events");
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            buffer[i] = new EngineEvent(
+                (EngineEventType)raw[i].Type, raw[i].Voice, raw[i].Token, (raw[i].Flags & VsaNative.EventFlagFadeCancelled) != 0);
+        }
+
+        return (int)count;
+    }
+
     public void Dispose() => handle.Dispose();
+
+    internal Lease Acquire() => new(handle);
+
+    private static unsafe string Utf8(byte* text, int capacity)
+    {
+        var span = new ReadOnlySpan<byte>(text, capacity);
+        int end = span.IndexOf((byte)0);
+        return Encoding.UTF8.GetString(end < 0 ? span : span[..end]);
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void OnNativeLog(nint userData, VsaLogLevel level, byte* message)
@@ -159,6 +417,40 @@ public sealed class AudioEngine : IDisposable
         catch
         {
             // Swallow: logging must not be able to crash the engine.
+        }
+    }
+
+    /// <summary>Keeps the native engine alive for the duration of one call (throws once disposed).</summary>
+    internal readonly ref struct Lease
+    {
+        private readonly SafeHandle owner;
+        private readonly bool added;
+
+        public Lease(SafeHandle owner)
+        {
+            this.owner = owner;
+            bool ok = false;
+            try
+            {
+                owner.DangerousAddRef(ref ok);
+            }
+            catch (ObjectDisposedException)
+            {
+                throw new ObjectDisposedException(nameof(AudioEngine));
+            }
+
+            added = ok;
+            Engine = owner.DangerousGetHandle();
+        }
+
+        public nint Engine { get; }
+
+        public void Dispose()
+        {
+            if (added)
+            {
+                owner.DangerousRelease();
+            }
         }
     }
 

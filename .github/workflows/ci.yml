@@ -110,6 +110,20 @@ jobs:
       - name: Test
         run: dotnet test VintageStorySteamAudio.sln -c Release --no-build
 
+      # Golden scenes with pass/fail expectations (levels, underruns, render load) on linux-x64.
+      - name: SceneLab
+        shell: bash
+        run: |
+          dotnet tools/SceneLab/bin/Release/net10.0/SceneLab.dll tools/SceneLab/scenarios/*.json \
+            --native artifacts/native/linux-x64 --out artifacts/scenelab
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scenelab-renders
+          path: artifacts/scenelab
+          if-no-files-found: ignore
+
       - name: Package (all platforms)
         shell: pwsh
         run: ./scripts/build.ps1 -Configuration Release -SkipNative -SkipTests -SkipDoctor

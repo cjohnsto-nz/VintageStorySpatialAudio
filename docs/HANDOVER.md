@@ -1,41 +1,42 @@
 # Handover (19 Sep 2026)
 
-This is the state of the work when it was handed to Claude Code. Previous sessions ran in a cloud sandbox and could only read and write this repo, not run commands on Windows.
+State of the work at the end of the first Claude Code session on Chris's Windows machine. Earlier sessions ran in a cloud sandbox that could only edit files.
 
 ## Where things stand
 
-### Phase 0 (foundations) is complete
+### Phase 0 (foundations): complete and verified on Windows
 
-Verified in the cloud sandbox (Linux):
+- Native, managed, VsaDoctor (28/28 integration points against the 1.22.7 client) and packaging all pass through `pwsh ./scripts/build.ps1`.
+- In-game load confirmed by Chris: `.steamaudio status` showed engine running with Embree, self-test passed, 28/28, "Audio takeover: ready"; clean shutdown ("engine destroyed").
+- Housekeeping done: git repo with a baseline commit; `ci.yml` moved from `.github/workflow/` (singular, ignored by GitHub) to `.github/workflows/`; `scripts/dev-runner.ps1` deleted.
 
-- Native tests pass under GCC, Clang and ASan/UBSan.
-- `VsaDoctor` reports 28/28 game integration points against the 1.22.7 DLLs, and the self-test passes through the managed layer.
-- The build produces the mod zip.
+### Phase 1 (engine core): implemented, exit criteria met locally
 
-Verified by Chris on Windows (`pwsh ./scripts/build.ps1`, first run):
+On branch `phase1-engine-core`. Verified on Windows (MSVC `/W4 /WX`, Debug and Release) and with a clang-cl syntax pass using the Linux warning set (`-Wconversion -Wdouble-promotion …`); not yet built by GCC or on macOS (see next steps).
 
-- The native engine builds cleanly with MSVC (`/W4 /WX`).
-- Native tests pass, including the Steam Audio self-test.
-- Natives install to `artifacts/native/win-x64`.
-- The mod and VsaDoctor build.
+| Exit criterion | Evidence |
+|---|---|
+| Golden tests for resampling, looping and fades | `native/tests/core/test_resampler.cpp` (THD+N, passband, alias rejection, DC, block-size independence), `native/tests/test_voices.cpp` (seamless loops with and without resampling, dB-linear fades, declicking) |
+| SceneLab renders WAVs | `tools/SceneLab`; `build.ps1` renders `tools/SceneLab/scenarios/*.json` into `artifacts/scenelab/` and fails on unmet expectations; CI does the same on Linux |
+| No xruns under a synthetic 256-voice load | `vsaudio_core_tests` "256 voices…" (asserts p99 < block period in Release) and `scenarios/voices-256.json` |
 
-Verified by Claude Code on Windows (full `pwsh ./scripts/build.ps1`):
+Measured on this machine (Release, 48 kHz, 256-frame blocks = 5.33 ms):
 
-- Managed tests compile and pass (25/25). The `<Using Include="Xunit" />` fix had not actually landed in the csproj; it has now.
-- VsaDoctor against the real 1.22.7 client install: 28/28 integration points, self-test passed.
-- Packaging produces `artifacts/vssteamaudio_0.1.0.zip` (win-x64 natives).
-- `deploy.ps1` installs the zip into `%APPDATA%\VintagestoryData\Mods`.
+| | THD+N 1 kHz, 44.1→48 k | flat (±0.02 dB) to | alias residue (pitch ×2) |
+|---|---|---|---|
+| Low (4 zero crossings) | −58 dB | 8 kHz (±0.1 dB) | −49 dB |
+| Medium (8, default) | −79 dB | 12 kHz | −74 dB |
+| High (16) | −107 dB | 16 kHz | −115 dB |
 
-Not yet run:
+- 256 voices, vanilla-like pitch spread 0.8–1.2 (`voices-256.json`): p99 **25 %** of the block period, p50 ~21 %.
+- 256 voices in the core test (1/8 pitched ×1.8): p50 24 %, p99 28–31 %.
+- Render path allocations: zero (`vsaudio_core_tests` replaces global `operator new`; works on MSVC too because the test links the core statically).
+- A real device opens in the native tests: "AV Receiver (NVIDIA High Definition Audio)", 48 kHz, 6 ch, 480-frame period.
 
-- an in-game load (`.steamaudio status` / `.steamaudio targets` in chat)
-- CI (`.github/workflows/ci.yml`, never pushed)
+Not yet verified:
 
-### Repo housekeeping (done)
-
-- Git repo initialised with a baseline commit.
-- `ci.yml` was on disk as `.github/workflow/ci.yml` (singular); moved to `.github/workflows/`.
-- `scripts/dev-runner.ps1` and its `.gitignore` entry deleted.
+- **In game**: `.steamaudio devices`, `.steamaudio play effect/woodswitch` (plays through our engine alongside vanilla OpenAL), `.steamaudio stats`, `.steamaudio stop`. The mod was not redeployed after Phase 1; run `pwsh ./deploy.ps1 -StopGame` first.
+- **CI** (never pushed): GCC `-Werror` (only clang-cl was used locally), macOS universal build (the SIMD header picks SSE2/NEON per slice), ASan/UBSan over the new code, and whether miniaudio's null backend makes the Linux device test open a device (the test accepts either outcome).
 
 ### Other audio mods in the Mods folder
 
@@ -43,124 +44,71 @@ Not yet run:
 
 ## Immediate next steps
 
-1. Start the game, join a world, and run `.steamaudio status`.
-   - Expect: engine running, ray tracer Embree, self-test passed, 28/28 integration points, "Audio takeover: ready".
-   - The game log is under `%APPDATA%\VintagestoryData\Logs` (client-main.log).
-2. If the repo gets pushed to GitHub, check the first CI run. It should settle the macOS build, Embree on Apple Silicon (macos-14 runner) and whether the dedicated-server package works as reference assemblies (`VS_VERSION` 1.22.7).
-3. Start Phase 1.
+1. Deploy (`pwsh ./deploy.ps1 -StopGame`), join a world, try the four test commands above, and listen: `.steamaudio play` of a short effect, a looping ambience and a music track (music streams). Check `client-main.log` for the "Test output opened" line and any `[native]` warnings.
+2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
+3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
-## Phase 1 (engine core): design already worked out
+## Phase 1 as built
 
-Goal from PLAN.md §10:
+### ABI (v2, `native/include/vsaudio.h`)
 
-- the miniaudio backend, device enumeration and hot-plug
-- the real-time render thread and the command ring
-- the asset store, libvorbis and streaming
-- voices, the resampler, buses, the master limiter and telemetry
-- the SceneLab skeleton
+- Engine config gained `sample_rate`, `block_frames`, `max_voices`, `resampler_quality`, `stream_threshold_ms` (0 = default for each).
+- Assets: `vsa_asset_create/get_info/release`. Reference counted and independent of the engine's lifetime (`vsa_asset_release` takes no engine).
+- Voices: `vsa_voice_create/release/start/pause/stop/set_gain/set_pitch/set_looping/seek/fade/get_status`; handles are `generation << 32 | slot`, never 0.
+- Buses and master: `vsa_bus_set_gain`, `vsa_engine_set_master_gain`.
+- Output: `vsa_device_enumerate`, `vsa_output_open` (NONE or DEVICE), `vsa_engine_render_offline`, `vsa_engine_get_stats`.
+- Events: `vsa_engine_poll_events` (fade done/cancelled, voice ended, stream underrun, device rerouted/lost/restored).
+- Layouts are pinned three times: `static_assert`s in `api.cpp`, `NativeLayoutTests.cs`, and struct_size checks at runtime.
 
-Exit criteria:
+### Native layout
 
-- golden tests for resampling, looping and fades
-- SceneLab renders WAVs
-- no xruns under a synthetic 256-voice load
-
-No Phase 1 code has been written. These are the decisions already made.
-
-### Dependencies (verified downloads)
-
-| Dep | Version | URL | SHA-256 |
-|---|---|---|---|
-| miniaudio | 0.11.25 (latest tag; single header, compile with `MINIAUDIO_IMPLEMENTATION` in one TU) | `https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h` | `ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89` |
-| libogg | 1.3.6 | `https://github.com/xiph/ogg/releases/download/v1.3.6/libogg-1.3.6.tar.gz` | `83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638` |
-| libvorbis | 1.3.7 | `https://github.com/xiph/vorbis/releases/download/v1.3.7/libvorbis-1.3.7.tar.gz` | `0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab` |
-
-- **Fetch scripts:** `fetch-deps.ps1` and `fetch-deps.sh` need a new `tar.gz` kind. `tar -xzf` works on Windows 10+ and Unix. Keep the destination guard.
-- **Building ogg and vorbis:** don't `add_subdirectory` their CMake projects, because vorbis's `find_package(Ogg)` fights it. Build static `vsa_ogg` and `vsa_vorbis`/`vorbisfile` targets directly from their source lists in `native/cmake/Vorbis.cmake`.
-  - Generate `ogg/config_types.h` from `config_types.h.in`.
-  - Exclude vorbis's non-library files: `psytune.c`, `barkmel.c`, `tone.c`, and the `vorbisenc.c` encoder.
-
-### Threads
-
-| Thread | Work |
+| Path | What |
 |---|---|
-| Device callback (miniaudio, real-time priority) | The render thread. It pulls fixed engine blocks (default 256 frames) through a FIFO adapter, because devices request arbitrary frame counts. |
-| Worker (one non-real-time native thread, woken every ~2 ms) | Stream refills; draining the render→worker rings (retired voices, events, real-time log records); device-lost/rerouted handling and reopening; deferred frees. |
-| API threads (any) | Push commands into a lock-free SPSC ring. Producers are serialised by a mutex that the render thread never touches, so any thread can call. |
+| `src/engine.*` | Owns everything; API-side validation, voice slot allocation, worker thread, output switching and device recovery |
+| `src/audio/mixer.*` | The render core (render thread only): commands → voices → buses → master → limiter → output layout |
+| `src/audio/voice.hpp` | Command POD, voice slot (atomics shared with API threads + render-only state) |
+| `src/audio/asset.*`, `src/audio/stream.*` | Assets (int16 decoded or encoded Ogg), per-voice decode-ahead streams |
+| `src/decode/decoders.*` | WAV (PCM 8/16/24/32, float 32/64, extensible) and Ogg Vorbis over memory |
+| `src/dsp/` | `resampler` (bandlimited interpolation), `limiter` (true-peak look-ahead), `gain_ramp` (linear / dB-linear), `simd.hpp` (SSE2/NEON) |
+| `src/backend/device.*` | miniaudio playback device, enumeration, hot-plug flags |
+| `src/core/` | `spsc_ring.hpp`, `rt_log` (render-thread log records), errors, log |
 
-This matters because the game calls `SetVolume` from the thread pool during fades and creates the intro music off the main thread.
+`vsaudio_core` is a static library with all of the above; `vsaudio` (the shipped DLL) adds only `api.cpp`.
 
-### Voices
+### Behaviour worth knowing for Phase 2
 
-- **Slots:** a preallocated slot table with capacity from config (default 4096; this is a storage bound, not an audibility cap). Each slot holds its resampler history.
-- **Handles:** `uint64 = generation << 32 | slot`, and the API validates the generation.
-- **Life cycle:**
-  1. Create: the API takes a slot from a free list (mutex), initialises it, then sends `Activate`.
-  2. Release: the render thread retires the slot and pushes it to the retired ring.
-  3. The worker returns the slot and drops the asset reference.
-- **State readable without blocking:** atomics per slot (state, source position). There is also a `cmd_seq`/`applied_seq` pair, so a state request the render thread hasn't applied yet is still reported. This is needed because vanilla calls `Start()` and immediately reads `IsPlaying`.
-- **Commands:** start, pause, stop, set gain (with a smoothing ramp, default 5 ms), set pitch, set looping, seek, fade (dB-linear, which matches vanilla's geometric `FadeTo`, with a completion event token), set bus gain, set master gain, release.
-- **Declicking:** pause and stop use a ~5 ms fade.
-- **Events** (fade done, voice ended, stream underrun, device changed): render → SPSC → worker → a locked queue that the API polls.
-
-### Assets
-
-- **Creation:** `vsa_asset_create(desc)` decodes Ogg or WAV (or accepts raw s16 PCM) on the caller's thread.
-- **Storage:** short assets are stored as interleaved int16 at the source rate, the same memory footprint as vanilla.
-- **Streaming:** long assets (auto above ~20 s, or forced) keep the encoded bytes. Each streaming voice gets a vorbisfile decoder over memory plus an SPSC float ring (~1 s) that the worker refills.
-  - Looping and seeking happen on the worker. A seek generation is used; the render thread outputs silence until the new data arrives.
-  - When the ring runs dry, the render thread outputs silence and counts an underrun.
-- **Lifetime:** reference counted (the owner holds one reference, each voice another). Final deletion always happens off the render thread.
-- **Channels:** 1–2 channels only, like vanilla; reject more with a clear error.
-
-### Resampler
-
-- **Method:** bandlimited interpolation (Julius O. Smith's method).
-  - A Kaiser-windowed sinc prototype table with ~512 samples per zero crossing, linearly interpolated.
-  - When the ratio (source rate / engine rate × pitch) exceeds 1, the kernel is scaled by the cutoff, so taps grow with the ratio. Cap the ratio at 8.
-- **Quality setting** (zero crossings per side): Low 4, Medium 8 (default), High 16.
-- **Fast path:** ratio == 1.
-- **Golden tests:** passband flatness, SNR/THD+N on sines, and alias rejection when pitching up near Nyquist.
-
-### Mixing and master
-
-- **Buses:** Sound, Entity, Ambient, Weather, Music. These match vanilla's category volume sources (`LoadedSoundNative.GlobalVolume`), with the GlitchUnaffected variants folding into their parent.
-- **Voice routing:** each voice → its bus → master gain → limiter → output channels.
-- **Phase 1 has no spatialisation.** Mono goes equal-power to front L/R; stereo goes to L/R. Steam Audio spatialisation arrives in Phase 2.
-- **Limiter:** true-peak look-ahead.
-  - 4× oversampled peak estimate using a short polyphase FIR.
-  - ~2 ms look-ahead with a sliding-window minimum of target gain and boxcar smoothing, then exponential release.
-  - Channels linked; ceiling −1 dBTP.
-
-### Output
-
-- **Enumeration:** `vsa_device_enumerate` returns fixed-size records: `name[256]`, an opaque `id[512]` (`static_assert(sizeof(ma_device_id) <= 512)`), and is-default.
-- **Opening:** `vsa_output_open` takes kind DEVICE or NONE, a device id (null means follow the default), and a channel count (0 = native; supported 2, 4, 6 or 8).
-- **Sample rate:** the engine runs at the device's native rate; offline runs at the rate requested.
-- **miniaudio context:** thread priority real-time.
-- **Hot-plug:** notifications `stopped` and `rerouted` set atomics, and the worker reopens the device (follow-default). Never uninit the device from its own callback.
-- **Offline rendering:** `vsa_engine_render_offline(float*, frames)`, only when the output is NONE. It is deterministic and runs on the calling thread, which acts as the render thread. It backs tests and SceneLab.
-- **Stats:** `vsa_engine_get_stats` returns blocks rendered, render time avg/max, overloads (render time > block period), stream underruns, active voices, device rate/channels/period, and peak limiter gain reduction since the last read.
-
-### Tests to add
-
-- Unit tests for the ring, resampler, loop points, fades, limiter and command semantics.
-- A **zero-allocation render test** on Linux and macOS: override global `operator new` in the test executable (ELF/Mach-O interposition reaches into libvsaudio) and assert that `render_offline` allocates nothing.
-- A 256-voice load test measuring render time against the block period.
+- **State reporting**: status reflects commands before the render thread applies them (`cmd_seq`/`applied_seq`; same for position via `seek_seq`). Pause on a stopped voice is a no-op; start on a playing voice is a no-op (OpenAL would restart it: Phase 2's `ILoadedSound.Start` must stop first if vanilla code relies on restart).
+- **Stop rewinds** to 0. Pause, stop, seek and release of an audible voice fade over 5 ms first; a voice starting from position 0 starts instantly (no fade-in), resuming from elsewhere fades in.
+- **Fades** act on the voice gain, run while the voice is paused or stopped, and `set_gain` cancels a running fade (FADE_DONE with the cancelled flag). `VSA_FADE_STOP_WHEN_DONE` covers `FadeOutAndStop`.
+- **Streaming**: Ogg assets longer than 20 s (configurable) stream. Looping is done by the worker, so turning looping off late can play up to ~1 s past the loop point before ending. WAV and raw PCM are always decoded.
+- **Voices start on block boundaries** (commands apply at block starts). Tests that render in pieces must render whole blocks between voice starts to stay sample-aligned.
+- **Offline rendering refills streams synchronously** before each block, so it is deterministic; the worker also services them concurrently under the same lock.
+- **Device output**: the engine runs at the device's native rate; channels are native layout clamped to 2/4/6/8, with front L/R carrying the (non-spatial) Phase 1 mix. Default-device following relies on miniaudio's rerouting; a lost device is reopened by the worker every second, falling back to the default device.
+- **Performance leftovers**: the stretched-kernel path (ratio > 1, i.e. most pitched-up sounds) still computes its coefficients with scalar table lookups; it costs ~50 % more per voice than the ratio ≤ 1 path. Worth another look if Phase 2's Steam Audio effects make the budget tight.
 
 ### Managed side and tools
 
-- **Bindings:** C# wrappers for assets, voices, devices, stats and events.
-- **SceneLab** (`tools/SceneLab`, C#): reads a JSON scenario (assets, voice timings and parameters), renders offline to WAV and writes metrics JSON.
-- **In-game test commands:** `.steamaudio devices` and `.steamaudio play <asset>`. `play` decodes a game `.ogg` via `api.Assets` and plays it through our own device alongside vanilla OpenAL (WASAPI shared mode), so Phase 1 can be heard before the Phase 2 takeover.
+- Bindings: `AudioEngine` (assets, voices, devices, offline render, stats, events), `AudioAsset`, `Voice`. Every call leases the engine's `SafeHandle`, so calls racing `Dispose` throw `ObjectDisposedException` instead of touching freed memory.
+- Tests that create an engine share the `NativeEngineGroup` xUnit collection (one engine per process).
+- SceneLab: `tools/SceneLab` (see `docs/BUILDING.md`). The scenario format is in `tools/SceneLab/Scenario.cs`.
+- In-game: `.steamaudio devices | play <sound> [volume] [pitch] | stop | stats`. The device opens lazily on the first `play` (config `TestOutputDevice` picks one by name); ended voices are released from a 100 ms tick.
+- New config keys in `ModConfig/vssteamaudio.json`: `ResamplerQuality`, `BlockFrames`, `MaxVoices`, `TestOutputDevice`.
 
-## Lessons from earlier sessions (don't repeat)
+### Dependencies
 
-- **Bash `read` with a whitespace `IFS` drops empty fields.** This shifted columns in the first `fetch-deps.sh` and made it `rm -rf` the repo root in the sandbox. Records are now NUL-separated and every destination is guarded. Keep both.
-- **Out-of-range enum values are undefined behaviour.** UBSan caught a C enum type receiving an out-of-range value from the ABI, which is why enum fields are `uint32_t`.
+miniaudio 0.11.25, libogg 1.3.6, libvorbis 1.3.7, pinned in `third_party/deps.json` (hashes verified) and built by `native/cmake/Miniaudio.cmake` and `native/cmake/Vorbis.cmake`. libvorbis's encoder is built for the tests only (they encode their own Ogg files; no binary fixtures in the repo). `THIRD_PARTY_NOTICES.md` in the package now includes the libogg/libvorbis BSD notices.
+
+## Lessons (don't repeat)
+
+- **PowerShell variable names are case-insensitive.** A `$root` in `fetch-deps.ps1` overwrote the script's `$Root` and sent later extractions into the temp folder. The destination guard did not catch it because `$ThirdParty` was computed before the overwrite.
+- **Windows `tar`**: use `%SystemRoot%\System32\tar.exe`; a GNU tar from Git for Windows earlier on PATH reads `C:\...` as a remote host.
+- **Float sum reductions don't vectorise under strict IEEE semantics**, and `double` → `size_t` has no single x64 instruction. Both showed up in the resampler's hot loop; explicit SIMD and `int64_t` truncation fixed them.
+- **Linux CI warnings can be checked locally**: `clang-cl /Zs` with `/clang:-Wall /clang:-Wconversion /clang:-Wdouble-promotion …` (LLVM is installed at `C:\Program Files\LLVM`). Clang flags every implicit float → double conversion, including assignments.
+- **Bash `read` with a whitespace `IFS` drops empty fields.** This once made `fetch-deps.sh` `rm -rf` the repo root in the sandbox. Records are NUL-separated and every destination is guarded. Keep both.
+- **Out-of-range enum values are undefined behaviour.** Enum-valued ABI fields are `uint32_t`.
 - **`AudioData` lives in `Vintagestory.Client.NoObf`** (in VintagestoryLib), not in the API.
 - **Mods can't run code at the main menu.** Ownership is per world session (ADR 0006).
 - **VS supports a `native/` folder in mods officially.** `Assembly.Location` is valid for zip mods, which are extracted to `Cache/unpack`.
 - **Doors and toggle-collision blocks need no hook.** They fire `BlockChanged`/`ChunkDirty` through `BlockEntity.MarkDirty(true)`.
 - **The old AcousticLab prototype** (`C:\Projects\VintageStoryAcousticLab`) is abandoned. Don't reuse it.
-- **Chris's `VintageStorySurroundSound`** (`C:\Projects\VintageStorySurroundSound`) has useful research in `guides/`, notably Windows Spatial Audio / 7.1.4 on his AV receiver and an OpenAL Soft `PROPVARIANT` ownership bug. Its `bin/inspection/` folder holds decompiled game sources (`Game.cs`, `LoadedSoundNative.cs`, `AudioOpenAl.cs`, `SystemSoundEngine.cs`), which are handy references.
+- **Chris's `VintageStorySurroundSound`** (`C:\Projects\VintageStorySurroundSound`) has useful research in `guides/` (Windows Spatial Audio / 7.1.4 on his AV receiver, an OpenAL Soft `PROPVARIANT` ownership bug) and decompiled game sources in `bin/inspection/` (`Game.cs`, `LoadedSoundNative.cs`, `AudioOpenAl.cs`, `SystemSoundEngine.cs`).

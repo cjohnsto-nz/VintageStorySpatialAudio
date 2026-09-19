@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/VintageStorySteamAudio/VintageStorySteamAudio.csproj" />
+    <ProjectReference Include="../../tools/SceneLab/SceneLab.csproj" />
   </ItemGroup>
 
   <ItemGroup>

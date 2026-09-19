@@ -1,0 +1,18 @@
+// Load scene: 256 simultaneous looping voices at vanilla-like random pitches (0.8..1.2), which
+// puts most of them on the stretched-kernel path. Phase 1 exit criterion: no xruns, i.e. every
+// block renders faster than real time.
+{
+  "name": "voices-256",
+  "sampleRate": 48000,
+  "channels": 2,
+  "durationSeconds": 4,
+  "assets": {
+    "mono": { "tone": { "frequency": 441, "seconds": 1, "sampleRate": 44100, "amplitude": 0.3 } },
+    "stereo": { "tone": { "frequency": 330, "seconds": 1, "sampleRate": 44100, "channels": 2, "amplitude": 0.3 } }
+  },
+  "voices": [
+    { "asset": "mono", "gain": 0.03, "loop": true, "count": 192, "pitchSpread": 0.2, "startStagger": 0.002 },
+    { "asset": "stereo", "bus": "Ambient", "gain": 0.03, "loop": true, "count": 64, "pitchSpread": 0.2, "startStagger": 0.002 }
+  ],
+  "expect": { "maxUnderruns": 0, "maxPeakDbfs": -0.9, "maxP99Load": 1.0 }
+}

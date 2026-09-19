@@ -28,6 +28,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="VintageStorySteamAudio.Tests" />
     <InternalsVisibleTo Include="VsaDoctor" />
+    <InternalsVisibleTo Include="SceneLab" />
   </ItemGroup>
 
   <ItemGroup>

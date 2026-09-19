@@ -21,11 +21,91 @@ public sealed class NativeLayoutTests
     [Fact]
     public unsafe void EngineConfig_matches_header()
     {
-        Assert.Equal(32, sizeof(VsaEngineConfig));
+        Assert.Equal(56, sizeof(VsaEngineConfig));
         Assert.Equal(8, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.Log)));
         Assert.Equal(16, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.LogUserData)));
         Assert.Equal(24, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.RayTracer)));
         Assert.Equal(28, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.Flags)));
+        Assert.Equal(32, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.SampleRate)));
+        Assert.Equal(36, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.BlockFrames)));
+        Assert.Equal(40, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.MaxVoices)));
+        Assert.Equal(44, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.ResamplerQuality)));
+        Assert.Equal(48, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.StreamThresholdMs)));
+    }
+
+    [Fact]
+    public unsafe void AssetDesc_matches_header()
+    {
+        Assert.Equal(48, sizeof(VsaAssetDesc));
+        Assert.Equal(8, (int)Marshal.OffsetOf<VsaAssetDesc>(nameof(VsaAssetDesc.Data)));
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaAssetDesc>(nameof(VsaAssetDesc.Size)));
+        Assert.Equal(24, (int)Marshal.OffsetOf<VsaAssetDesc>(nameof(VsaAssetDesc.Name)));
+        Assert.Equal(32, (int)Marshal.OffsetOf<VsaAssetDesc>(nameof(VsaAssetDesc.Storage)));
+        Assert.Equal(36, (int)Marshal.OffsetOf<VsaAssetDesc>(nameof(VsaAssetDesc.PcmChannels)));
+        Assert.Equal(40, (int)Marshal.OffsetOf<VsaAssetDesc>(nameof(VsaAssetDesc.PcmSampleRate)));
+    }
+
+    [Fact]
+    public void AssetInfo_matches_header()
+    {
+        Assert.Equal(40, Unsafe.SizeOf<VsaAssetInfo>());
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaAssetInfo>(nameof(VsaAssetInfo.Frames)));
+        Assert.Equal(32, (int)Marshal.OffsetOf<VsaAssetInfo>(nameof(VsaAssetInfo.DurationSeconds)));
+    }
+
+    [Fact]
+    public void VoiceDesc_and_status_match_header()
+    {
+        Assert.Equal(32, Unsafe.SizeOf<VsaVoiceDesc>());
+        Assert.Equal(8, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Asset)));
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Gain)));
+        Assert.Equal(24, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Looping)));
+        Assert.Equal(16, Unsafe.SizeOf<VsaVoiceStatus>());
+        Assert.Equal(8, (int)Marshal.OffsetOf<VsaVoiceStatus>(nameof(VsaVoiceStatus.PositionSeconds)));
+    }
+
+    [Fact]
+    public unsafe void Output_structs_match_header()
+    {
+        Assert.Equal(512, sizeof(VsaDeviceId));
+        Assert.Equal(776, sizeof(VsaDeviceInfo));
+        Assert.Equal(264, (int)Marshal.OffsetOf<VsaDeviceInfo>(nameof(VsaDeviceInfo.Id)));
+        Assert.Equal(24, sizeof(VsaOutputDesc));
+        Assert.Equal(8, (int)Marshal.OffsetOf<VsaOutputDesc>(nameof(VsaOutputDesc.DeviceId)));
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaOutputDesc>(nameof(VsaOutputDesc.Channels)));
+    }
+
+    [Fact]
+    public unsafe void EngineStats_matches_header()
+    {
+        Assert.Equal(352, sizeof(VsaEngineStats));
+        Assert.Equal(36, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.LimiterPeakReductionDb)));
+        Assert.Equal(40, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.BlocksRendered)));
+        Assert.Equal(72, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.RenderTimeAvgUs)));
+        Assert.Equal(96, (int)Marshal.OffsetOf<VsaEngineStats>(nameof(VsaEngineStats.DeviceName)));
+    }
+
+    [Fact]
+    public void Event_matches_header()
+    {
+        Assert.Equal(32, Unsafe.SizeOf<VsaEvent>());
+        Assert.Equal(8, (int)Marshal.OffsetOf<VsaEvent>(nameof(VsaEvent.Voice)));
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaEvent>(nameof(VsaEvent.Token)));
+        Assert.Equal(24, (int)Marshal.OffsetOf<VsaEvent>(nameof(VsaEvent.Flags)));
+    }
+
+    [Fact]
+    public void Enum_values_match_header()
+    {
+        Assert.Equal(12, (int)VsaResult.Capacity);
+        Assert.Equal(3u, (uint)ResamplerQuality.High);
+        Assert.Equal(4u, (uint)AudioBus.Music);
+        Assert.Equal(VsaNative.BusCount, Enum.GetValues<AudioBus>().Length);
+        Assert.Equal(3u, (uint)AssetFormat.PcmS16);
+        Assert.Equal(2u, (uint)AssetStorage.Streamed);
+        Assert.Equal(2u, (uint)VoiceState.Paused);
+        Assert.Equal(1u, (uint)OutputKind.Device);
+        Assert.Equal(6u, (uint)EngineEventType.DeviceRestored);
     }
 
     [Fact]

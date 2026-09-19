@@ -1,0 +1,34 @@
+// Phase 1 smoke scene: every voice action, mixed rates and channel counts, all buses.
+{
+  "name": "phase1-smoke",
+  "sampleRate": 48000,
+  "channels": 2,
+  "durationSeconds": 6,
+  "buses": { "Music": 0.8, "Weather": 0.5 },
+  "assets": {
+    "a440": { "tone": { "frequency": 441, "seconds": 1, "sampleRate": 44100 } },
+    "stereo660": { "tone": { "frequency": 660, "seconds": 1, "sampleRate": 48000, "channels": 2, "amplitude": 0.4 } },
+    "saw110": { "tone": { "frequency": 110, "seconds": 1, "sampleRate": 22050, "shape": "Saw", "amplitude": 0.3 } },
+    "noise": { "noise": { "seconds": 0.25, "amplitude": 0.4 } }
+  },
+  "voices": [
+    {
+      "asset": "a440", "bus": "Sound", "gain": 0.6, "loop": true,
+      "actions": [ { "at": 3.0, "fade": { "to": 0.0, "seconds": 2.0, "stop": true } } ]
+    },
+    { "asset": "stereo660", "bus": "Music", "start": 0.5 },
+    {
+      "asset": "saw110", "bus": "Ambient", "gain": 0.8, "pitch": 1.5, "loop": true,
+      "actions": [
+        { "at": 2.0, "pause": true },
+        { "at": 2.5, "start": true },
+        { "at": 4.0, "seek": 0.25 },
+        { "at": 4.5, "gain": 0.2 },
+        { "at": 5.5, "stop": true }
+      ]
+    },
+    { "asset": "noise", "bus": "Weather", "start": 1.0 },
+    { "asset": "noise", "bus": "Entity", "start": 1.5, "pitch": 0.5 }
+  ],
+  "expect": { "maxUnderruns": 0, "maxPeakDbfs": -0.9, "minRmsDbfs": -40 }
+}

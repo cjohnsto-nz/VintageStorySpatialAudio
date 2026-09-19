@@ -370,11 +370,14 @@ VintageStorySteamAudio/
   docs/           PLAN.md, BUILDING.md, adr/NNNN-*.md, investigations/
   native/         C++20 engine (CMake + presets: win-x64, linux-x64, linux-x64-asan, osx)
     include/vsaudio.h        stable C ABI (the only managed/native interface)
-    src/core/                errors, logging; later: command ring, asset store, voices, resampler, buses, limiter
+    src/core/                errors, logging, SPSC ring, real-time log records
+    src/audio/               mixer (render core), voices, assets, streams
+    src/dsp/                 resampler, limiter, gain ramps, SIMD helpers
     src/steam/               Steam Audio context, RAII handles, self-test; later: scene manager, simulator threads, effects
-    src/backend/             (Phase 1) miniaudio backend, (Phase 3) Windows Spatial backend
-    src/decode/              (Phase 1) libvorbis/wav decoders, streaming
-    tests/                   doctest unit tests against the public C ABI (+ a C-compile check of the header)
+    src/backend/             miniaudio backend; (Phase 3) Windows Spatial backend
+    src/decode/              libvorbis and WAV decoders
+    tests/                   doctest: vsaudio_tests (public C ABI, + a C-compile check of the header) and
+                             vsaudio_core_tests (engine internals, zero-allocation render, load test)
     cmake/                   platform/RID, Steam Audio import, warnings
   src/
     VintageStorySteamAudio/          the mod (net10, client)
@@ -386,7 +389,7 @@ VintageStorySteamAudio/
     VintageStorySteamAudio.Tests/    xUnit v3: ABI layout, verifier, type names, game + native integration
   tools/
     VsaDoctor/                       checks a game install + native engine without launching the game
-    (Phase 1) SceneLab/              headless CLI: test voxel scene → render WAV + metrics
+    SceneLab/                        headless CLI: JSON scenario → offline render → WAV + metrics (later: voxel scenes)
   third_party/                       deps.json (pinned URLs + SHA-256), VERSIONS.md
   scripts/                           fetch-deps.{ps1,sh}, build.ps1
   deploy.ps1                         build + install into VintagestoryData/Mods
@@ -480,6 +483,20 @@ Still to confirm on real machines:
 - the first CI run: the MSVC and macOS builds, Embree on Apple Silicon, and the server-package reference assemblies
 
 Findings: [investigations/phase0.md](investigations/phase0.md).
+
+Confirmed on Windows since (19 Sep 2026): the full build, VsaDoctor against the client install, and an in-game load.
+
+### Phase 1 status (19 Sep 2026)
+
+Implemented on branch `phase1-engine-core` (details and measurements in [HANDOVER.md](HANDOVER.md)):
+
+- miniaudio device backend with enumeration and hot-plug recovery; the offline output for tests and SceneLab
+- the render core: SPSC command ring, voice slots with immediate state reporting, declicked transport, gain ramps and dB-linear fades, five buses, master gain, true-peak look-ahead limiter
+- assets: WAV and Ogg Vorbis decoding, per-voice decode-ahead streaming of long Ogg assets
+- bandlimited-interpolation resampler (Low/Medium/High), SIMD on SSE2 and NEON
+- telemetry and events; ABI v2 with managed bindings; SceneLab; `.steamaudio devices/play/stop/stats`
+
+Exit criteria met on Windows: golden resampling/looping/fade tests pass, SceneLab renders WAVs with pass/fail expectations, and 256 voices render at ~25 % of the block period at p99 with no allocation on the render path. Outstanding: an in-game listening test and the first CI run (GCC, macOS, sanitizers).
 
 ## 11. Key risks
 
