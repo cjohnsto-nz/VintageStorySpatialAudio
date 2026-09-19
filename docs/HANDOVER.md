@@ -48,6 +48,33 @@ Not yet verified:
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
+## Phase 2 (engine takeover): in progress on `phase2-takeover`
+
+Built and tested offline; **not yet run in the game**. Phase 1 is merged into `main`.
+
+### Native (ABI v3)
+
+- Positional voices (`vsa_voice_desc.spatial` world/listener, `vsa_voice_set_position`) render mono through Steam Audio's direct effect (1/r beyond a per-voice minimum distance, 3-band air absorption), then binaural (headphones) or panning (speakers). `vsa_listener_set`, `vsa_engine_set_render_mode`.
+- Effect pool (`max_real_voices`, 256) created off the audio thread; when full, the quietest positional voice loses its set. Binaural budget (`max_binaural_voices`, 64): the loudest voices get HRTF, the rest are panned. 256 binaural voices cost ~48 % of the block (p50), with the budget ~32 %, panned ~25 %.
+- Virtualisation: voices estimated below -70 dB advance without rendering (real again above -64 dB). Streams are never virtual.
+- `vsa_voice_set_lowpass`: the game's EFX low-pass (underwater) as OpenAL Soft implements it, a 5 kHz high shelf.
+- **Steam Audio's HRTF only exists at 24, 44.1 and 48 kHz**, so the engine renders at 44.1 or 48 kHz; devices at other rates get a converted stream (miniaudio), and the offline output accepts only those two rates.
+
+### Managed takeover (`src/VintageStorySteamAudio/Takeover/`)
+
+- `AudioTakeover` (in `StartPre`): verify, open our device (matching the game's `audioDevice` setting), Harmony-patch the platform seam, carry the menu music over if it is still playing, dispose vanilla sources and close OpenAL. Hand-back in `Dispose`: release voices, unpatch, `Unload()` the samples we emptied so vanilla decodes them again, reopen OpenAL via the original `StartAudio()`.
+- `SteamAudioSound`: `ILoadedSound` with vanilla's contract (restart on Start, fade clamping and main-thread callbacks, SetVolume not cancelling fades, deferred start while loading). **`AudioMetaData.Loaded` must be set to 3 when a sound is created**: `PlaySoundAt` only starts sounds whose data reached 3.
+- `CreateAudioData` decodes natively and returns metadata with an empty `Pcm`; long Ogg files stream.
+- Category sliders become bus gains (polled every 250 ms), `masterSoundLevel` the master gain, `useHRTFaudio` the render mode; `CategoryTrimDb` in the config trims each category for rebalancing by ear.
+- The 250-sound cap is removed with a transpiler on `PlaySoundAtInternal` (reported by `.steamaudio stats`).
+- The mod now compiles against VintagestoryLib and the game's 0Harmony (not shipped). Everything touched is in `AudioPatchTargets` (35 entries, verified before patching).
+
+### Still to do for Phase 2
+
+- In-game verification: a full session with no missing, stuck or misbehaving sounds; category rebalance by ear; join/leave cycles (menu audio must work after leaving).
+- Positional stereo assets are downmixed to mono (the plan's two-emitter wide source is deferred).
+- Detecting other mods' Harmony patches on our targets (VintageStorySurroundSound) and refusing the takeover.
+
 ## Phase 1 as built
 
 ### ABI (v2, `native/include/vsaudio.h`)

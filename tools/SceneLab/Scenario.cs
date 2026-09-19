@@ -19,6 +19,12 @@ public sealed record Scenario
 
     public float MasterGain { get; init; } = 1f;
 
+    /// <summary>Headphones (binaural for the loudest positional voices) or Speakers (panning).</summary>
+    public RenderMode RenderMode { get; init; } = RenderMode.Headphones;
+
+    /// <summary>Listener at the origin facing -z unless set: position, forward, up.</summary>
+    public ListenerSpec? Listener { get; init; }
+
     /// <summary>Bus name (Sound, Entity, Ambient, Weather, Music) to gain.</summary>
     public IReadOnlyDictionary<string, float> Buses { get; init; } = new Dictionary<string, float>();
 
@@ -53,6 +59,30 @@ public sealed record EngineSettings
     public ResamplerQuality ResamplerQuality { get; init; } = ResamplerQuality.Default;
 
     public int StreamThresholdMs { get; init; }
+
+    public int MaxRealVoices { get; init; }
+
+    public int MaxBinauralVoices { get; init; }
+}
+
+public sealed record ListenerSpec
+{
+    public IReadOnlyList<float> Position { get; init; } = [0, 0, 0];
+
+    public IReadOnlyList<float> Forward { get; init; } = [0, 0, -1];
+
+    public IReadOnlyList<float> Up { get; init; } = [0, 1, 0];
+}
+
+/// <summary>Circular motion in the horizontal plane around a centre, updated every block.</summary>
+public sealed record OrbitSpec
+{
+    public IReadOnlyList<float> Centre { get; init; } = [0, 0, 0];
+
+    public float Radius { get; init; } = 3f;
+
+    /// <summary>Seconds per revolution; negative turns the other way.</summary>
+    public float PeriodSeconds { get; init; } = 4f;
 }
 
 /// <summary>An audio file (relative to the scenario) or a generated signal.</summary>
@@ -127,6 +157,16 @@ public sealed record VoiceSpec
     public double StartStagger { get; init; }
 
     public IReadOnlyList<VoiceAction> Actions { get; init; } = [];
+
+    /// <summary>None (default), World or Listener.</summary>
+    public SpatialMode Spatial { get; init; } = SpatialMode.None;
+
+    public IReadOnlyList<float> Position { get; init; } = [0, 0, 0];
+
+    public float MinDistance { get; init; }
+
+    /// <summary>Moves the voice around a circle (implies World positioning).</summary>
+    public OrbitSpec? Orbit { get; init; }
 }
 
 /// <summary>Something that happens to a voice at time <see cref="At"/>. Set exactly one member.</summary>
@@ -151,6 +191,12 @@ public sealed record VoiceAction
     public double? Seek { get; init; }
 
     public FadeSpec? Fade { get; init; }
+
+    /// <summary>New position (keeps the voice's spatial mode).</summary>
+    public IReadOnlyList<float>? Position { get; init; }
+
+    /// <summary>High-frequency damping, 0..1 (the game uses 0.06 underwater).</summary>
+    public float? Lowpass { get; init; }
 }
 
 public sealed record FadeSpec

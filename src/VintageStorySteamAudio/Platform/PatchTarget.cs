@@ -5,6 +5,8 @@ public enum TargetMemberKind
     Method,
     Property,
     Field,
+    /// <summary>An instance constructor (member name ".ctor", type "System.Void").</summary>
+    Constructor,
 }
 
 /// <summary>
@@ -33,6 +35,7 @@ public sealed record PatchTarget(
     public string Describe() => Kind switch
     {
         TargetMemberKind.Method => $"{(IsStatic ? "static " : string.Empty)}{Type} {TypeName}.{MemberName}({string.Join(", ", Parameters)})",
+        TargetMemberKind.Constructor => $"new {TypeName}({string.Join(", ", Parameters)})",
         _ => $"{(IsStatic ? "static " : string.Empty)}{Type} {TypeName}.{MemberName}",
     };
 }

@@ -10,6 +10,9 @@ public sealed class SteamAudioConfig
 {
     public const string FileName = "vssteamaudio.json";
 
+    /// <summary>Play the game's sounds through Steam Audio in-world. False keeps vanilla OpenAL (the engine still starts, for diagnostics).</summary>
+    public bool TakeOverGameAudio { get; set; } = true;
+
     /// <summary>Auto, Embree or Steam.</summary>
     [JsonConverter(typeof(StringEnumConverter))]
     public RayTracer RayTracer { get; set; } = RayTracer.Auto;
@@ -30,7 +33,26 @@ public sealed class SteamAudioConfig
     /// <summary>Voice slot capacity (0 = 4096). A storage bound, not a cap on audible sounds.</summary>
     public int MaxVoices { get; set; }
 
-    /// <summary>Part of a device name for the Phase 1 test commands; empty = system default.</summary>
+    /// <summary>Positional sounds rendered at once with their own Steam Audio effects (0 = 256); quieter ones go virtual.</summary>
+    public int MaxRealVoices { get; set; }
+
+    /// <summary>Of those, how many get their own HRTF with headphones (0 = 64); the rest are panned.</summary>
+    public int MaxBinauralVoices { get; set; }
+
+    /// <summary>
+    /// Level trim per sound category in dB (Sound, Entity, Ambient, Weather, Music), applied on top
+    /// of the game's sliders. Physical distance fall-off changes the balance vanilla was mixed for.
+    /// </summary>
+    public Dictionary<string, float> CategoryTrimDb { get; set; } = new()
+    {
+        ["Sound"] = 0f,
+        ["Entity"] = 0f,
+        ["Ambient"] = 0f,
+        ["Weather"] = 0f,
+        ["Music"] = 0f,
+    };
+
+    /// <summary>Part of a device name for the .steamaudio play test command; empty = the device in use or the system default.</summary>
     public string? TestOutputDevice { get; set; }
 
     public EngineOptions ToEngineOptions() => new()
@@ -40,5 +62,22 @@ public sealed class SteamAudioConfig
         ResamplerQuality = ResamplerQuality,
         BlockFrames = BlockFrames,
         MaxVoices = MaxVoices,
+        MaxRealVoices = MaxRealVoices,
+        MaxBinauralVoices = MaxBinauralVoices,
     };
+
+    /// <summary>The trims by bus; unknown names are ignored.</summary>
+    public IReadOnlyDictionary<AudioBus, float> CategoryTrimsDb()
+    {
+        var trims = new Dictionary<AudioBus, float>();
+        foreach ((string name, float db) in CategoryTrimDb ?? [])
+        {
+            if (Enum.TryParse(name, ignoreCase: true, out AudioBus bus) && float.IsFinite(db))
+            {
+                trims[bus] = Math.Clamp(db, -40f, 20f);
+            }
+        }
+
+        return trims;
+    }
 }

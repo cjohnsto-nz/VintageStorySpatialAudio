@@ -117,6 +117,13 @@ internal sealed class TestPlayback(AudioEngine engine, ILogger logger, string? d
             return null;
         }
 
+        // With the takeover the game's output device is already open: play there.
+        if (string.IsNullOrWhiteSpace(deviceName) && engine.GetStats().Output == OutputKind.Device)
+        {
+            deviceOpen = true;
+            return null;
+        }
+
         AudioDevice? device = null;
         if (!string.IsNullOrWhiteSpace(deviceName))
         {
