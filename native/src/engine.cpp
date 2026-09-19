@@ -133,6 +133,7 @@ Engine::Engine(const vsa_engine_config& config)
       commands_(kCommandCapacity),
       events_(kEventRingCapacity),
       retired_(settings_.max_voices),
+      scene_(std::make_unique<world::WorldScene>(*steam_)),
       spatial_(*steam_, settings_.max_real_voices, settings_.hrtf_sofa_path),
       mixer_(kernel_, slots_.get(), settings_.max_voices, commands_, events_, retired_, rt_log_, spatial_, listener_,
              settings_.block_frames, settings_.max_binaural_voices),

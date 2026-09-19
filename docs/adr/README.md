@@ -10,3 +10,4 @@ Each ADR records one decision: the context, the choice and its consequences. ADR
 | [0004](0004-voxel-transmission.md) | Transmission through solids is computed from voxel path length, not Steam Audio surface counts | Accepted |
 | [0005](0005-pathing-decision-gate.md) | Pathing: baked Steam Audio pathing, gated on measured bake cost, with a designed fallback | Accepted |
 | [0006](0006-session-scoped-ownership.md) | Audio ownership is per world session; the main menu stays vanilla | Accepted |
+| [0007](0007-native-chunk-meshing.md) | Chunks cross the ABI as voxel snapshots and are meshed natively, with a floating origin | Accepted |

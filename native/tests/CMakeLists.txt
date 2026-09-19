@@ -36,6 +36,7 @@ add_executable(vsaudio_tests
     test_assets.cpp
     test_header_c.c
     test_output.cpp
+    test_scene.cpp
     test_self_test.cpp
     test_spatial.cpp
     test_streaming.cpp
@@ -65,11 +66,13 @@ add_executable(vsaudio_core_tests
     core/test_channel_layout.cpp
     core/test_gain_ramp.cpp
     core/test_limiter.cpp
+    core/test_mesher.cpp
     core/test_render_budget.cpp
     core/test_resampler.cpp
     core/test_spherical_harmonics.cpp
     core/test_spsc_ring.cpp
-    core/test_vbap.cpp)
+    core/test_vbap.cpp
+    core/test_world_scene.cpp)
 target_include_directories(vsaudio_core_tests SYSTEM PRIVATE "${DOCTEST_INCLUDE_DIR}")
 target_link_libraries(vsaudio_core_tests PRIVATE vsaudio_core vsa_test_support)
 vsa_enable_warnings(vsaudio_core_tests)

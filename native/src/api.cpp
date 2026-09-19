@@ -10,6 +10,7 @@
 #include "core/error.hpp"
 #include "core/log.hpp"
 #include "engine.hpp"
+#include "world/world_scene.hpp"
 #include "vsaudio_build_info.h"
 
 #include <phonon_version.h>
@@ -35,6 +36,13 @@ static_assert(sizeof(vsa_output_desc) == 24);
 static_assert(sizeof(vsa_engine_stats) == 360 && offsetof(vsa_engine_stats, real_voices) == 40 &&
               offsetof(vsa_engine_stats, blocks_rendered) == 48 && offsetof(vsa_engine_stats, device_name) == 104);
 static_assert(sizeof(vsa_listener) == 40);
+static_assert(sizeof(vsa_acoustic_material) == 56 && offsetof(vsa_acoustic_material, name) == 48);
+static_assert(sizeof(vsa_box) == 24 && sizeof(vsa_partial_block) == 16);
+static_assert(sizeof(vsa_chunk_desc) == 56 && offsetof(vsa_chunk_desc, materials) == 24 &&
+              offsetof(vsa_chunk_desc, boxes) == 48);
+static_assert(sizeof(vsa_scene_stats) == 88 && offsetof(vsa_scene_stats, last_build_ms) == 48 &&
+              offsetof(vsa_scene_stats, origin) == 72);
+static_assert(sizeof(vsa_chunk_mesh) == 56 && offsetof(vsa_chunk_mesh, vertices) == 32);
 static_assert(sizeof(vsa_event) == 32);
 
 struct vsa_engine {
@@ -404,6 +412,196 @@ VSA_API vsa_result VSA_CALL vsa_engine_poll_events(vsa_engine* engine, vsa_event
         *out_count = 0;
         check_out_array(out, capacity, "vsa_event");
         *out_count = engine_of(engine).poll_events(out, capacity);
+        return VSA_OK;
+    });
+}
+
+// ---- World scene ----
+
+VSA_API vsa_result VSA_CALL vsa_scene_set_materials(vsa_engine* engine, const vsa_acoustic_material* materials,
+                                                    uint32_t count) {
+    return guarded([&] {
+        vsa::world::WorldScene& scene = engine_of(engine).scene();
+        if (count == 0 || count > 65535 || materials == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "the material table needs 1..65535 entries");
+        }
+        std::vector<vsa::world::AcousticMaterial> table;
+        table.reserve(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            const vsa_acoustic_material& in = check_in_struct(materials + i, "vsa_acoustic_material");
+            if (in.kind > VSA_MATERIAL_SOLID) {
+                throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "material " + std::to_string(i) + ": unknown kind");
+            }
+            if (i == 0 && in.kind != VSA_MATERIAL_AIR) {
+                throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "material 0 must be air");
+            }
+            vsa::world::AcousticMaterial m;
+            m.name = in.name != nullptr ? in.name : "";
+            m.kind = static_cast<vsa::world::MaterialKind>(in.kind);
+            std::copy_n(in.absorption, 3, m.absorption);
+            m.scattering = in.scattering;
+            std::copy_n(in.transmission, 3, m.transmission);
+            std::copy_n(in.attenuation_db_per_metre, 3, m.attenuation_db_per_metre);
+            table.push_back(std::move(m));
+        }
+        scene.set_materials(std::move(table));
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_set_chunk(vsa_engine* engine, const vsa_chunk_desc* chunk) {
+    return guarded([&] {
+        vsa::world::WorldScene& scene = engine_of(engine).scene();
+        const vsa_chunk_desc& desc = check_in_struct(chunk, "vsa_chunk_desc");
+        if (desc.materials == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "materials must not be null");
+        }
+        if (desc.lod > 1 || desc.reserved != 0) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "lod must be 0 or 1 and reserved 0");
+        }
+        if ((desc.partial_count > 0 && desc.partials == nullptr) || (desc.box_count > 0 && desc.boxes == nullptr)) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "partials/boxes must not be null when counted");
+        }
+        const auto material_count = static_cast<uint32_t>(scene.material_count());
+        auto voxels = std::make_shared<vsa::world::ChunkVoxels>();
+        std::copy_n(desc.materials, VSA_CHUNK_CELLS, voxels->materials.begin());
+        const uint16_t highest = *std::max_element(voxels->materials.begin(), voxels->materials.end());
+        if (highest >= material_count) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "material id " + std::to_string(highest) +
+                                                             " is outside the material table (" +
+                                                             std::to_string(material_count) + " entries)");
+        }
+        voxels->partials.reserve(desc.partial_count);
+        for (uint32_t i = 0; i < desc.partial_count; ++i) {
+            const vsa_partial_block& p = desc.partials[i];
+            if (p.cell >= VSA_CHUNK_CELLS || p.material >= material_count ||
+                static_cast<uint64_t>(p.first_box) + p.box_count > desc.box_count) {
+                throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "partial block " + std::to_string(i) + " is out of range");
+            }
+            vsa::world::PartialBlock block;
+            block.cell = static_cast<uint16_t>(p.cell);
+            block.material = static_cast<uint16_t>(p.material);
+            for (uint32_t b = 0; b < p.box_count; ++b) {
+                const vsa_box& box = desc.boxes[p.first_box + b];
+                vsa::world::Box out{};
+                std::copy_n(box.min, 3, out.min);
+                std::copy_n(box.max, 3, out.max);
+                block.boxes.push_back(out);
+            }
+            voxels->partials.push_back(std::move(block));
+        }
+        scene.set_chunk({desc.x, desc.y, desc.z}, std::move(voxels), static_cast<int>(desc.lod));
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_remove_chunk(vsa_engine* engine, int32_t x, int32_t y, int32_t z) {
+    return guarded([&] {
+        engine_of(engine).scene().remove_chunk({x, y, z});
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_clear(vsa_engine* engine) {
+    return guarded([&] {
+        engine_of(engine).scene().clear();
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_set_origin(vsa_engine* engine, int32_t x, int32_t y, int32_t z) {
+    return guarded([&] {
+        engine_of(engine).scene().set_origin(x, y, z);
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_wait_idle(vsa_engine* engine, uint32_t timeout_ms) {
+    return guarded([&] {
+        if (!engine_of(engine).scene().wait_idle(std::chrono::milliseconds(timeout_ms))) {
+            throw vsa::Error(VSA_ERROR_INVALID_STATE, "the scene is still busy");
+        }
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_get_stats(vsa_engine* engine, vsa_scene_stats* out) {
+    return guarded([&] {
+        check_out_struct(out, "vsa_scene_stats");
+        const vsa::world::WorldScene& scene = engine_of(engine).scene();
+        const vsa::world::SceneStats s = scene.stats();
+        vsa_scene_stats stats{};
+        stats.struct_size = sizeof stats;
+        stats.chunks = s.chunks;
+        stats.meshed_chunks = s.meshed_chunks;
+        stats.pending_chunks = s.pending_chunks;
+        stats.triangles = s.triangles;
+        stats.vertices = s.vertices;
+        stats.memory_bytes = s.memory_bytes;
+        stats.chunks_built = s.chunks_built;
+        stats.last_build_ms = s.last_build_ms;
+        stats.max_build_ms = s.max_build_ms;
+        stats.last_commit_ms = s.last_commit_ms;
+        std::copy_n(s.origin, 3, stats.origin);
+        stats.material_count = static_cast<uint32_t>(scene.material_count());
+        *out = stats;
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_get_chunk_mesh(vsa_engine* engine, int32_t x, int32_t y, int32_t z,
+                                                     vsa_chunk_mesh* mesh) {
+    return guarded([&] {
+        check_out_struct(mesh, "vsa_chunk_mesh");
+        std::shared_ptr<const vsa::world::ChunkMesh> found;
+        int lod = 0;
+        mesh->found = 0;
+        mesh->lod = 0;
+        mesh->vertex_count = 0;
+        mesh->triangle_count = 0;
+        if (!engine_of(engine).scene().chunk_mesh({x, y, z}, found, lod)) {
+            return VSA_OK;
+        }
+        mesh->found = 1;
+        mesh->lod = static_cast<uint32_t>(lod);
+        mesh->vertex_count = static_cast<uint32_t>(found->vertex_count());
+        mesh->triangle_count = static_cast<uint32_t>(found->triangle_count());
+        if (mesh->vertex_capacity >= mesh->vertex_count && mesh->triangle_capacity >= mesh->triangle_count) {
+            if ((mesh->vertex_count > 0 && mesh->vertices == nullptr) ||
+                (mesh->triangle_count > 0 && (mesh->triangles == nullptr || mesh->materials == nullptr))) {
+                throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "mesh buffers must not be null");
+            }
+            std::copy(found->vertices.begin(), found->vertices.end(), mesh->vertices);
+            std::copy(found->triangles.begin(), found->triangles.end(), mesh->triangles);
+            std::copy(found->materials.begin(), found->materials.end(), mesh->materials);
+        }
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_list_chunks(vsa_engine* engine, int32_t* out, uint32_t capacity,
+                                                  uint32_t* out_count) {
+    return guarded([&] {
+        if (out_count == nullptr || (capacity > 0 && out == nullptr)) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "out_count (and out, with a capacity) must not be null");
+        }
+        const std::vector<vsa::world::ChunkKey> keys = engine_of(engine).scene().chunk_keys();
+        *out_count = static_cast<uint32_t>(keys.size());
+        for (std::size_t i = 0; i < capacity && i < keys.size(); ++i) {
+            out[i * 3] = keys[i].x;
+            out[i * 3 + 1] = keys[i].y;
+            out[i * 3 + 2] = keys[i].z;
+        }
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_scene_save_obj(vsa_engine* engine, const char* path) {
+    return guarded([&] {
+        if (path == nullptr || path[0] == 0) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "path must not be empty");
+        }
+        engine_of(engine).scene().save_obj(path);
         return VSA_OK;
     });
 }

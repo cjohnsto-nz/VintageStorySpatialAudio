@@ -10,6 +10,7 @@
 #include "core/spsc_ring.hpp"
 #include "dsp/resampler.hpp"
 #include "steam/steam_context.hpp"
+#include "world/world_scene.hpp"
 #include "vsaudio.h"
 
 #include <atomic>
@@ -92,6 +93,9 @@ public:
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
+    /// The world as Steam Audio geometry (thread-safe).
+    [[nodiscard]] world::WorldScene& scene() noexcept { return *scene_; }
+
 private:
     enum class StateChange { None, Start, Pause, Stop };
 
@@ -134,6 +138,7 @@ private:
     SpscRing<uint32_t> retired_;   // render -> worker
     RtLog rt_log_;
 
+    std::unique_ptr<world::WorldScene> scene_;
     SpatialRenderer spatial_;
     LatestValue<ListenerPose> listener_;
     Mixer mixer_;

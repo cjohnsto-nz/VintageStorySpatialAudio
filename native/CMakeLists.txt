@@ -75,7 +75,12 @@ add_library(vsaudio_core STATIC
     src/steam/self_test.cpp
     src/steam/self_test.hpp
     src/steam/steam_context.cpp
-    src/steam/steam_context.hpp)
+    src/steam/steam_context.hpp
+    src/world/mesher.cpp
+    src/world/mesher.hpp
+    src/world/voxel.hpp
+    src/world/world_scene.cpp
+    src/world/world_scene.hpp)
 target_include_directories(vsaudio_core
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(vsaudio_core PUBLIC SteamAudio::phonon vsa_miniaudio vsa_vorbis Threads::Threads)
