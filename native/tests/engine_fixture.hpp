@@ -123,6 +123,44 @@ struct OfflineEngine : ScopedEngine {
         return v;
     }
 
+    /// A looping positional voice.
+    vsa_voice positioned(const AssetPtr& asset, uint32_t spatial, float x, float y, float z, float min_distance = 1.0f,
+                         float gain = 1.0f) {
+        vsa_voice_desc desc{};
+        desc.struct_size = sizeof desc;
+        desc.asset = asset.get();
+        desc.bus = VSA_BUS_SOUND;
+        desc.gain = gain;
+        desc.pitch = 1.0f;
+        desc.looping = 1;
+        desc.spatial = spatial;
+        desc.position[0] = x;
+        desc.position[1] = y;
+        desc.position[2] = z;
+        desc.min_distance = min_distance;
+        vsa_voice v = 0;
+        const vsa_result r = vsa_voice_create(engine, &desc, &v);
+        INFO(vsa_get_last_error());
+        REQUIRE(r == VSA_OK);
+        return v;
+    }
+
+    void listener(float px, float py, float pz, float fx, float fy, float fz, float ux = 0.0f, float uy = 1.0f,
+                  float uz = 0.0f) {
+        vsa_listener l{};
+        l.struct_size = sizeof l;
+        l.position[0] = px;
+        l.position[1] = py;
+        l.position[2] = pz;
+        l.forward[0] = fx;
+        l.forward[1] = fy;
+        l.forward[2] = fz;
+        l.up[0] = ux;
+        l.up[1] = uy;
+        l.up[2] = uz;
+        REQUIRE(vsa_listener_set(engine, &l) == VSA_OK);
+    }
+
     vsa_voice_status status(vsa_voice v) {
         vsa_voice_status s{};
         s.struct_size = sizeof s;

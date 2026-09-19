@@ -1,6 +1,8 @@
 #pragma once
 
 #include "audio/mixer.hpp"
+#include "audio/spatial.hpp"
+#include "core/latest_value.hpp"
 #include "audio/voice.hpp"
 #include "backend/device.hpp"
 #include "core/rt_log.hpp"
@@ -58,10 +60,14 @@ public:
     void set_voice_looping(vsa_voice voice, bool looping);
     void seek_voice(vsa_voice voice, double seconds);
     void fade_voice(vsa_voice voice, float target, float seconds, uint32_t flags, uint64_t token);
+    void set_voice_position(vsa_voice voice, uint32_t spatial, float x, float y, float z);
+    void set_voice_lowpass(vsa_voice voice, float gain_hf);
     [[nodiscard]] vsa_voice_status voice_status(vsa_voice voice) const;
 
     void set_bus_gain(uint32_t bus, float gain);
     void set_master_gain(float gain);
+    void set_listener(const vsa_listener& listener);
+    void set_render_mode(uint32_t mode);
 
     // Output.
     [[nodiscard]] std::vector<vsa_device_info> enumerate_devices();
@@ -78,6 +84,8 @@ public:
         uint32_t max_voices = 4096;
         vsa_resampler_quality resampler_quality = VSA_RESAMPLER_MEDIUM;
         uint32_t stream_threshold_ms = 20000;
+        uint32_t max_real_voices = 256;
+        uint32_t max_binaural_voices = 64;
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
@@ -120,6 +128,8 @@ private:
     SpscRing<uint32_t> retired_;   // render -> worker
     RtLog rt_log_;
 
+    SpatialRenderer spatial_;
+    LatestValue<ListenerPose> listener_;
     Mixer mixer_;
     uint32_t stream_history_frames_;
     uint32_t stream_window_frames_;

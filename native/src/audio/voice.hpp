@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dsp/gain_ramp.hpp"
+#include "dsp/high_shelf.hpp"
 #include "dsp/resampler.hpp"
 #include "vsaudio.h"
 
@@ -24,8 +25,11 @@ enum class Op : uint32_t {
     Seek,
     Fade,
     Release,
+    SetPosition,
+    SetLowpass,
     SetBusGain,
     SetMasterGain,
+    SetRenderMode,
 };
 
 struct Command {
@@ -41,6 +45,8 @@ struct Command {
     float seconds;
     double position;
     uint64_t token;
+    /// SetPosition: the position (the spatial mode travels in `flags`).
+    float vec[3];
 };
 
 /// Render-thread-only state of a voice.
@@ -68,6 +74,21 @@ struct RenderVoice {
     double pending_seek_seconds = 0.0;
 
     bool underrun = false;
+
+    // Positioning.
+    uint32_t spatial = VSA_SPATIAL_NONE;
+    float position[3] = {0.0f, 0.0f, 0.0f};
+    float min_distance = 1.0f;
+    /// Spatial effect set held while real, -1 otherwise.
+    int effect_set = -1;
+    /// Inaudible: position advances, nothing is rendered.
+    bool is_virtual = false;
+    /// Estimated output level from the last block (gain x bus x master x distance).
+    float level = 0.0f;
+    /// Rendered with its own HRTF (headphones mode, within the binaural budget); else panned.
+    bool binaural = false;
+
+    dsp::HighShelf shelf;
 };
 
 /// One voice slot. Handles are (generation << 32 | slot index).
@@ -105,6 +126,9 @@ struct VoiceSlot {
     float initial_gain = 1.0f;
     float initial_pitch = 1.0f;
     bool initial_looping = false;
+    uint32_t initial_spatial = VSA_SPATIAL_NONE;
+    float initial_position[3] = {0.0f, 0.0f, 0.0f};
+    float initial_min_distance = 1.0f;
 
     RenderVoice render;
 };

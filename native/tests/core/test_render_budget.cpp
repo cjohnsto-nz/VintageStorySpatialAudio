@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <vector>
 
 namespace {
@@ -57,7 +58,8 @@ vsa::Asset* ogg_asset(vsa::Engine& engine, const std::vector<uint8_t>& ogg, uint
     return engine.create_asset(desc);
 }
 
-vsa_voice voice(vsa::Engine& engine, vsa::Asset* asset, uint32_t bus, float gain, float pitch, bool looping) {
+vsa_voice voice(vsa::Engine& engine, vsa::Asset* asset, uint32_t bus, float gain, float pitch, bool looping,
+                uint32_t spatial = VSA_SPATIAL_NONE, float x = 0.0f, float z = 0.0f) {
     vsa_voice_desc desc{};
     desc.struct_size = sizeof desc;
     desc.asset = reinterpret_cast<vsa_asset*>(asset);
@@ -65,7 +67,41 @@ vsa_voice voice(vsa::Engine& engine, vsa::Asset* asset, uint32_t bus, float gain
     desc.gain = gain;
     desc.pitch = pitch;
     desc.looping = looping ? 1u : 0u;
+    desc.spatial = spatial;
+    desc.position[0] = x;
+    desc.position[2] = z;
     return engine.create_voice(desc);
+}
+
+vsa_listener facing(float fx, float fz) {
+    vsa_listener l{};
+    l.struct_size = sizeof l;
+    l.forward[0] = fx;
+    l.forward[2] = fz;
+    l.up[1] = 1.0f;
+    return l;
+}
+
+struct LoadResult {
+    double period_us;
+    double p50;
+    double p99;
+};
+
+/// Renders ~2 s block by block and reports per-block render times.
+LoadResult measure(vsa::Engine& engine) {
+    const uint32_t block = engine.settings().block_frames;
+    std::vector<float> out(block * 2);
+    engine.render_offline(out.data(), block);  // apply the start commands
+    std::vector<double> times_us;
+    const int blocks = 2 * 48000 / static_cast<int>(block);
+    for (int i = 0; i < blocks; ++i) {
+        const auto start = std::chrono::steady_clock::now();
+        engine.render_offline(out.data(), block);
+        times_us.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
+    }
+    std::sort(times_us.begin(), times_us.end());
+    return {1e6 * block / 48000.0, times_us[times_us.size() / 2], times_us[times_us.size() * 99 / 100]};
 }
 
 }  // namespace
@@ -82,6 +118,8 @@ TEST_CASE("the render path never allocates") {
     voices.push_back(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.5f, 2.5f, false));
     voices.push_back(voice(engine, stereo.asset, VSA_BUS_AMBIENT, 0.3f, 0.7f, true));
     voices.push_back(voice(engine, streamed.asset, VSA_BUS_MUSIC, 0.8f, 1.0f, true));
+    voices.push_back(voice(engine, mono.asset, VSA_BUS_ENTITY, 0.7f, 1.1f, true, VSA_SPATIAL_WORLD, 3.0f, -2.0f));
+    voices.push_back(voice(engine, stereo.asset, VSA_BUS_WEATHER, 0.7f, 0.9f, true, VSA_SPATIAL_LISTENER, -1.0f, 0.0f));
     for (const vsa_voice v : voices) {
         engine.start_voice(v);
     }
@@ -109,7 +147,13 @@ TEST_CASE("the render path never allocates") {
                 engine.set_voice_looping(voices[0], false);
                 engine.release_voice(voices[2]);
                 break;
-            case 5: engine.set_voice_gain(voices[3], 0.2f); break;
+            case 5:
+                engine.set_voice_gain(voices[3], 0.2f);
+                engine.set_listener(facing(1.0f, 0.0f));
+                engine.set_voice_position(voices[4], VSA_SPATIAL_WORLD, -5.0f, 1.0f, 2.0f);
+                engine.set_voice_lowpass(voices[5], 0.06f);
+                engine.set_render_mode(VSA_RENDER_SPEAKERS);
+                break;
             default: break;
         }
         vsa_test::AllocationScope scope;
@@ -138,28 +182,37 @@ TEST_CASE("256 voices render faster than real time") {
         engine.start_voice(v);
     }
 
-    const uint32_t block = engine.settings().block_frames;
-    std::vector<float> out(block * 2);
-    engine.render_offline(out.data(), block);  // apply the start commands
-
-    std::vector<double> times_us;
-    const int blocks = 2 * 48000 / static_cast<int>(block);
-    for (int i = 0; i < blocks; ++i) {
-        const auto start = std::chrono::steady_clock::now();
-        engine.render_offline(out.data(), block);
-        times_us.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
-    }
-    std::sort(times_us.begin(), times_us.end());
-    const double period_us = 1e6 * block / 48000.0;
-    const double p50 = times_us[times_us.size() / 2];
-    const double p99 = times_us[times_us.size() * 99 / 100];
-    const double active = engine.stats().active_voices;
-    MESSAGE("256 voices, " << block << "-frame blocks (" << period_us << " us): p50 " << p50 << " us ("
-                           << 100.0 * p50 / period_us << " %), p99 " << p99 << " us (" << 100.0 * p99 / period_us
-                           << " %)");
-    CHECK(active == kVoices);
+    const LoadResult r = measure(engine);
+    MESSAGE("256 voices: p50 " << r.p50 << " us (" << 100.0 * r.p50 / r.period_us << " %), p99 " << r.p99 << " us ("
+                               << 100.0 * r.p99 / r.period_us << " %) of " << r.period_us << " us");
+    CHECK(engine.stats().active_voices == kVoices);
 #if defined(NDEBUG)
     // Optimised builds only; Debug (and the Debug-only sanitizer build) is far slower by design.
-    CHECK(p99 < period_us);
+    CHECK(r.p99 < r.period_us);
 #endif
+}
+
+TEST_CASE("256 positional voices render faster than real time, binaural and panned") {
+    for (const vsa_render_mode mode : {VSA_RENDER_HEADPHONES, VSA_RENDER_SPEAKERS}) {
+        vsa::Engine engine(make_config());
+        engine.set_render_mode(mode);
+        constexpr int kVoices = 256;
+        AssetRef mono(pcm_asset(engine, vsa_test::sine(440.0, 44100.0, 44100, 0.1f), 1, 44100));
+        for (int i = 0; i < kVoices; ++i) {
+            // Around the listener at 2..30 m, vanilla-like pitch spread.
+            const double angle = 2.0 * 3.14159265 * i / kVoices;
+            const auto radius = static_cast<float>(2.0 + 28.0 * (i % 16) / 15.0);
+            const float pitch = 0.8f + 0.4f * static_cast<float>(i % 7) / 6.0f;
+            const vsa_voice v = voice(engine, mono.asset, VSA_BUS_ENTITY, 0.05f, pitch, true, VSA_SPATIAL_WORLD,
+                                      radius * static_cast<float>(std::cos(angle)), radius * static_cast<float>(std::sin(angle)));
+            engine.start_voice(v);
+        }
+        const LoadResult r = measure(engine);
+        MESSAGE(std::string(mode == VSA_RENDER_HEADPHONES ? "binaural (64-voice budget)" : "panned") << ": p50 " << r.p50 << " us ("
+                << 100.0 * r.p50 / r.period_us << " %), p99 " << r.p99 << " us (" << 100.0 * r.p99 / r.period_us << " %)");
+        CHECK(engine.stats().real_voices == kVoices);
+#if defined(NDEBUG)
+        CHECK(r.p99 < r.period_us);
+#endif
+    }
 }

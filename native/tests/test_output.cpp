@@ -35,22 +35,26 @@ TEST_CASE("the offline output can change rate and channel layout") {
     desc.struct_size = sizeof desc;
     desc.kind = VSA_OUTPUT_NONE;
     desc.channels = 6;
-    desc.sample_rate = 96000;
+    desc.sample_rate = 44100;
     REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
-    CHECK(e.stats().sample_rate == 96000);
+    CHECK(e.stats().sample_rate == 44100);
     CHECK(e.stats().channels == 6);
 
     std::vector<float> out(9600 * 6);
     REQUIRE(vsa_engine_render_offline(e.engine, out.data(), 9600) == VSA_OK);
     const auto front_left = channel(out, 6, 0);
     const auto centre = channel(out, 6, 2);
-    // 480 Hz at 96 kHz: the voice was resampled to the new rate.
-    CHECK(fit_sine(front_left.data() + 2000, 7000, 480.0, 96000.0).amplitude ==
+    // 480 Hz at 44.1 kHz: the voice was resampled to the new rate.
+    CHECK(fit_sine(front_left.data() + 2000, 7000, 480.0, 44100.0).amplitude ==
           doctest::Approx(0.5 * kMonoPan).epsilon(0.002));
     CHECK(peak(centre) == 0.0);
 
     desc.channels = 3;
     CHECK(vsa_output_open(e.engine, &desc) == VSA_ERROR_INVALID_ARGUMENT);
+    desc.channels = 2;
+    desc.sample_rate = 96000;  // Steam Audio's HRTF supports 44.1 and 48 kHz only
+    CHECK(vsa_output_open(e.engine, &desc) == VSA_ERROR_INVALID_ARGUMENT);
+    desc.sample_rate = 0;
     desc.channels = 2;
     desc.kind = 9;
     CHECK(vsa_output_open(e.engine, &desc) == VSA_ERROR_INVALID_ARGUMENT);

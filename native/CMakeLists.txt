@@ -41,6 +41,8 @@ add_library(vsaudio_core STATIC
     src/audio/asset.hpp
     src/audio/mixer.cpp
     src/audio/mixer.hpp
+    src/audio/spatial.cpp
+    src/audio/spatial.hpp
     src/audio/stream.cpp
     src/audio/stream.hpp
     src/audio/voice.hpp
@@ -49,6 +51,7 @@ add_library(vsaudio_core STATIC
     src/core/error.cpp
     src/core/error.hpp
     src/core/log.cpp
+    src/core/latest_value.hpp
     src/core/log.hpp
     src/core/rt_log.cpp
     src/core/rt_log.hpp
@@ -56,6 +59,7 @@ add_library(vsaudio_core STATIC
     src/decode/decoders.cpp
     src/decode/decoders.hpp
     src/dsp/gain_ramp.hpp
+    src/dsp/high_shelf.hpp
     src/dsp/limiter.cpp
     src/dsp/limiter.hpp
     src/dsp/resampler.cpp

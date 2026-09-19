@@ -59,6 +59,19 @@ public sealed class Voice : IDisposable
         NativeException.ThrowIfFailed(VsaNative.VoiceSetLooping(lease.Engine, Handle, looping ? 1u : 0u), "vsa_voice_set_looping");
     }
 
+    public void SetPosition(SpatialMode mode, float x, float y, float z)
+    {
+        using AudioEngine.Lease lease = engine.Acquire();
+        NativeException.ThrowIfFailed(VsaNative.VoiceSetPosition(lease.Engine, Handle, (uint)mode, x, y, z), "vsa_voice_set_position");
+    }
+
+    /// <summary>High-frequency damping (0..1 gain above ~5 kHz, as OpenAL's EFX low-pass); 1 = off.</summary>
+    public void SetLowpass(float gainHf)
+    {
+        using AudioEngine.Lease lease = engine.Acquire();
+        NativeException.ThrowIfFailed(VsaNative.VoiceSetLowpass(lease.Engine, Handle, gainHf), "vsa_voice_set_lowpass");
+    }
+
     public void Seek(double positionSeconds)
     {
         using AudioEngine.Lease lease = engine.Acquire();

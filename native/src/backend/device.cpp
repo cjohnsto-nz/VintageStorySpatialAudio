@@ -99,7 +99,7 @@ std::vector<vsa_device_info> DeviceOutput::enumerate() {
 }
 
 std::unique_ptr<ma_device, DeviceOutput::DeviceDeleter> DeviceOutput::init_device(const vsa_device_id* id,
-                                                                                  uint32_t channels) {
+                                                                                  uint32_t channels, uint32_t rate) {
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     ma_device_id device_id{};
     if (id != nullptr) {
@@ -108,7 +108,7 @@ std::unique_ptr<ma_device, DeviceOutput::DeviceDeleter> DeviceOutput::init_devic
     }
     config.playback.format = ma_format_f32;
     config.playback.channels = channels;
-    config.sampleRate = 0;  // the device's native rate
+    config.sampleRate = rate;  // 0 = the device's native rate
     config.dataCallback = &data_trampoline;
     config.notificationCallback = &notification_trampoline;
     config.pUserData = this;
@@ -135,11 +135,18 @@ DeviceOutput::Format DeviceOutput::open(const vsa_device_id* id, uint32_t channe
     rerouted_.store(false);
     closing_.store(false);
 
-    auto device = init_device(id, channels);
+    // The engine renders at 44.1 or 48 kHz (Steam Audio's HRTF supports no other useful rates);
+    // any other native rate gets the nearest family and miniaudio converts.
+    auto device = init_device(id, channels, 0);
+    const uint32_t native_rate = device->sampleRate;
+    const uint32_t rate = native_rate == 44100 || native_rate == 48000 ? native_rate
+                          : native_rate % 44100 == 0                  ? 44100u
+                                                                       : 48000u;
     const uint32_t wanted = channels == 0 ? supported_channels(device->playback.channels) : channels;
-    if (device->playback.channels != wanted) {
+    if (device->playback.channels != wanted || rate != native_rate) {
         device.reset();
-        device = init_device(id, wanted);
+        device = init_device(id, wanted, rate);
+        Log::writef(VSA_LOG_INFO, "device runs at %u Hz; rendering at %u Hz", native_rate, rate);
     }
 
     Format format;

@@ -22,12 +22,15 @@ constexpr float kMaxGain = 64.0f;
 constexpr float kMinPitch = 0.05f;
 constexpr float kMaxPitch = 8.0f;
 
+// Steam Audio's HRTF exists at 44.1 and 48 kHz (and 24 kHz, too low to be useful).
+bool supported_rate(uint32_t rate) noexcept { return rate == 44100 || rate == 48000; }
+
 Engine::Settings validate(const vsa_engine_config& config) {
     Engine::Settings settings;
     const auto invalid = [](const std::string& message) { return Error(VSA_ERROR_INVALID_ARGUMENT, message); };
     if (config.sample_rate != 0) {
-        if (config.sample_rate < 8000 || config.sample_rate > 384000) {
-            throw invalid("sample_rate " + std::to_string(config.sample_rate) + " is outside 8000..384000");
+        if (!supported_rate(config.sample_rate)) {
+            throw invalid("sample_rate " + std::to_string(config.sample_rate) + " is not 44100 or 48000");
         }
         settings.sample_rate = config.sample_rate;
     }
@@ -53,7 +56,38 @@ Engine::Settings validate(const vsa_engine_config& config) {
     if (config.stream_threshold_ms != 0) {
         settings.stream_threshold_ms = config.stream_threshold_ms;
     }
+    if (config.max_real_voices != 0) {
+        if (config.max_real_voices > 4096) {
+            throw invalid("max_real_voices " + std::to_string(config.max_real_voices) + " exceeds 4096");
+        }
+        settings.max_real_voices = config.max_real_voices;
+    }
+    if (config.max_binaural_voices != 0) {
+        settings.max_binaural_voices = config.max_binaural_voices;
+    }
+    settings.max_binaural_voices = std::min(settings.max_binaural_voices, settings.max_real_voices);
     return settings;
+}
+
+std::unique_ptr<steam::SteamContext> make_steam(const vsa_engine_config& config) {
+    steam::SteamContext::Options options;
+    options.ray_tracer = static_cast<vsa_ray_tracer>(config.ray_tracer);  // validated in api.cpp
+    options.validation = (config.flags & VSA_ENGINE_FLAG_STEAM_AUDIO_VALIDATION) != 0;
+    return std::make_unique<steam::SteamContext>(options);
+}
+
+bool finite3(float x, float y, float z) noexcept { return std::isfinite(x) && std::isfinite(y) && std::isfinite(z); }
+
+/// Normalises `v` in place; false if it has no usable length.
+bool normalise(float* v) noexcept {
+    const float length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (!std::isfinite(length) || length < 1e-6f) {
+        return false;
+    }
+    v[0] /= length;
+    v[1] /= length;
+    v[2] /= length;
+    return true;
 }
 
 void check_gain(float gain, const char* what) {
@@ -87,19 +121,17 @@ vsa_event make_event(vsa_event_type type) noexcept {
 
 Engine::Engine(const vsa_engine_config& config)
     : settings_(validate(config)),
+      steam_(make_steam(config)),
       kernel_(settings_.resampler_quality),
       slots_(std::make_unique<VoiceSlot[]>(settings_.max_voices)),
       commands_(kCommandCapacity),
       events_(kEventRingCapacity),
       retired_(settings_.max_voices),
-      mixer_(kernel_, slots_.get(), settings_.max_voices, commands_, events_, retired_, rt_log_, settings_.block_frames),
+      spatial_(*steam_, settings_.max_real_voices),
+      mixer_(kernel_, slots_.get(), settings_.max_voices, commands_, events_, retired_, rt_log_, spatial_, listener_,
+             settings_.block_frames, settings_.max_binaural_voices),
       stream_history_frames_(static_cast<uint32_t>(kernel_.max_taps_per_side())),
       stream_window_frames_(kernel_.max_span_frames(settings_.block_frames)) {
-    steam::SteamContext::Options options;
-    options.ray_tracer = static_cast<vsa_ray_tracer>(config.ray_tracer);  // validated in api.cpp
-    options.validation = (config.flags & VSA_ENGINE_FLAG_STEAM_AUDIO_VALIDATION) != 0;
-    steam_ = std::make_unique<steam::SteamContext>(options);
-
     free_slots_.reserve(settings_.max_voices);
     for (uint32_t i = settings_.max_voices; i > 0; --i) {
         free_slots_.push_back(i - 1);  // hand out low slots first
@@ -107,8 +139,10 @@ Engine::Engine(const vsa_engine_config& config)
     mixer_.prepare(settings_.sample_rate, 2);
 
     worker_ = std::thread(&Engine::worker_main, this);
-    Log::writef(VSA_LOG_INFO, "engine: %u-frame blocks, %u voice slots, %s-quality resampler", settings_.block_frames,
-                settings_.max_voices, quality_name(settings_.resampler_quality));
+    Log::writef(VSA_LOG_INFO,
+                "engine: %u-frame blocks, %u voice slots (%u real positional, %u binaural), %s-quality resampler",
+                settings_.block_frames, settings_.max_voices, settings_.max_real_voices, settings_.max_binaural_voices,
+                quality_name(settings_.resampler_quality));
 }
 
 Engine::~Engine() {
@@ -132,7 +166,7 @@ Engine::~Engine() {
         }
     }
     rt_log_.drain();
-    steam_.reset();
+    // Steam Audio objects (spatial_, then steam_) are released by member destruction order.
     Log::write(VSA_LOG_INFO, "engine destroyed");
 }
 
@@ -183,6 +217,15 @@ vsa_voice Engine::create_voice(const vsa_voice_desc& desc) {
     }
     check_gain(desc.gain, "gain");
     check_pitch(desc.pitch);
+    if (desc.spatial > VSA_SPATIAL_LISTENER) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown spatial mode " + std::to_string(desc.spatial));
+    }
+    if (!finite3(desc.position[0], desc.position[1], desc.position[2])) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "voice position must be finite");
+    }
+    if (!std::isfinite(desc.min_distance) || desc.min_distance < 0.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "min_distance must be finite and >= 0");
+    }
 
     // Streams are opened and pre-filled here, on the caller's thread, so the voice can start
     // without an underrun; they are registered with the worker before the render thread sees them.
@@ -222,6 +265,11 @@ vsa_voice Engine::create_voice(const vsa_voice_desc& desc) {
     slot.initial_gain = desc.gain;
     slot.initial_pitch = desc.pitch;
     slot.initial_looping = desc.looping != 0;
+    slot.initial_spatial = desc.spatial;
+    slot.initial_position[0] = desc.position[0];
+    slot.initial_position[1] = desc.position[1];
+    slot.initial_position[2] = desc.position[2];
+    slot.initial_min_distance = desc.min_distance > 0.0f ? desc.min_distance : 1.0f;
     slot.requested_state.store(VSA_VOICE_STOPPED, std::memory_order_relaxed);
     slot.cmd_seq.store(0, std::memory_order_relaxed);
     slot.render_state.store(VSA_VOICE_STOPPED, std::memory_order_relaxed);
@@ -367,6 +415,32 @@ void Engine::fade_voice(vsa_voice voice, float target, float seconds, uint32_t f
     post_voice_command(voice, command, StateChange::None);
 }
 
+void Engine::set_voice_position(vsa_voice voice, uint32_t spatial, float x, float y, float z) {
+    if (spatial > VSA_SPATIAL_LISTENER) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown spatial mode " + std::to_string(spatial));
+    }
+    if (!finite3(x, y, z)) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "voice position must be finite");
+    }
+    Command command{};
+    command.op = Op::SetPosition;
+    command.flags = spatial;
+    command.vec[0] = x;
+    command.vec[1] = y;
+    command.vec[2] = z;
+    post_voice_command(voice, command, StateChange::None);
+}
+
+void Engine::set_voice_lowpass(vsa_voice voice, float gain_hf) {
+    if (!std::isfinite(gain_hf) || gain_hf < 0.0f || gain_hf > 1.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "low-pass gain_hf must be in 0..1");
+    }
+    Command command{};
+    command.op = Op::SetLowpass;
+    command.value = gain_hf;
+    post_voice_command(voice, command, StateChange::None);
+}
+
 vsa_voice_status Engine::voice_status(vsa_voice voice) const {
     const VoiceSlot& slot = checked_slot(voice);
     vsa_voice_status status{};
@@ -388,6 +462,44 @@ void Engine::set_bus_gain(uint32_t bus, float gain) {
     command.op = Op::SetBusGain;
     command.slot = bus;
     command.value = gain;
+    post_global_command(command);
+}
+
+void Engine::set_listener(const vsa_listener& listener) {
+    ListenerPose pose;
+    for (std::size_t i = 0; i < 3; ++i) {
+        pose.position[i] = listener.position[i];
+        pose.forward[i] = listener.forward[i];
+        pose.up[i] = listener.up[i];
+    }
+    if (!finite3(pose.position[0], pose.position[1], pose.position[2]) || !normalise(pose.forward) || !normalise(pose.up)) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "listener position must be finite and forward/up non-zero");
+    }
+    // right = forward x up; then re-derive up so the basis is orthonormal even if the caller's
+    // vectors were not quite perpendicular.
+    const float* f = pose.forward;
+    float* u = pose.up;
+    float* r = pose.right;
+    r[0] = f[1] * u[2] - f[2] * u[1];
+    r[1] = f[2] * u[0] - f[0] * u[2];
+    r[2] = f[0] * u[1] - f[1] * u[0];
+    if (!normalise(r)) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "listener forward and up must not be parallel");
+    }
+    u[0] = r[1] * f[2] - r[2] * f[1];
+    u[1] = r[2] * f[0] - r[0] * f[2];
+    u[2] = r[0] * f[1] - r[1] * f[0];
+    std::lock_guard lock(api_mutex_);  // LatestValue has a single writer
+    listener_.publish(pose);
+}
+
+void Engine::set_render_mode(uint32_t mode) {
+    if (mode != VSA_RENDER_HEADPHONES && mode != VSA_RENDER_SPEAKERS) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "unknown render mode " + std::to_string(mode));
+    }
+    Command command{};
+    command.op = Op::SetRenderMode;
+    command.flags = mode;
     post_global_command(command);
 }
 
@@ -429,8 +541,8 @@ void Engine::open_output(const vsa_output_desc& desc) {
         throw Error(VSA_ERROR_INVALID_ARGUMENT, "channels must be 0, 2, 4, 6 or 8");
     }
     const uint32_t rate = desc.sample_rate == 0 ? settings_.sample_rate : desc.sample_rate;
-    if (desc.kind == VSA_OUTPUT_NONE && (rate < 8000 || rate > 384000)) {
-        throw Error(VSA_ERROR_INVALID_ARGUMENT, "sample_rate is outside 8000..384000");
+    if (desc.kind == VSA_OUTPUT_NONE && !supported_rate(rate)) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "sample_rate must be 44100 or 48000");
     }
 
     std::lock_guard lock(output_mutex_);
@@ -609,6 +721,8 @@ vsa_engine_stats Engine::stats() {
 
     MixerStats& m = mixer_.stats();
     stats.active_voices = m.active_voices.load(std::memory_order_relaxed);
+    stats.real_voices = m.real_voices.load(std::memory_order_relaxed);
+    stats.virtual_voices = m.virtual_voices.load(std::memory_order_relaxed);
     stats.blocks_rendered = m.blocks.load(std::memory_order_relaxed);
     stats.overloads = m.overloads.load(std::memory_order_relaxed);
     stats.stream_underruns = m.underruns.load(std::memory_order_relaxed);

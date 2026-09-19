@@ -59,7 +59,7 @@ TEST_CASE("engine config is validated") {
         config.block_frames = 16;
         CHECK(vsa_engine_create(&config, &engine) == VSA_ERROR_INVALID_ARGUMENT);
         config.block_frames = 0;
-        config.sample_rate = 1000;
+        config.sample_rate = 96000;
         CHECK(vsa_engine_create(&config, &engine) == VSA_ERROR_INVALID_ARGUMENT);
         config.sample_rate = 0;
         config.resampler_quality = 9;

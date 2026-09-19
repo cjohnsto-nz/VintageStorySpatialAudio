@@ -37,6 +37,7 @@ add_executable(vsaudio_tests
     test_header_c.c
     test_output.cpp
     test_self_test.cpp
+    test_spatial.cpp
     test_streaming.cpp
     test_voices.cpp)
 target_include_directories(vsaudio_tests SYSTEM PRIVATE "${DOCTEST_INCLUDE_DIR}")

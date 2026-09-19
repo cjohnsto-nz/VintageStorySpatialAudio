@@ -1,6 +1,8 @@
 #pragma once
 
+#include "audio/spatial.hpp"
 #include "audio/voice.hpp"
+#include "core/latest_value.hpp"
 #include "core/rt_log.hpp"
 #include "core/spsc_ring.hpp"
 #include "dsp/gain_ramp.hpp"
@@ -28,6 +30,16 @@ struct MixerStats {
     std::atomic<uint64_t> time_max_ns{0};
     std::atomic<float> min_limiter_gain{1.0f};
     std::atomic<uint32_t> active_voices{0};
+    std::atomic<uint32_t> real_voices{0};
+    std::atomic<uint32_t> virtual_voices{0};
+};
+
+/// Listener pose as the render thread uses it: an orthonormal basis.
+struct ListenerPose {
+    float position[3] = {0.0f, 0.0f, 0.0f};
+    float right[3] = {1.0f, 0.0f, 0.0f};
+    float up[3] = {0.0f, 1.0f, 0.0f};
+    float forward[3] = {0.0f, 0.0f, -1.0f};
 };
 
 /// The render core. Everything here runs on the render thread (the device callback, or the
@@ -44,13 +56,15 @@ public:
     using BlockHook = void (*)(void* user) noexcept;
 
     Mixer(const dsp::ResamplerKernel& kernel, VoiceSlot* slots, uint32_t slot_count, SpscRing<Command>& commands,
-          SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, uint32_t block_frames);
+          SpscRing<vsa_event>& events, SpscRing<uint32_t>& retired, RtLog& rt_log, SpatialRenderer& spatial,
+          LatestValue<ListenerPose>& listener, uint32_t block_frames, uint32_t binaural_budget);
 
     Mixer(const Mixer&) = delete;
     Mixer& operator=(const Mixer&) = delete;
 
-    /// Sets the output format and resets the limiter and the output FIFO. Allocates; must not
-    /// run while anything renders. Voices, buses and their gains are kept.
+    /// Sets the output format and resets the limiter, the spatial effects and the output FIFO.
+    /// Allocates; must not run while anything renders. Voices, buses and gains are kept. Must be
+    /// called once before the first render.
     void prepare(uint32_t sample_rate, uint32_t channels);
 
     /// Produces `frames` interleaved frames of any count: whole engine blocks are rendered as
@@ -67,7 +81,7 @@ public:
     [[nodiscard]] MixerStats& stats() noexcept { return stats_; }
 
 private:
-    enum class Generated { Silent, Produced, ProducedAndEnded };
+    enum class Generated { Silent, SilentAndEnded, Produced, ProducedAndEnded };
 
     void render_block() noexcept;
     void apply(const Command& command) noexcept;
@@ -92,6 +106,16 @@ private:
     /// Returns true if the voice was retired.
     bool render_voice(uint32_t slot) noexcept;
     Generated generate(VoiceSlot& s) noexcept;
+    /// Advances a virtual voice's position exactly as rendering would, without producing audio.
+    Generated advance_silent(VoiceSlot& s) noexcept;
+    void mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bool positioned) noexcept;
+    [[nodiscard]] SpatialParams spatial_params(const RenderVoice& v) const noexcept;
+    [[nodiscard]] double playback_ratio(const VoiceSlot& s) const noexcept;
+    /// An effect set for `slot`, stealing one from a quieter voice if the pool is empty; -1 if none.
+    int acquire_effects(uint32_t slot, float level) noexcept;
+    void release_effects(RenderVoice& v) noexcept;
+    void update_binaural_threshold() noexcept;
+    void advance_env(RenderVoice& v, uint32_t frames) const noexcept;
     void gather(const Asset& asset, int64_t first, int64_t end, bool loop, bool wrap_before_start) noexcept;
     void publish_position(VoiceSlot& s) noexcept;
     void post_event(vsa_event_type type, vsa_voice voice, uint64_t token, uint32_t flags) noexcept;
@@ -103,7 +127,16 @@ private:
     SpscRing<vsa_event>& events_;
     SpscRing<uint32_t>& retired_;
     RtLog& rt_log_;
+    SpatialRenderer& spatial_;
+    LatestValue<ListenerPose>& listener_;
     const uint32_t block_frames_;
+    ListenerPose pose_;
+    vsa_render_mode render_mode_ = VSA_RENDER_HEADPHONES;
+    // Binaural budget: voices ranked above binaural_threshold_ (computed at each block start from
+    // the previous block's levels) get HRTF rendering, the rest panning.
+    uint32_t binaural_budget_;
+    float binaural_threshold_ = 0.0f;
+    std::vector<float> ranking_;
 
     uint32_t sample_rate_ = 48000;
     uint32_t channels_ = 2;
@@ -122,6 +155,8 @@ private:
     uint32_t window_capacity_ = 0;
     std::vector<float> voice_storage_;
     float* voice_out_[2] = {};
+    std::vector<float> spatial_storage_;
+    float* spatial_out_[2] = {};
     std::vector<float> gain_buf_;
     std::vector<float> bus_storage_;
     std::array<float*, VSA_BUS_COUNT * 2> bus_{};
