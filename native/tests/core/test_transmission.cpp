@@ -218,6 +218,33 @@ TEST_CASE("transmission: a sound inside a partial block (an anvil) leaves it, an
     CHECK(!view.escape(open, listener, 2, 0.25));
 }
 
+TEST_CASE("transmission: an anvil against a wall is not moved through the wall") {
+    auto c = std::make_shared<ChunkVoxels>();
+    PartialBlock anvil;
+    anvil.cell = static_cast<uint16_t>(cell_index(10, 16, 16));
+    anvil.material = Wood;
+    anvil.boxes.push_back({{0.1f, 0.0f, 0.25f}, {0.9f, 0.7f, 0.75f}});
+    c->partials.push_back(anvil);
+    for (int y = 14; y < 20; ++y) {
+        for (int z = 10; z < 22; ++z) {
+            c->materials[static_cast<std::size_t>(cell_index(9, y, z))] = Stone;  // the wall, west of the anvil
+        }
+    }
+    VoxelView::Chunks chunks;
+    chunks[{0, 0, 0}] = c;
+    const VoxelView view(std::move(chunks), materials());
+    double source[3] = {10.5, 16.5, 16.5};
+    const double listener[3] = {2.5, 16.5, 18.5};  // outside, beyond the wall
+    CHECK(view.escape(source, listener, 2, 0.25));
+    CHECK(source[0] > 10.0);  // still on the anvil's side
+    CHECK(view.trace(source, listener).crossings == 1);
+    CHECK(static_cast<double>(view.trace(source, listener).solid_metres) > 0.9);
+    // A sound inside a wall block (one being placed) still comes out of that block only.
+    double placed[3] = {9.5, 16.5, 16.5};
+    CHECK(view.escape(placed, listener, 2, 0.25));
+    CHECK(placed[0] < 9.0);
+}
+
 TEST_CASE("transmission: a listener beside an open door's leaf stays; one inside the leaf leaves the leaf, not the cell") {
     auto c = std::make_shared<ChunkVoxels>();
     PartialBlock door;

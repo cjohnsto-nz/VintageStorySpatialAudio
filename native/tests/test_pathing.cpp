@@ -265,6 +265,12 @@ TEST_CASE("debugging: the way round can be muted, and a muted voice asks for no 
     render12(e, kRate / 2);
     CHECK(lean(render12(e, kRate / 4)).energy < 1e-9 * with_path);
     CHECK(stats(e).wanted == 0);
+    // Nor is it listed among what is heard.
+    REQUIRE(vsa_engine_set_inspect(e.engine, 1) == VSA_OK);
+    render12(e, kRate / 4);
+    uint32_t heard = 0;
+    REQUIRE(vsa_engine_get_audible(e.engine, nullptr, 0, &heard) == VSA_OK);
+    CHECK(heard == 0);
     std::vector<vsa_path_segment> legs(8);
     legs[0].struct_size = sizeof(vsa_path_segment);
     uint32_t count = 0;
@@ -300,6 +306,35 @@ TEST_CASE("pathing: a sealed room has no path, and a sound in the open needs non
     uint32_t count = 0;
     REQUIRE(vsa_engine_get_path_segments(e.engine, segments.data(), 16, &count) == VSA_OK);
     CHECK(count == 0);
+}
+
+TEST_CASE("pathing: an anvil against the wall of a sealed room is not heard from outside that wall") {
+    // A sound is simulated from outside the block it sits in, on the listener's side. With the
+    // block against a wall that used to carry on through the wall: the anvil was pathed (and
+    // reverberated) from the open air outside the room, from wherever the listener stood.
+    OfflineEngine e(pathing_config());
+    set_materials(e);
+    const std::vector<uint16_t> cells = room(false);
+    vsa_box body{{0.1f, 0.0f, 0.25f}, {0.9f, 0.7f, 0.75f}};
+    vsa_partial_block anvil{static_cast<uint32_t>(cell(11, 2, 8)), Stone, 0, 1};  // the east wall is x 12
+    vsa_chunk_desc chunk{};
+    chunk.struct_size = sizeof chunk;
+    chunk.materials = cells.data();
+    chunk.partials = &anvil;
+    chunk.partial_count = 1;
+    chunk.boxes = &body;
+    chunk.box_count = 1;
+    REQUIRE(vsa_scene_set_chunk(e.engine, &chunk) == VSA_OK);
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+    REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, 11.5f, 2.5f, 8.5f)) == VSA_OK);
+    for (const float z : {8.5f, 5.0f, 11.0f}) {
+        e.listener(17.0f, 3.6f, z, -1.0f, 0.0f, 0.0f);  // outside, east of the wall
+        e.render(kRate);
+        const vsa_pathing_stats s = stats(e);
+        CHECK(s.wanted == 1);
+        CHECK(s.found == 0);
+    }
 }
 
 TEST_CASE("pathing: a sound with no path inherits none from the sound before it") {

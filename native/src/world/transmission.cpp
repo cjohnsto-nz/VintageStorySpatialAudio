@@ -383,12 +383,56 @@ bool VoxelView::enclosure(const double point[3], double lo[3], double hi[3], Esc
     return false;
 }
 
+bool VoxelView::solid_at(const double point[3]) const {
+    return kind(material_at(static_cast<int64_t>(std::floor(point[0])), static_cast<int64_t>(std::floor(point[1])),
+                            static_cast<int64_t>(std::floor(point[2])))) == MaterialKind::Solid;
+}
+
+bool VoxelView::sidestep(double point[3], const double target[3]) const {
+    const int64_t c[3] = {static_cast<int64_t>(std::floor(point[0])), static_cast<int64_t>(std::floor(point[1])),
+                          static_cast<int64_t>(std::floor(point[2]))};
+    const double d[3] = {target[0] - point[0], target[1] - point[1], target[2] - point[2]};
+    int best_axis = -1;
+    int best_sign = 0;
+    double best = -std::numeric_limits<double>::infinity();
+    for (int a = 0; a < 3; ++a) {
+        for (int sign = -1; sign <= 1; sign += 2) {
+            int64_t n[3] = {c[0], c[1], c[2]};
+            n[a] += sign;
+            if (kind(material_at(n[0], n[1], n[2])) == MaterialKind::Solid) {
+                continue;
+            }
+            const double score = d[a] * static_cast<double>(sign);
+            if (score > best) {
+                best = score;
+                best_axis = a;
+                best_sign = sign;
+            }
+        }
+    }
+    if (best_axis < 0) {
+        return false;  // walled in on every side: it stays where it is
+    }
+    point[best_axis] = best_sign > 0 ? static_cast<double>(c[best_axis] + 1) + 1e-3
+                                     : static_cast<double>(c[best_axis]) - 1e-3;
+    return true;
+}
+
 bool VoxelView::escape(double point[3], const double target[3], int max_cells, double beyond, Escaping what) const {
     bool moved = false;
+    const double start[3] = {point[0], point[1], point[2]};
     for (int i = 0; i < max_cells; ++i) {
         double lo[3];
         double hi[3];
         if (!enclosure(point, lo, hi, what)) {
+            break;
+        }
+        if (i > 0 && solid_at(point)) {
+            // Out of its own block and into a wall: the point must not go on through it (an
+            // anvil against a wall would be heard from the wall's far side). It leaves its
+            // block by the open face nearest the way to the target instead.
+            std::copy_n(start, 3, point);
+            moved = sidestep(point, target);
             break;
         }
         // Step to where the line towards the target leaves what encloses the point (the cell, or

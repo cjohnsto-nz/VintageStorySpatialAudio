@@ -1425,8 +1425,8 @@ void Mixer::gather(const Asset& asset, int64_t first, int64_t end, bool loop, bo
 }
 
 void Mixer::inspect(VoiceSlot& s, const SpatialParams& params, const float* mono, bool positioned) noexcept {
-    if (!inspect_.load(std::memory_order_relaxed)) {
-        return;
+    if (!inspect_.load(std::memory_order_relaxed) || s.render.muted) {
+        return;  // off; or silenced while another sound is soloed, and no part of what is heard
     }
     const RenderVoice& v = s.render;
     // What the voice itself is worth this block, after its gain, fades and the bus.
