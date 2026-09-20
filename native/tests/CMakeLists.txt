@@ -92,3 +92,8 @@ target_link_libraries(vsaudio_core_tests PRIVATE vsaudio_core vsa_test_support)
 vsa_enable_warnings(vsaudio_core_tests)
 vsa_place_runtime(vsaudio_core_tests)
 add_test(NAME vsaudio_core_tests COMMAND vsaudio_core_tests)
+
+if(VSA_SANITIZE AND NOT MSVC)
+    set_tests_properties(vsaudio_tests vsaudio_core_tests PROPERTIES
+        ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
+endif()
