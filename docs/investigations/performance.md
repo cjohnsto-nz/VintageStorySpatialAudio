@@ -146,6 +146,40 @@ simulated sounds (38 voices, 11 with effects → 53 voices, 28 with effects):
   be near 1.8 ms of the 5.33 ms block.
 - The worst reflection tick rose to 54 ms of its 100 ms period with 28 sources.
 
+### Walking: the same route twice, 20 Sep 2026
+
+| | baseline | mod |
+|---|---|---|
+| fps | 66.7 | **67.0** |
+| frame median / p99 / worst ms | 15.4 / 28.1 / 64.2 | **15.1 / 22.1 / 53.9** |
+| our main thread | 0.000 ms/frame | **0.204 ms/frame** |
+| our threads | 0.3 % of a core | **162 %** (engine 57, Steam Audio 105) |
+| process cores (sampler) | 1.42 avg, 1.94 peak | 3.31 avg, **7.67 peak** |
+| chunk reads | – | 0.085 ms/frame, 893 calls, **9 over 2 ms**, worst 12.4 ms |
+
+- **Walking costs no frame time at all.** Same fps, and p99 and worst frame both *better* with the
+  mod. Our main-thread work halved against standing (0.204 against 0.414 ms) because fewer sounds
+  are near. Only 9 chunk reads in the minute took 2 ms or more.
+- **But the path baker runs away.** Five bakes in 72 s, **16.7 s each, 3859 probes** — the baker
+  is never not baking, and drives Steam Audio's workers to **1.05 cores** on their own. Against
+  the earlier measurements:
+
+  | probes | bake | source |
+  |---|---|---|
+  | 794 | 0.52 s | ADR 0013 gate, 64³ region |
+  | 1941 | 3.4 s | standing, village |
+  | 3859 | 16.7 s | walking |
+
+  Bake time grows as roughly **probes²·²** — the probe-to-probe visibility matrix. Probe count
+  depends on how much open floor the box contains, so terrain decides it, and the default
+  96 × 64 × 96 box can clearly hold twice what a village holds.
+- **Two consequences beyond the CPU.** A bake is stale before it finishes while the listener
+  keeps moving, so pathing barely works when travelling; and the run recorded its first
+  **2 stream underruns**, with the sampler seeing 7.67 cores at peak.
+- The game's own side of this comparison is confounded: the mod run walked the route the
+  baseline had just loaded, so the game meshed less (Vintagestory.exe 90 % → 46 %). Our own
+  numbers are direct and unaffected.
+
 ### Still to measure
 
 The cave and forest spots, and a second run of each configuration. The process-level CPU and
