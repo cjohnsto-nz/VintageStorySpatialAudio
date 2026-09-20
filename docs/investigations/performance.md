@@ -180,6 +180,38 @@ simulated sounds (38 voices, 11 with effects → 53 voices, 28 with effects):
   baseline had just loaded, so the game meshed less (Vintagestory.exe 90 % → 46 %). Our own
   numbers are direct and unaffected.
 
+### Walking again, with the budgeted bake (ADR 0015)
+
+The same route once more, after the probe budget, the 64-block box and abandoning stale bakes.
+The world is warm by now — the game has little left to stream, so its own baseline is half what
+it was (0.76 cores against 1.42) — which makes this pair comparable only with itself.
+
+| | baseline | mod | before ADR 0015 |
+|---|---|---|---|
+| fps | 64.5 | 64.2 | 67.0 |
+| frame median / p99 / worst ms | 16.1 / 19.9 / 45.2 | 15.9 / 22.6 / 55.5 | 15.1 / 22.1 / 53.9 |
+| our main thread | 0.000 | 0.178 ms/frame | 0.204 |
+| our threads | 0.1 % | **114 %** of a core | 162 % |
+| — Steam Audio workers | 0 % | 75.4 % | 105.4 % |
+| — path baker | 0 % | **3.1 %** | 16.8 % |
+| **bake** | – | **458 ms each, worst 771** | **16 726 ms** |
+| probes | – | 1058, 2.8 m apart | 3859, 2.5 m apart |
+| bakes in the window | – | 12 (8 % of it baking, 1 abandoned) | 5 (never not baking) |
+| stream underruns | 0 | **0** | 2 |
+
+- **The bake is 36× faster** and no longer the dominant cost: 458 ms against 16.7 s. The budget
+  barely had to act — spacing went from 2.5 m to 2.8 m — so most of the win came from the
+  smaller box, and path quality is nearly untouched.
+- **Pathing now works while moving.** Twelve bakes landed in 71 s with one abandoned, against
+  five that were all stale on arrival.
+- **Frame cost is still nil** (64.2 against 64.5 fps), though p99 is 2.7 ms worse than the
+  baseline's and worth watching.
+- **What is left is the reflections**: 24.2 ms per tick on three threads is most of Steam Audio's
+  75 %. Note it kept 10 places live for 2 audible sounds — places are held 30 s after their last
+  sound (ADR 0012), which while walking means simulating ground already left behind.
+- The tick's slow calls are not individual chunk reads (2 over 2 ms) but whole ticks (108),
+  which is the per-tick time budget working as designed.
+
 ### Still to measure
 
 The cave and forest spots, and a second run of each configuration. The process-level CPU and
