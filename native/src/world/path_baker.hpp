@@ -34,6 +34,12 @@ struct PathBakeSettings {
     /// Probes to bake at most (ADR 0015). A bake costs about probes^2.2, and how many probes a
     /// box holds is up to the terrain: without a budget, open ground takes tens of seconds.
     uint32_t max_probes = 1200;
+    /// The budget on a machine with no Embree, which today means Apple Silicon. Steam Audio's
+    /// bake is about a thousand times slower there (794 probes, its built-in ray tracer, one
+    /// thread: 0.5 s on CI's x64 runners, 478 s on the arm64 macOS one), and the cost falls
+    /// steeply with the count (266 probes: 1.1 s). At the usual budget no bake ever finished
+    /// before the listener had walked out of it, and a core was busy for the whole session.
+    static constexpr uint32_t kMaxProbesWithoutEmbree = 300;
     /// Point samples per probe when testing whether two probes see each other (1: fast; more:
     /// robust to thin gaps).
     uint32_t vis_samples = 1;

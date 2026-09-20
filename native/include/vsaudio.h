@@ -218,7 +218,8 @@ typedef struct vsa_engine_config {
     /** Sounds given paths per simulation at most (the loudest blocked ones), 0 = 16; 1..256. */
     uint32_t pathing_sources;
     /** Probes baked at most: the spacing widens to keep within it, since a bake costs about
-     *  probes^2.2 and the terrain decides how many a box holds (ADR 0015). 0 = 1200; 64..65536. */
+     *  probes^2.2 and the terrain decides how many a box holds (ADR 0015). 0 = 1200, or 300 on a
+     *  machine with no Embree (Apple Silicon), where a bake is about 1000x slower; 64..65536. */
     uint32_t pathing_max_probes;
 } vsa_engine_config;
 
