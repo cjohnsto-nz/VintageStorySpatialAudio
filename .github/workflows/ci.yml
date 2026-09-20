@@ -11,6 +11,12 @@ env:
   VS_VERSION: "1.22.7"
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  # PLAN section 9's CPU budgets describe the hardware the mod targets. A shared runner is about
+  # half that speed and shares its cores with the rest of the host, so the budget tests measure and
+  # report here but do not gate: on the 2026-09-19 run a render costing 20 % of the block period on
+  # a developer machine measured 43 %, and a simulation tick well inside its 100 ms period measured
+  # 199 ms. That class of regression is caught by the same tests run locally.
+  VSA_NO_PERF_BUDGETS: "1"
 
 jobs:
   native:
@@ -20,11 +26,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-2022, rid: win-x64, preset: win-x64 }
-          - { os: ubuntu-24.04, rid: linux-x64, preset: linux-x64 }
+          # `keep_going` asks Ninja for every compile error in one run rather than only the first:
+          # a warning that only GCC or only Clang raises otherwise costs one push per diagnostic.
+          # MSBuild already reports a project's errors together, so the Windows entry has none.
+          - { os: windows-2022, rid: win-x64, preset: win-x64, keep_going: "" }
+          - { os: ubuntu-24.04, rid: linux-x64, preset: linux-x64, keep_going: "-- -k 0" }
           # Apple Silicon runner: builds the universal binary and runs the tests on arm64,
           # which is also where we learn whether Steam Audio's arm64 slice has Embree.
-          - { os: macos-14, rid: osx, preset: osx }
+          - { os: macos-14, rid: osx, preset: osx, keep_going: "-- -k 0" }
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +42,14 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y ninja-build; else brew install ninja; fi
+
+      # fetch-deps keeps a sha256 stamp beside each dependency and skips whatever is already in
+      # place, so a cache hit turns the fetch into a no-op instead of ~400 MB off the CDN.
+      - name: Cache pinned dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: deps-${{ matrix.rid }}-${{ hashFiles('third_party/deps.json') }}
 
       - name: Fetch dependencies
         shell: pwsh
@@ -44,19 +61,21 @@ jobs:
 
       - name: Build (Release)
         working-directory: native
-        run: cmake --build --preset ${{ matrix.preset }}-release
+        run: cmake --build --preset ${{ matrix.preset }}-release ${{ matrix.keep_going }}
 
+      # -V so the CPU budgets the runners do not gate on are still printed on a green run: that
+      # reporting is what makes leaving them ungated here defensible. Two tests, ~600 lines.
       - name: Test (Release)
         working-directory: native
-        run: ctest --preset ${{ matrix.preset }}-release
+        run: ctest --preset ${{ matrix.preset }}-release -V
 
       - name: Build + test with sanitizers
         if: matrix.rid == 'linux-x64'
         working-directory: native
         run: |
           cmake --preset linux-x64-asan
-          cmake --build --preset linux-x64-asan
-          ctest --preset linux-x64-asan
+          cmake --build --preset linux-x64-asan -- -k 0
+          ctest --preset linux-x64-asan -V
 
       - name: Install
         working-directory: native

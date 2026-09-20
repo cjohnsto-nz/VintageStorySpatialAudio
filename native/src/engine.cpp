@@ -420,7 +420,7 @@ void Engine::post_voice_command(vsa_voice voice, Command command, StateChange ch
         uint32_t next = current;
         switch (change) {
             case StateChange::Start: next = VSA_VOICE_PLAYING; break;
-            case StateChange::Pause: next = current == VSA_VOICE_PLAYING ? VSA_VOICE_PAUSED : current; break;
+            case StateChange::Pause: next = current == VSA_VOICE_PLAYING ? static_cast<uint32_t>(VSA_VOICE_PAUSED) : current; break;
             case StateChange::Stop: next = VSA_VOICE_STOPPED; break;
             case StateChange::None: break;
         }

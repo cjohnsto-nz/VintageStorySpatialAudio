@@ -153,6 +153,9 @@ double schroeder_rt60(const std::vector<double>& e, std::size_t start) {
         sum += e[i - 1];
         edc[i - 1 - start] = sum;
     }
+    if (edc.empty()) {
+        return 0.0;  // nothing after `start`; also what tells GCC edc[0] is not a null dereference
+    }
     const double total = edc[0];
     std::size_t t5 = 0;
     std::size_t t25 = 0;

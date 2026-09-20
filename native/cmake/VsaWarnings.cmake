@@ -18,21 +18,27 @@ function(vsa_enable_warnings target)
     vsa_enable_sanitizers(${target})
 endfunction()
 
-# Third-party code is compiled as published: no warnings (we do not patch it), but still with
-# the sanitizers so ASan sees its allocations.
+# Third-party code is compiled as published: no warnings (we do not patch it), and no
+# UndefinedBehaviorSanitizer either, since libvorbis's shifts and psy.c's one-past-the-end read
+# are not defects anyone here can act on. AddressSanitizer stays on so it still sees the
+# allocations, which is how a leak of ours on the far side of a third-party call still shows up.
 function(vsa_disable_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W0 /utf-8)
     else()
         target_compile_options(${target} PRIVATE -w)
     endif()
-    vsa_enable_sanitizers(${target})
+    vsa_enable_sanitizers(${target} NO_UBSAN)
 endfunction()
 
 function(vsa_enable_sanitizers target)
     if(VSA_SANITIZE AND NOT MSVC)
+        set(_vsa_sanitizers "address,undefined")
+        if("NO_UBSAN" IN_LIST ARGN)
+            set(_vsa_sanitizers "address")
+        endif()
         target_compile_options(${target} PRIVATE
-            $<$<CONFIG:Debug>:-fsanitize=address,undefined -fno-omit-frame-pointer>)
-        target_link_options(${target} PRIVATE $<$<CONFIG:Debug>:-fsanitize=address,undefined>)
+            $<$<CONFIG:Debug>:-fsanitize=${_vsa_sanitizers} -fno-omit-frame-pointer>)
+        target_link_options(${target} PRIVATE $<$<CONFIG:Debug>:-fsanitize=${_vsa_sanitizers}>)
     endif()
 endfunction()

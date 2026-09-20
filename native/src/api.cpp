@@ -688,7 +688,7 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_sources(vsa_engine* engine, vsa_sourc
             const vsa::world::SourceDebug& s = sources[i];
             vsa_source_debug d{};
             d.struct_size = sizeof d;
-            d.flags = s.escaped ? VSA_SOURCE_ESCAPED : 0u;
+            d.flags = s.escaped ? static_cast<uint32_t>(VSA_SOURCE_ESCAPED) : 0u;
             d.voice = s.voice;
             std::copy_n(s.position, 3, d.position);
             std::copy_n(s.simulated_position, 3, d.simulated_position);

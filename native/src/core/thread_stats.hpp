@@ -50,7 +50,8 @@ private:
         std::string name;
         uint32_t id = 0;
         void* handle = nullptr;  // Windows: a handle with query access
-        long clock = -1;         // POSIX: the thread's CPU clock id (registered threads only)
+        long clock = -1;         // POSIX: the thread's CPU clock id, or on macOS its Mach port
+                                 // (registered threads only)
     };
 
     ThreadRegistry() = default;
