@@ -75,6 +75,14 @@ public sealed class SpatialAudioModSystem : ModSystem, IDisposable
             status = status with { TakeoverActive = false, TakeoverNote = conflict };
         }
 
+        if (engine is null && status.EngineError is string failure)
+        {
+            // Said once in the chat as well as the log: on Linux and macOS the usual reason is
+            // that the second download (the native pack) is not installed, and the player who
+            // has no sound processing should not have to read a log to find that out.
+            api.Event.LevelFinalize += () => api.ShowChatMessage("Spatial Audio is not running; the game's own audio is. " + failure);
+        }
+
         if (engine is not null)
         {
             SpatialAudioConfig config = LoadConfig(api);
@@ -498,6 +506,13 @@ public sealed class SpatialAudioModSystem : ModSystem, IDisposable
         return text;
     }
 
+    /// <summary>This platform's libraries: ours, or the native pack's (Linux and macOS).</summary>
+    private string NativeDirectory() => NativeLibraryResolver.FindNativeDirectory(
+        typeof(SpatialAudioModSystem).Assembly.Location,
+        NativeLibraryResolver.LoadedNativePackLocation(),
+        Mod.Info.Version,
+        capi?.ModLoader.GetMod(NativeLibraryResolver.NativePackModId)?.Info.Version);
+
     private StatusReport BringUp(SpatialAudioConfig config, ILogger logger, string modConfigDirectory)
     {
         VerificationReport verification = PatchTargetVerifier.Verify(
@@ -505,7 +520,7 @@ public sealed class SpatialAudioModSystem : ModSystem, IDisposable
 
         try
         {
-            NativeLibraryResolver.Register(NativeLibraryResolver.DefaultNativeDirectory(typeof(SpatialAudioModSystem).Assembly.Location));
+            NativeLibraryResolver.Register(NativeDirectory());
             EngineVersion version = AudioEngine.GetVersion();
             engine = AudioEngine.Create(config.ToEngineOptions(modConfigDirectory), new GameLoggerEngineLog(logger));
             engine.SetReflectionGain(config.ReflectionGainClamped());
@@ -545,7 +560,7 @@ public sealed class SpatialAudioModSystem : ModSystem, IDisposable
             // (ADR 0018), and gains the settings a new version added. The defaults come from the
             // native library, and this is the first thing in a session to call into it: without
             // the resolver it is not found, and the whole settings file was thrown away for defaults.
-            NativeLibraryResolver.Register(NativeLibraryResolver.DefaultNativeDirectory(typeof(SpatialAudioModSystem).Assembly.Location));
+            NativeLibraryResolver.Register(NativeDirectory());
             if (config.Populate(EngineDefaults.Read()) && !fresh)
             {
                 Mod.Logger.Notification("{0}: settings without a value were written out in full.", SpatialAudioConfig.FileName);

@@ -143,14 +143,18 @@ jobs:
           path: artifacts/scenelab
           if-no-files-found: ignore
 
+      # Two zips, each under the mod database's 40 MB limit: the mod with the Windows libraries,
+      # and the Linux and macOS libraries as a second mod (see scripts/build.ps1 -Split).
       - name: Package (all platforms)
         shell: pwsh
-        run: ./scripts/build.ps1 -Configuration Release -SkipNative -SkipTests -SkipDoctor
+        run: ./scripts/build.ps1 -Configuration Release -SkipNative -SkipTests -SkipDoctor -Split
         env:
           VINTAGE_STORY: ${{ env.VS_REFERENCE_PATH }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: spatialaudio-mod
-          path: artifacts/spatialaudio_*.zip
+          path: |
+            artifacts/spatialaudio_*.zip
+            artifacts/spatialaudiounix_*.zip
           if-no-files-found: error

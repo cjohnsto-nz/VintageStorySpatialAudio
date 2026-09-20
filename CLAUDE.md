@@ -7,7 +7,7 @@ Guidance for Claude Code in this repo. The current state and next steps are in [
 **Spatial Audio** (mod id `spatialaudio`, formerly "Steam Audio"/`vssteamaudio`; "Steam Audio" now means only Valve's library). A Vintage Story client mod that replaces the game's audio engine with a native engine built on Steam Audio 4.8.1.
 
 - The plan is in `docs/PLAN.md`.
-- The decisions are in `docs/adr/` (ADRs 0001–0018).
+- The decisions are in `docs/adr/` (ADRs 0001–0019).
 - The evidence behind them is in `docs/investigations/phase0.md`.
 
 ## Build and test (Windows, PowerShell 7)
@@ -17,6 +17,7 @@ Always use `pwsh`. Windows PowerShell 5.1 can't run the scripts (they carry `#Re
 ```powershell
 pwsh ./scripts/build.ps1                      # deps -> native build+tests -> managed build+tests -> VsaDoctor -> zip
 pwsh ./scripts/build.ps1 -SkipTests           # faster; skips the test project entirely
+pwsh ./scripts/build.ps1 -Split               # release packaging (CI): spatialaudio (Windows libs) + spatialaudiounix (Linux, macOS), each < 40 MB (ADR 0019)
 pwsh ./deploy.ps1 -StopGame                   # Release build + install zip into %APPDATA%\VintagestoryData\Mods (-Configuration Debug for asserts)
 cd native; cmake --preset win-x64; cmake --build --preset win-x64-debug; ctest --preset win-x64-debug
 dotnet tools/VsaDoctor/bin/Release/net10.0/VsaDoctor.dll --native artifacts/native/win-x64
