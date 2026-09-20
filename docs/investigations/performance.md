@@ -66,13 +66,63 @@ F3 is not bound to anything.
 
 ## Results
 
-_To be filled in from Chris's runs._
+**Village, 20 Sep 2026** (Chris's machine, 12 logical cores; a heavily modded world at
+-14531 122 1292; defaults: Medium reflections, pathing on). Runs four minutes apart.
 
-| Spot | Run | fps | frame p99 ms | cores | working set MB | mod main thread ms/frame | notes |
-|---|---|---|---|---|---|---|---|
-| village | vanilla | | | | | – | |
-| village | mod | | | | | | |
-| cave | vanilla | | | | | – | |
-| cave | mod | | | | | | |
-| forest, night | vanilla | | | | | – | |
-| forest, night | mod | | | | | | |
+| Run | fps | frame median / p99 / worst ms | cores of 12 | working set MB | our main thread ms/frame |
+|---|---|---|---|---|---|
+| baseline (vanilla audio, mod idle) | 76.5 | 12.9 / 23.6 / 65.3 | 1.76 | 5817 | 0.000 |
+| mod | 72.0 | 13.6 / 22.1 / 72.0 | 2.02 | 5684 | 0.414 |
+
+### What it costs
+
+- **Frame time: +0.7 ms median** (12.9 → 13.6), which is 76.5 → 72.0 fps, about 6 %. Our own
+  main-thread work is **0.414 ms** of that 0.7, so the frame cost is very nearly just the work we
+  do on the frame; the rest is within run-to-run noise.
+- **Stutter: none added.** p99 22.1 ms with the mod against 23.6 without, worst frame 72 against
+  65 — both inside the variation between runs. The background threads are using spare cores, not
+  contending with the game's.
+- **CPU: +0.5 cores** on our own threads, measured directly: reflection simulation 0.17, audio
+  render 0.11, path baker 0.065, Steam Audio's 14 workers 0.15, everything else under 0.01. The
+  process total moved less than that (1.76 → 2.02) because the game does proportionally less work
+  at 72 fps than at 76.5; the thread rows are the number to trust.
+- **Memory:** our native scene is 30.8 MB (405 chunks, 150 k triangles) and decoded assets
+  173 MB, well inside PLAN's 300 MB. The process working set differs by less than the
+  run-to-run variation, so it says nothing either way.
+- **Budgets (PLAN §9):** main thread 0.414 ms against 0.5 — inside, but only just. Simulation
+  threads 0.5 cores against 1.5 — comfortable. Render thread 512 µs average of the 5.33 ms block,
+  1827 µs worst (34 %), **0 overloads and 0 underruns** — inside the 25 % p99 rule with room.
+
+### Where the frame cost is
+
+| Section | ms/frame | worst call | allocated |
+|---|---|---|---|
+| scene tick | 0.200 | 15.6 ms | 67 MB |
+| — of which chunk reads | 0.194 | **14.1 ms** | 67 MB |
+| events, settings | 0.010 | 9.0 ms | 74 MB |
+| sound API (71 k calls) | 0.006 | 1.4 ms | 13 MB |
+| listener, entity tracking, sound creation | 0.003 | 0.06 ms | 2 MB |
+
+Chunk reading is nearly all of it. The average is small but a single read has hit **14 ms** —
+one dropped frame — so the worst case matters more than the mean. We allocate 217 MB over the
+71 s window (3 MB/s) against the game's own 209 MB/s, so we are not driving the collector.
+
+### Worth fixing, in order
+
+1. **Chunk reads on the main thread** (0.194 ms/frame, 14 ms worst). The copy has to start on
+   the main thread, but the per-read budget is clearly being blown by single large chunks.
+2. **The pathing bake: 3.4 s, worst 4.4 s, 1941 probes** for the default 96 × 64 × 96 box —
+   against 0.5 s for 794 probes in the ADR 0013 gate measurement, because the bake grows
+   superlinearly with probe count. It costs 6.5 % of a core while walking and leaves new ground
+   without paths for three seconds. A smaller default box or wider probe spacing would buy most
+   of it back.
+3. **Reflections at 22.3 ms per tick** (worst 36.2) are the largest single background cost, but
+   they are inside their budget and audibly the point of the mod. Leave unless the quality
+   presets need rebalancing.
+
+### Still to measure
+
+The cave and forest spots, and a second run of each configuration. The process-level CPU and
+memory figures varied by 40 % between two identical baseline runs an hour apart (1.15 then 1.75
+cores), so only the directly-measured numbers — our threads, our main thread, our memory — are
+solid from a single pair.
