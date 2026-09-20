@@ -63,9 +63,11 @@ jobs:
         working-directory: native
         run: cmake --build --preset ${{ matrix.preset }}-release ${{ matrix.keep_going }}
 
+      # -V so the CPU budgets the runners do not gate on are still printed on a green run: that
+      # reporting is what makes leaving them ungated here defensible. Two tests, ~600 lines.
       - name: Test (Release)
         working-directory: native
-        run: ctest --preset ${{ matrix.preset }}-release
+        run: ctest --preset ${{ matrix.preset }}-release -V
 
       - name: Build + test with sanitizers
         if: matrix.rid == 'linux-x64'
@@ -73,7 +75,7 @@ jobs:
         run: |
           cmake --preset linux-x64-asan
           cmake --build --preset linux-x64-asan -- -k 0
-          ctest --preset linux-x64-asan
+          ctest --preset linux-x64-asan -V
 
       - name: Install
         working-directory: native
