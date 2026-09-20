@@ -120,6 +120,32 @@ one dropped frame — so the worst case matters more than the mean. We allocate 
    they are inside their budget and audibly the point of the mod. Leave unless the quality
    presets need rebalancing.
 
+### With more sounds: the surroundweather mod
+
+A third run at the same spot with `surroundweather` also loaded, which roughly doubles the
+simulated sounds (38 voices, 11 with effects → 53 voices, 28 with effects):
+
+| | mod | mod + surroundweather |
+|---|---|---|
+| fps | 72.0 | 73.4 |
+| frame median / p99 ms | 13.6 / 22.1 | 13.4 / 22.6 |
+| our threads | 50 % of a core | 84 % |
+| — Steam Audio workers | 15.3 % | 37.7 % |
+| audio render thread | 512 µs avg (34 % worst) | 848 µs (45 % worst) |
+| our main thread | 0.414 ms/frame | 0.546 ms/frame |
+| decoded assets | 173 MB | 229 MB |
+
+- **More sounds cost background cores, not frame time.** +0.33 cores, +336 µs on the render
+  thread, no overloads — and the frame rate did not fall (73.4 against 72.0 is inside the noise).
+  That is the design behaving as intended.
+- **The main thread going over its 0.5 ms budget is not the extra sounds.** Their contribution
+  across the sound API, sound creation, the listener and entity tracking is about +0.008 ms; the
+  rest is chunk reading (0.194 → 0.256 ms) in a window that was loading much more world (scene
+  builder 0.2 % → 2.5 %, 2469 → 3261 reads).
+- Rough scaling for the render thread: about **20 µs per simulated sound**, so 64 of them would
+  be near 1.8 ms of the 5.33 ms block.
+- The worst reflection tick rose to 54 ms of its 100 ms period with 28 sources.
+
 ### Still to measure
 
 The cave and forest spots, and a second run of each configuration. The process-level CPU and
