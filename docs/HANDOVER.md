@@ -2,12 +2,24 @@
 
 State of the work at the end of the first Claude Code session on Chris's Windows machine. Earlier sessions ran in a cloud sandbox that could only edit files.
 
+## The name (20 Sep 2026)
+
+The mod is **Spatial Audio**: mod id `spatialaudio`, command `.spatialaudio`, settings in
+`ModConfig/spatialaudio.json` and `spatialaudio-materials.json`, C# namespace
+`VintageStorySpatialAudio`. Before its first release it was "Steam Audio" (`vssteamaudio`,
+`.steamaudio`); files written under the old name are carried over once (`Config/LegacyFiles.cs`)
+and `deploy.ps1` removes the old zip from the Mods folder. "Steam Audio" now only ever means
+Valve's library: `phonon`, `native/src/steam`, `SteamAudioValidation`, `ThreadKind.SteamAudio`,
+the ADRs' discussion of it. The native library is still `vsaudio`. The checkout folder and the
+GitHub repository are still named VintageStorySteamAudio until Chris renames them; the README and
+CI links already use the new repository name (GitHub redirects once it is renamed).
+
 ## Where things stand
 
 ### Phase 0 (foundations): complete and verified on Windows
 
 - Native, managed, VsaDoctor (28/28 integration points against the 1.22.7 client) and packaging all pass through `pwsh ./scripts/build.ps1`.
-- In-game load confirmed by Chris: `.steamaudio status` showed engine running with Embree, self-test passed, 28/28, "Audio takeover: ready"; clean shutdown ("engine destroyed").
+- In-game load confirmed by Chris: `.spatialaudio status` showed engine running with Embree, self-test passed, 28/28, "Audio takeover: ready"; clean shutdown ("engine destroyed").
 - Housekeeping done: git repo with a baseline commit; `ci.yml` moved from `.github/workflow/` (singular, ignored by GitHub) to `.github/workflows/`; `scripts/dev-runner.ps1` deleted.
 
 ### Phase 1 (engine core): implemented, exit criteria met locally
@@ -35,7 +47,7 @@ Measured on this machine (Release, 48 kHz, 256-frame blocks = 5.33 ms):
 
 Not yet verified:
 
-- **In game**: `.steamaudio devices`, `.steamaudio play effect/woodswitch` (plays through our engine alongside vanilla OpenAL), `.steamaudio stats`, `.steamaudio stop`. The mod was not redeployed after Phase 1; run `pwsh ./deploy.ps1 -StopGame` first.
+- **In game**: `.spatialaudio devices`, `.spatialaudio play effect/woodswitch` (plays through our engine alongside vanilla OpenAL), `.spatialaudio stats`, `.spatialaudio stop`. The mod was not redeployed after Phase 1; run `pwsh ./deploy.ps1 -StopGame` first.
 - **CI** (never pushed): GCC `-Werror` (only clang-cl was used locally), macOS universal build (the SIMD header picks SSE2/NEON per slice), ASan/UBSan over the new code, and whether miniaudio's null backend makes the Linux device test open a device (the test accepts either outcome).
 
 ### Other audio mods in the Mods folder
@@ -44,7 +56,7 @@ Not yet verified:
 
 ## Immediate next steps
 
-1. Deploy (`pwsh ./deploy.ps1 -StopGame`), join a world, try the four test commands above, and listen: `.steamaudio play` of a short effect, a looping ambience and a music track (music streams). Check `client-main.log` for the "Test output opened" line and any `[native]` warnings.
+1. Deploy (`pwsh ./deploy.ps1 -StopGame`), join a world, try the four test commands above, and listen: `.spatialaudio play` of a short effect, a looping ambience and a music track (music streams). Check `client-main.log` for the "Test output opened" line and any `[native]` warnings.
 2. Push to GitHub and get CI green on all three platforms (see "Not yet verified").
 3. Merge `phase1-engine-core`, then start Phase 2 (engine takeover, PLAN.md §10).
 
@@ -83,7 +95,7 @@ Sounds played at a creature or player follow it while they play; vanilla leaves 
 - **What happens when things end:** a sound whose entity leaves `LoadedEntities` stays where it was. Tracking ends when the sound stops.
 - **What isn't tracked:** sounds that entity code loads itself (gait, bees, bells, elevators) are left to their owners, which move them.
 - **Config:** `TrackEntitySounds`, `InferEntitySounds`, `EntitySoundMatchDistance`.
-- **Stats:** `.steamaudio stats` has a "Following entities" line.
+- **Stats:** `.spatialaudio stats` has a "Following entities" line.
 - **Verification:** VsaDoctor 38/38 against 1.22.7. `EntitySoundTrackerTests` cover announcement, expiry, cancel, context nesting, inference (tall creatures, lag, ambiguity) and following/letting go against the engine. All 111 managed tests passed on a worktree of `f62e42a` plus these changes (the working tree's native code was mid-ABI-9 change).
 - **To check in game:** walk past running wolves or chickens, and chase a bear. Calls should come from the animal, not from where it was. Watch the stats line for "matched by position" counts.
 
@@ -93,19 +105,19 @@ Phase 7 is merged into `main` (not pushed). Chris asked to start with performanc
 
 - **Thread stats (ABI v12):** `core/thread_stats.*`: every engine thread registers by name as it starts (`ThreadScope`); the device callback, which must not allocate, publishes its id and the engine worker announces it. `vsa_engine_get_thread_stats` reports each registered thread's CPU time and, on Windows, walks the process's other threads, naming each by the module its start address lies in (exactly: `phonon.dll` is Steam Audio's workers, `embree*`/`tbb*` ours, the rest the game's and the runtime's). Two readings apart give shares of a core.
 - **`Diagnostics/PerfMonitor`:** the mod's main-thread time by section (listener, entity tracking, event pump, sound creation with the asset decode, the `ILoadedSound` calls, scene tick and chunk reads, HUD, overlay), managed bytes allocated per section, frame time median/p99/worst from the game's per-frame listener update. Nested scopes of a section count once; other threads are ignored.
-- **`.steamaudio perf [reset]`** (`Diagnostics/PerfReporter`): the report over the window; `scripts/perf-sample.ps1` samples the game process from outside for the vanilla baseline. The method and the results table are in `docs/investigations/performance.md`.
+- **`.spatialaudio perf [reset]`** (`Diagnostics/PerfReporter`): the report over the window; `scripts/perf-sample.ps1` samples the game process from outside for the vanilla baseline. The method and the results table are in `docs/investigations/performance.md`.
 - **First numbers (village, 20 Sep 2026), in `docs/investigations/performance.md`:** +0.7 ms of frame time (76.5 -> 72.0 fps), of which 0.414 ms is our own main-thread work (budget 0.5); no added stutter (p99 22.1 ms with, 23.6 without); +0.5 cores on our threads (reflections 0.17, audio render 0.11, path baker 0.065, Steam Audio workers 0.15); render thread 512 us average of the 5.33 ms block, no overloads. The frame cost is almost all chunk reading (0.194 ms/frame, but a single read has hit 14 ms), and the pathing bake takes 3.4 s for the default box against 0.5 s in the ADR 0013 gate measurement.
 - **The bake was the problem, and is fixed (ADR 0015, ABI v13):** a probe budget (`pathing_max_probes`, 1200) widens the spacing until the box holds no more, since a bake costs about probes^2.2 and the terrain decides the probe count; the default box drops from 96 to 64 blocks; and a bake whose box the listener has left is abandoned through `iplPathBakerCancelBake` rather than finishing and being discarded. `vsa_pathing_stats` now reports the spacing used and the abandoned count (the old `reserved` fields). Measured in `test_pathing_bake.cpp`: under a budget of 300 the gate region goes from 794 probes / 512 ms to 266 probes 4.3 m apart / 34 ms.
 - **Retested walking (20 Sep 2026):** the bake is **458 ms, worst 771** against 16.7 s, at 1058 probes 2.8 m apart (the budget barely had to act: the smaller box did most of it). The baker's thread is down from 16.8 % of a core to 3.1 %, Steam Audio's workers from 105 % to 75 %, ours in total from 1.62 to 1.14 cores, and the stream underruns are gone. Twelve bakes landed in 71 s with one abandoned, so pathing keeps up while walking. Frame cost remains nil (64.2 fps against the baseline's 64.5).
-- **The settings file now holds real values (ADR 0018, ABI v14):** every setting is written out in full on load, from `vsa_get_default_config`, which resolves a zeroed config through the same path an engine is built with (so the defaults are not duplicated in C#). `.steamaudio config` prints the file's path and what is in effect; `.steamaudio config reset` restores the defaults, which is how a player adopts defaults that changed in a new version. A zero still means "the default", so older files keep working.
+- **The settings file now holds real values (ADR 0018, ABI v14):** every setting is written out in full on load, from `vsa_get_default_config`, which resolves a zeroed config through the same path an engine is built with (so the defaults are not duplicated in C#). `.spatialaudio config` prints the file's path and what is in effect; `.spatialaudio config reset` restores the defaults, which is how a player adopts defaults that changed in a new version. A zero still means "the default", so older files keep working.
 - **A crash while walking, found and fixed (ADR 0017):** ADR 0015 had a stale bake abandoned through `iplPathBakerCancelBake`. That call is unusable in Steam Audio 4.8.1 — its thread pool's cancel flag is never cleared, so the workers stop waiting and spin calling `processNextJob` on a `JobGraph` the bake has already destroyed; and the pool itself is a global raw pointer to `bake`'s own stack frame. Either way it is silent memory corruption, and the game died seconds later with nothing in `client-crash.log`. We now never cancel: the bake runs to the end and its result is thrown away. `test_pathing_bake.cpp` reproduces the crash (it died within seconds under the old code) and is the case to run under the Linux sanitizers.
 - **The honest cost, walking, back to back (20 Sep 2026):** **11 % of the frame rate** (77.9 -> 69.4 fps) and **1.3 cores**. Our own main-thread work is 0.167 ms of the 1.0 ms of frame time; the rest is contention. Frame p99 is 3.7 ms worse. No underruns, no crash, bakes 463 ms.
 - **The reflections are rate-bound, not count-bound:** ADR 0016 cut places from 10 to 3 but the tick only went 24.2 -> 21.2 ms, because the simulator runs the listener's slot plus a quarter of the places (3 sources -> 2). The runs fit about 6 ms fixed per tick plus 7-8 ms per source at 4096 rays x 16 bounces. 21.2 ms on three threads at 10 Hz is 0.64 of a core. **Next thing to try: `ReflectionRateHz` 5 instead of 10** -- the renderer smooths over 0.7-1 s, so it should be inaudible and should halve the cost. No rebuild needed to test it.
 - **The reflections were next, and are addressed (ADR 0016):** 24.2 ms per tick on three threads was most of Steam Audio's 75 %, with 10 places live for 2 audible sounds because a place is held 30 s after its last sound (ADR 0012). An idle place more than 48 m from the listener is now let go at once, so walking no longer leaves a trail of simulated ground; within 48 m the hold stands, which is the anvil case ADR 0012 wanted. To be measured on the next walking pair.
-- **The sound inspector (ABI v15), `.steamaudio scene sounds [page|off]`:** every sounding voice, **loudest first**, with what it is, its bus, its distance, and **which way it is reaching the listener** — in the clear, through walls, round a corner, or only its reflections — with the level each way carries, plus the direct simulation's occlusion, metres of material and per-band transmission. A page at a time (8 a page), because the HUD cuts off what it cannot fit. The render thread works the numbers out per voice per block only while the inspector is on (`vsa_engine_set_inspect`), so it costs nothing otherwise. The levels are the amplitude each way carries **into** its effect, not a measurement of what comes out; they are for comparing one way against another.
-- **Debugging one sound, one way at a time (ABI v17):** `.steamaudio solo anvil` silences every sound whose name does not contain the text (`vsa_voice_set_muted`, a per-voice mute in the engine that gains and fades cannot undo; the game thinks they still play), turns the inspector on and draws the path legs. A muted voice asks for no path, so **with a sound soloed every leg the paths overlay draws is that sound's** -- which is how the legs are attributed per sound without Steam Audio saying whose they are. `.steamaudio mute direct|paths|reflections|off` toggles a gain of 0 on one way (`vsa_engine_set_route_gains`, and the reflection gain), to hear which way a leak arrives by. The inspector's heading shows what is soloed and muted.
+- **The sound inspector (ABI v15), `.spatialaudio scene sounds [page|off]`:** every sounding voice, **loudest first**, with what it is, its bus, its distance, and **which way it is reaching the listener** — in the clear, through walls, round a corner, or only its reflections — with the level each way carries, plus the direct simulation's occlusion, metres of material and per-band transmission. A page at a time (8 a page), because the HUD cuts off what it cannot fit. The render thread works the numbers out per voice per block only while the inspector is on (`vsa_engine_set_inspect`), so it costs nothing otherwise. The levels are the amplitude each way carries **into** its effect, not a measurement of what comes out; they are for comparing one way against another.
+- **Debugging one sound, one way at a time (ABI v17):** `.spatialaudio solo anvil` silences every sound whose name does not contain the text (`vsa_voice_set_muted`, a per-voice mute in the engine that gains and fades cannot undo; the game thinks they still play), turns the inspector on and draws the path legs. A muted voice asks for no path, so **with a sound soloed every leg the paths overlay draws is that sound's** -- which is how the legs are attributed per sound without Steam Audio saying whose they are. `.spatialaudio mute direct|paths|reflections|off` toggles a gain of 0 on one way (`vsa_engine_set_route_gains`, and the reflection gain), to hear which way a leak arrives by. The inspector's heading shows what is soloed and muted.
 - **How far sounds carry is now a setting.** The fall-off itself is physical and stays that way (`Mixer::spatial_params`: full volume within a sound's reference distance, `reference / distance` beyond it, plus Steam Audio's air absorption per band). `ReferenceDistanceMultiplier` (0.25 to 8, default 1) scales every sound's reference distance, which moves the whole curve outwards rather than bending it: 2 is about 6 dB more at every distance past the reference. `SoundRangeMultiplier` (default 3) is a different thing -- it patches the game's own range check so distant sounds are started at all -- and wants raising alongside.
-- **The inspector is a live panel and a world overlay (ABI v16):** `.steamaudio scene sounds` fills the HUD with what is sounding, loudest first, and draws each one where it is, coloured by how it reaches you -- **green** in the clear, **orange** through walls, **blue** round a corner, **magenta** only its reflections. A sound arriving round a corner also gets an **arrow from you to where it really comes in**, which is the answer to "is the mod broken, or am I hearing reflections?": the arrow points at the doorway, not at the sound. The direction comes from the first-order part of the path field -- Steam Audio projects a direction (x, y, z) into the Google SH library's frame as (-z, -x, y), and that library's order-1 coefficients are its (Y, Z, X), so the scene direction is (-sh[1], sh[2], -sh[3]). `test_pathing.cpp` pins it: the goat is ahead-left behind a wall and the arrival reads (0, 0, -1), the doorway.
+- **The inspector is a live panel and a world overlay (ABI v16):** `.spatialaudio scene sounds` fills the HUD with what is sounding, loudest first, and draws each one where it is, coloured by how it reaches you -- **green** in the clear, **orange** through walls, **blue** round a corner, **magenta** only its reflections. A sound arriving round a corner also gets an **arrow from you to where it really comes in**, which is the answer to "is the mod broken, or am I hearing reflections?": the arrow points at the doorway, not at the sound. The direction comes from the first-order part of the path field -- Steam Audio projects a direction (x, y, z) into the Google SH library's frame as (-z, -x, y), and that library's order-1 coefficients are its (Y, Z, X), so the scene direction is (-sh[1], sh[2], -sh[3]). `test_pathing.cpp` pins it: the goat is ahead-left behind a wall and the arrival reads (0, 0, -1), the doorway.
 - **The HUD sizes itself** to what it is given, up to the window height (`SceneHud.LineBudget`), and the inspector's panel shows the sounds alone, a page at a time, so nothing it needs is pushed off the bottom. It was a fixed 720x300 box that silently cut off the rest.
 - **Still to do for the debug views:** a path's actual legs and a reflection's rays are still drawn for every sound at once, not per sound -- Steam Audio reports them for a whole run, with nothing to say which source each belongs to. The arrival arrow covers the common case; per-sound legs would need the pathing run split per source.
 - **Chiselled blocks had no geometry (20 Sep 2026):** `Block.CollisionBoxes` defaults to a full unit cube, and the classifier returned `Full` on that *before* it checked for a block entity — so every chiselled block was acoustically a solid cube, and its material was the microblock type's rather than what it is made of. Now anything with a block entity is read per snapshot (its entity's boxes are the truth: a crate's give a cube back, a chiselled block's give its cuboids), and the material comes from `GetBlockMaterial(accessor, pos)`, which for a microblock is the majority material of its voxels. Boxes per block are capped at 32, largest first (`BlockClassifier.MaxBoxes`), since each is 12 triangles and a test in every ray through the cell. **Costs a block-entity lookup per such cell per chunk read** — worth watching in the perf report's chunk-read line, which was 0.067 ms/frame with 4 calls over 2 ms before.
@@ -124,7 +136,7 @@ Phase 6 is merged into `main` (not pushed).
 - **Fourth gotcha (Chris heard villagers underground 80 blocks away as if beside him):** a Steam Audio source that finds no path (no probe in reach of the source or the listener) keeps its last coefficients, and they come out as the run's result. A far sound taking over an effect set played through the path of the sound before it. `PathSimulator` now creates a fresh source every run (ADR 0014 has the detail); `test_pathing.cpp` keeps the case (a sealed sound 60 blocks away: -217 dB, was the doorway sound's level).
 - **Stutter (Chris heard fluttering after pathing went in):** two causes. `deploy.ps1` built **Debug** by default, and the Debug engine renders the reflections alone at 60 % p50 / 100 % p99 of the block on 7.1.4 (Release: 10 % / 14 %); pathing's share on top made it underrun. The deploy now builds Release (`-Configuration Debug` for asserts). And the path was a hard gate at occlusion 0.9 on a noisy estimate, so a partly seen sound flapped between direct and direct + path (Steam Audio answers a clear centre ray with the direct path itself, which doubles a seen sound); the path is now weighted by how blocked the sound is, full at 0 and nothing at 0.9.
 - **Volume dropping in doorways (Chris):** `VoxelView::escape` moved a point out of any cell holding a partial block, so the listener walking through an open door (the leaf is a partial block beside the head) was thrown a metre to the far face of the door cell, towards wherever they looked, and the wall came between them and the sounds on the side they came from. The listener now escapes only what encloses the head (`Escaping::Enclosures`: a solid cell, or a partial block's box the point is inside, leaving the box rather than the cell). Sounds keep the wide rule (`Escaping::Blocks`): a door's own sound sits at the door block's centre, which is not inside the leaf, and narrowing the rule for sounds too put the leaf between the door and the player opening it (Chris heard doors from behind their leaf). `test_transmission.cpp` (the listener beside the leaf stays, inside it comes out of the leaf; the door's sound leaves the cell past the leaf) and `test_pathing.cpp` (walking in through a door: nothing drops, the listener stays put) keep it.
-- **Config migration:** the file is rewritten with every default, so Chris's held `ReflectionGain: 1.0` from before the default became 0.1. `SteamAudioConfig.ConfigVersion` (stamped on load) and `Migrate()` replace a changed default where the file still holds the old one; a chosen value is kept. Add a step there when a default changes again.
+- **Config migration:** the file is rewritten with every default, so Chris's held `ReflectionGain: 1.0` from before the default became 0.1. `SpatialAudioConfig.ConfigVersion` (stamped on load) and `Migrate()` replace a changed default where the file still holds the old one; a chosen value is kept. Add a step there when a default changes again.
 
 ### Native (ABI v11)
 
@@ -137,16 +149,16 @@ Phase 6 is merged into `main` (not pushed).
 ### Managed
 
 - Config: `Pathing` (on), `PathingRangeBlocks`, `PathingHeightBlocks`, `PathingProbeSpacing`, `PathingVisibilitySamples`, `PathingRateHz`, `PathingSources` (0 = the engine's defaults).
-- `.steamaudio scene paths` (also in the overlay cycle) draws the legs Steam Audio considered in the last run: occluded legs in red. The HUD has a pathing line (batch, probes, bake time, wanted / simulated / found, tick time).
-- Reverb: `ReflectionGain` now defaults to 0.1, with `ReflectionEarlyGain` and `ReflectionTailGain` (`.steamaudio reverb early N` / `tail N`) to weigh the convolved early part against the diffuse tail.
+- `.spatialaudio scene paths` (also in the overlay cycle) draws the legs Steam Audio considered in the last run: occluded legs in red. The HUD has a pathing line (batch, probes, bake time, wanted / simulated / found, tick time).
+- Reverb: `ReflectionGain` now defaults to 0.1, with `ReflectionEarlyGain` and `ReflectionTailGain` (`.spatialaudio reverb early N` / `tail N`) to weigh the convolved early part against the diffuse tail.
 - `PathingTests.cs`: config clamping; a room with a doorway bakes and a blocked sound finds its way out through the real engine.
 
 ### To check in game (Chris)
 
 - **Goat and doorway:** stand outside a closed room with a sound inside (an anvil, an animal), off to one side of the doorway. The sound should come from the doorway, not through the wall from the sound's true direction; walk round the room and it should follow the doorway. Then close the doorway: it should go back to a muffled sound through the wall.
 - **Caves:** sounds round a bend should come from the bend.
-- **Overlay:** `.steamaudio scene paths` while a sound is blocked; the HUD's pathing line should show a bake within a second of arriving somewhere new, and `found` counting the blocked sounds.
-- **Cost:** the HUD's bake time when walking (the box re-bakes every ~32 blocks) and `.steamaudio stats` render time with many blocked sounds.
+- **Overlay:** `.spatialaudio scene paths` while a sound is blocked; the HUD's pathing line should show a bake within a second of arriving somewhere new, and `found` counting the blocked sounds.
+- **Cost:** the HUD's bake time when walking (the box re-bakes every ~32 blocks) and `.spatialaudio stats` render time with many blocked sounds.
 - **Not yet:** a memory cap and a cancellable bake (the default box is small; deferred until they matter).
 
 ## Phase 6 (reflections and reverb): done, merged
@@ -199,13 +211,13 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
 
 ### Managed
 
-- **Config (`vssteamaudio.json`):**
+- **Config (`spatialaudio.json`):**
   - `Reflections` (on);
   - `ReflectionQuality` (Low / Medium / High / Ultra, `Config/ReflectionPresets.cs`);
   - per-value overrides (`ReflectionSources`, `ReflectionRays`, `ReflectionBounces`, `ReflectionDurationSeconds`, `ReflectionOrder`, `ReflectionRateHz`, `ReflectionThreads`, `ReflectionTransitionSeconds`; 0 = the preset's);
   - `ReflectionGain` (1).
-- **`.steamaudio reverb [status|gain N|rays]`.**
-- **Overlay "reflections"** (in the Ctrl+F7 cycle, or `.steamaudio scene rays`):
+- **`.spatialaudio reverb [status|gain N|rays]`.**
+- **Overlay "reflections"** (in the Ctrl+F7 cycle, or `.spatialaudio scene rays`):
   - 48 sound paths from your head bouncing off the scene, bright cyan fading to dark blue as surfaces absorb them;
   - a magenta line and diamond to each voice with reflections of its own.
 - **The HUD's reflection lines:**
@@ -251,14 +263,14 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
   - **Onsets:** a sound's onset goes straight to its ready slot or spot. The old 43 ms crossfade from the listener's reverb (which gets nothing from behind a wall) lost a strike's attack.
   - **Holding positions:** the reflection simulation holds the listener's and each source's position until they move 0.5 m. Steam Audio averages its runs only while nothing moves at all, so the noise now settles.
   - **Rays doubled in every preset:** Medium is 4096. They are cheap next to impulse-response rebuilding.
-  - **Separate controls:** `vsa_engine_set_reflection_mix(early, tail)`, `.steamaudio reverb early N` / `tail N`, and `ReflectionEarlyGain` / `ReflectionTailGain` in the config.
+  - **Separate controls:** `vsa_engine_set_reflection_mix(early, tail)`, `.spatialaudio reverb early N` / `tail N`, and `ReflectionEarlyGain` / `ReflectionTailGain` in the config.
   - **Direct sound through materials:** half the dB (stone 27.5 dB mid-band per block, was 55).
 - **Tests:**
   - a strike behind a wall has the same reflection level on every repeat (-19 dB on strikes 2–6; the first has none, its spot not existing yet);
   - a 6 dB level change reaches the tail in steps of at most 0.5 dB per 50 ms;
   - early and tail can each be turned off.
 - **Materials pulled apart** (wood and stone sounded alike after the first retune): stone 0.07 / 0.10 / 0.13 absorbed, brick 0.08 / 0.11 / 0.14, wood 0.20 / 0.30 / 0.33. A 7×4×7 room decays in about 0.4 s built of wood and 1.4 s of stone; a large cave in about 5 s.
-- **Worth knowing:** in a small room about 97% of the reflected energy is early reflections (the first 0.1 s). `.steamaudio reverb early 0` shows how much is them.
+- **Worth knowing:** in a small room about 97% of the reflected energy is early reflections (the first 0.1 s). `.spatialaudio reverb early 0` shows how much is them.
 
 ### Back to the plan (ADR 0011)
 
@@ -295,10 +307,10 @@ Phase 5 is merged into `main` (not pushed). The design, and why it differs from 
 ### To check in game (Chris)
 
 - **Reverb that follows the space:** walk from outdoors into a small stone room, a big hall, a cave. The HUD's RT60 and space name should follow; outdoors should be nearly dry.
-- **The occlusion feel from Phase 5:** is it better now that sound also arrives by reflections? If reverb is too much or too little overall, try `.steamaudio reverb gain 0.5` or `2` and report which sounds right.
+- **The occlusion feel from Phase 5:** is it better now that sound also arrives by reflections? If reverb is too much or too little overall, try `.spatialaudio reverb gain 0.5` or `2` and report which sounds right.
 - **Reflections overlay:** paths should stay inside rooms and escape to the sky outdoors. Magenta lines should go to the loud, lasting sounds (a fire, a trader's music, rain?).
 - **Speakers:** reverb should surround you on the 7.1.4 system (including the heights), not sit in the centre.
-- **Stats:** note `.steamaudio stats` render time and the HUD's simulation time in a busy place.
+- **Stats:** note `.spatialaudio stats` render time and the HUD's simulation time in a busy place.
 
 ## Phase 5 (direct simulation): in progress on `phase5-direct-simulation`
 
@@ -339,7 +351,7 @@ Phase 4 is merged into `main` (not pushed).
 ### Managed
 
 - `Occlusion`, `OcclusionSamples` and `OcclusionRateHz` in the config. The shipped materials were retuned to crossing and bulk losses (documented in the JSON).
-- **Overlay "sources":** in the Ctrl+F7 cycle and `.steamaudio scene sources`. It draws a line to every simulated sound, through walls, coloured green (clear) → yellow (−20 dB) → red (−40 dB), with a white stub where a sound was moved out of its block. The HUD adds the simulation's timings and the six nearest sounds: asset name, distance, visible fraction, metres and materials in the way, and the resulting dB per band.
+- **Overlay "sources":** in the Ctrl+F7 cycle and `.spatialaudio scene sources`. It draws a line to every simulated sound, through walls, coloured green (clear) → yellow (−20 dB) → red (−40 dB), with a white stub where a sound was moved out of its block. The HUD adds the simulation's timings and the six nearest sounds: asset name, distance, visible fraction, metres and materials in the way, and the resulting dB per band.
 
 ### To check in game (Chris)
 
@@ -359,7 +371,7 @@ Phases 2 and 3 are merged into `main` (not pushed; Linux and macOS CI deferred t
 
 ### Managed
 
-- `World/MaterialTable`: `assets/vssteamaudio/config/acousticmaterials.json` holds materials, a block-material map and code wildcards. A `ModConfig/vssteamaudio-materials.json` override is re-read by `.steamaudio scene reload`.
+- `World/MaterialTable`: `assets/spatialaudio/config/acousticmaterials.json` holds materials, a block-material map and code wildcards. A `ModConfig/spatialaudio-materials.json` override is re-read by `.spatialaudio scene reload`.
 - `World/BlockClassifier`:
   - Plants, fire and blocks without collision boxes are air.
   - Leaves and liquids fill their cell (leaves have no collision boxes).
@@ -375,7 +387,7 @@ Phases 2 and 3 are merged into `main` (not pushed; Linux and macOS CI deferred t
 - **Ctrl+F7** (rebindable) cycles the overlay: off → wireframe → wireframe + chunk bounds → translucent faces + wireframe.
 - The wireframe is the mesh read back from the engine (exactly what Steam Audio has), coloured by material, and uses the game's own wireframe shader. Chunk bounds are green for full detail, blue for coarse and grey for empty.
 - A HUD panel shows scene stats (chunks, triangles, memory, meshing and commit times), streaming state, the origin, and the acoustic material of the block under the crosshair.
-- `.steamaudio scene` takes `status | wire | faces | bounds | off | radius N | legend | export | reload`. `export` writes an OBJ + MTL to the Logs folder.
+- `.spatialaudio scene` takes `status | wire | faces | bounds | off | radius N | legend | export | reload`. `export` writes an OBJ + MTL to the Logs folder.
 - **Ray probe** (whenever the overlay is on): a ray from the camera along the view, tested against the scene's meshes as submitted (`vsa_scene_raycast`, native, Möller–Trumbore per chunk). The hit triangle and the block that produced it are highlighted in yellow. The HUD gives distance, material, whether it came from a whole cell's face or a partial block's box, the chunk and triangle, and the game block at that cell (code, class, block material, block entity, fluid, and a multi-block filler's control block).
 - The probe's first catch: a door's upper half is a `BlockMultiblock` filler, whose static collision box is a full cube, so it had become a solid wooden block. Fillers (`IMultiblockOffset`) are now dynamic: their real boxes come from the door, and their material from its control block.
 
@@ -402,13 +414,13 @@ Built and tested offline; **not yet run in the game**. Phase 1 is merged into `m
 - `vsa_voice_set_lowpass`: the game's EFX low-pass (underwater) as OpenAL Soft implements it, a 5 kHz high shelf.
 - **Steam Audio's HRTF only exists at 24, 44.1 and 48 kHz**, so the engine renders at 44.1 or 48 kHz; devices at other rates get a converted stream (miniaudio), and the offline output accepts only those two rates.
 
-### Managed takeover (`src/VintageStorySteamAudio/Takeover/`)
+### Managed takeover (`src/VintageStorySpatialAudio/Takeover/`)
 
 - `AudioTakeover` (in `StartPre`): verify, open our device (matching the game's `audioDevice` setting), Harmony-patch the platform seam, carry the menu music over if it is still playing, dispose vanilla sources and close OpenAL. Hand-back in `Dispose`: release voices, unpatch, `Unload()` the samples we emptied so vanilla decodes them again, reopen OpenAL via the original `StartAudio()`.
-- `SteamAudioSound`: `ILoadedSound` with vanilla's contract (restart on Start, fade clamping and main-thread callbacks, SetVolume not cancelling fades, deferred start while loading). **`AudioMetaData.Loaded` must be set to 3 when a sound is created**: `PlaySoundAt` only starts sounds whose data reached 3.
+- `SpatialAudioSound`: `ILoadedSound` with vanilla's contract (restart on Start, fade clamping and main-thread callbacks, SetVolume not cancelling fades, deferred start while loading). **`AudioMetaData.Loaded` must be set to 3 when a sound is created**: `PlaySoundAt` only starts sounds whose data reached 3.
 - `CreateAudioData` decodes natively and returns metadata with an empty `Pcm`; long Ogg files stream.
 - Category sliders become bus gains (polled every 250 ms), `masterSoundLevel` the master gain, `useHRTFaudio` the render mode; `CategoryTrimDb` in the config trims each category for rebalancing by ear.
-- The 250-sound cap is removed with a transpiler on `PlaySoundAtInternal` (reported by `.steamaudio stats`).
+- The 250-sound cap is removed with a transpiler on `PlaySoundAtInternal` (reported by `.spatialaudio stats`).
 - The mod now compiles against VintagestoryLib and the game's 0Harmony (not shipped). Everything touched is in `AudioPatchTargets` (35 entries, verified before patching).
 
 ### Verified in the game (19 Sep 2026)
@@ -421,7 +433,7 @@ Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1)
 
 ## Phase 3 (output formats): done on `phase2-takeover`
 
-**Verified in the game (19 Sep 2026)**: with speakers, the output ran through Windows Spatial Audio and `.steamaudio speakertest` was "perfect" on Chris's Atmos receiver, heights included. Headphone rendering (the ambisonic tier, SOFA) is covered by tests only; Chris has no headphones.
+**Verified in the game (19 Sep 2026)**: with speakers, the output ran through Windows Spatial Audio and `.spatialaudio speakertest` was "perfect" on Chris's Atmos receiver, heights included. Headphone rendering (the ambisonic tier, SOFA) is covered by tests only; Chris has no headphones.
 
 ### World Ambisonic bus (headphones, beyond the binaural budget)
 
@@ -445,8 +457,8 @@ Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1)
 - The activation `PROPVARIANT` borrows our parameters and is never cleared (OpenAL Soft's heap-corruption bug). A 500 ms wait timeout or any failed update marks the output lost; the worker recreates the stream rather than calling `Reset` (0x88890100 on the receiver). A default-device change while following the default reopens the stream on the new device.
 - If spatial audio is unavailable (not Windows, no spatial sound format enabled, unsupported format), the engine opens the plain device instead, now and on every reopen; `stats.output_kind` says which is running. There is no periodic retry, so enabling Atmos mid-session takes effect at the next reopen.
 - **Verified on Chris's machine by `test_output.cpp`**: 'AV Receiver (NVIDIA High Definition Audio)', 48000 Hz, 12 channels, 480-frame updates (the plain device path gives 8 channels).
-- Managed: `SpatialAudio` config option (default on). The takeover opens the spatial output in speakers mode and the plain device with the game's HRTF option on, since our binaural render must not be spatialised again by Sonic or Atmos for headphones. It reopens when that option changes. `.steamaudio stats` shows "via Windows Spatial Audio (7.1.4)".
-- `.steamaudio speakertest` plays a noise burst from each 7.1.4 position in turn, named in chat, then straight overhead. Use it with the receiver's display to confirm the heights.
+- Managed: `SpatialAudio` config option (default on). The takeover opens the spatial output in speakers mode and the plain device with the game's HRTF option on, since our binaural render must not be spatialised again by Sonic or Atmos for headphones. It reopens when that option changes. `.spatialaudio stats` shows "via Windows Spatial Audio (7.1.4)".
+- `.spatialaudio speakertest` plays a noise burst from each 7.1.4 position in turn, named in chat, then straight overhead. Use it with the receiver's display to confirm the heights.
 - SceneLab writes `WAVE_FORMAT_EXTENSIBLE` with the speaker mask for more than 2 channels; `scenarios/surround-714.json` is a 7.1.4 listening scene.
 
 ### SOFA HRTF
@@ -506,8 +518,8 @@ Speakers mode pans positional voices to the whole output layout (quad, 5.1, 7.1)
 - Bindings: `AudioEngine` (assets, voices, devices, offline render, stats, events), `AudioAsset`, `Voice`. Every call leases the engine's `SafeHandle`, so calls racing `Dispose` throw `ObjectDisposedException` instead of touching freed memory.
 - Tests that create an engine share the `NativeEngineGroup` xUnit collection (one engine per process).
 - SceneLab: `tools/SceneLab` (see `docs/BUILDING.md`). The scenario format is in `tools/SceneLab/Scenario.cs`.
-- In-game: `.steamaudio devices | play <sound> [volume] [pitch] | stop | stats`. The device opens lazily on the first `play` (config `TestOutputDevice` picks one by name); ended voices are released from a 100 ms tick.
-- New config keys in `ModConfig/vssteamaudio.json`: `ResamplerQuality`, `BlockFrames`, `MaxVoices`, `TestOutputDevice`.
+- In-game: `.spatialaudio devices | play <sound> [volume] [pitch] | stop | stats`. The device opens lazily on the first `play` (config `TestOutputDevice` picks one by name); ended voices are released from a 100 ms tick.
+- New config keys in `ModConfig/spatialaudio.json`: `ResamplerQuality`, `BlockFrames`, `MaxVoices`, `TestOutputDevice`.
 
 ### Dependencies
 

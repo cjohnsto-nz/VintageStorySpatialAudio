@@ -4,7 +4,7 @@ Guidance for Claude Code in this repo. The current state and next steps are in [
 
 ## What this is
 
-A Vintage Story client mod that replaces the game's audio engine with a native engine built on Steam Audio 4.8.1.
+**Spatial Audio** (mod id `spatialaudio`, formerly "Steam Audio"/`vssteamaudio`; "Steam Audio" now means only Valve's library). A Vintage Story client mod that replaces the game's audio engine with a native engine built on Steam Audio 4.8.1.
 
 - The plan is in `docs/PLAN.md`.
 - The decisions are in `docs/adr/` (ADRs 0001–0018).
@@ -32,7 +32,7 @@ dotnet tools/VsaDoctor/bin/Release/net10.0/VsaDoctor.dll --native artifacts/nati
   - Every struct starts with `struct_size`, and there is an ABI version to bump on incompatible changes.
   - Enum-valued struct fields are `uint32_t`.
   - Nothing throws across the boundary.
-  - Keep `src/VintageStorySteamAudio/Native/VsaNative.cs` and `tests/.../NativeLayoutTests.cs` in lockstep with the header.
+  - Keep `src/VintageStorySpatialAudio/Native/VsaNative.cs` and `tests/.../NativeLayoutTests.cs` in lockstep with the header.
 - **Steam Audio lifetime:** every `Add` has a matching `Remove` + `Commit` before `Release` (a LeakSanitizer finding). Use RAII guards.
 - **Game hooks go through `Platform/AudioPatchTargets.cs`.** Add the hook there first; `VsaDoctor` and the startup verifier check it. If verification fails, the mod refuses to take over and vanilla audio stays in charge.
 - **Dependencies are pinned in `third_party/deps.json` (URL + SHA-256), with `VERSIONS.md` kept in sync.** The fetch scripts refuse hash mismatches and any destination outside `third_party/`.

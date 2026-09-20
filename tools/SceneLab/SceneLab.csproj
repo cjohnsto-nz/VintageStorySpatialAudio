@@ -13,7 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../src/VintageStorySteamAudio/VintageStorySteamAudio.csproj" />
+    <ProjectReference Include="../../src/VintageStorySpatialAudio/VintageStorySpatialAudio.csproj" />
   </ItemGroup>
 
   <ItemGroup>

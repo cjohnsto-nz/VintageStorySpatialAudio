@@ -42,7 +42,7 @@ All audio passes through a handful of abstract members on `ClientPlatformAbstrac
 |---|---|---|
 | `StartAudio()` / `StopAudio()` | creates or disposes `AudioOpenAl` (device + context) | start/stop our engine; do not open OpenAL |
 | `CreateAudioData(IAsset)` → `NoObf.AudioData` | decodes the whole WAV/OGG (csvorbis) to 16-bit PCM `byte[]` | native decode into a native asset store |
-| `CreateAudio(SoundParams, AudioData[, ClientMain])` | `new LoadedSoundNative(...)` | `new SteamAudioSound(...)` (our `ILoadedSound`) |
+| `CreateAudio(SoundParams, AudioData[, ClientMain])` | `new LoadedSoundNative(...)` | `new SpatialAudioSound(...)` (our `ILoadedSound`) |
 | `UpdateAudioListener(pos, orient)` | `AL.Listener` with a **flattened** forward vector (y = 0) | ignored; we read the full camera basis ourselves each frame |
 | `AvailableAudioDevices`, `CurrentAudioDevice` | OpenAL device list / reopen | our backend's device list / reopen |
 | `MasterSoundLevel` | `AL_GAIN` on the listener | engine master gain |
@@ -92,9 +92,9 @@ No other code in the game touches OpenAL except `LoadedSoundNative`, `AudioOpenA
 ```text
 ┌──────────────────────────── Vintage Story process ─────────────────────────────┐
 │                                                                                │
-│  MANAGED  (VintageStorySteamAudio.dll, net10)                                  │
+│  MANAGED  (VintageStorySpatialAudio.dll, net10)                                  │
 │  ┌──────────────────┐  ┌───────────────────┐  ┌──────────────────────────────┐ │
-│  │ Platform takeover│  │ SteamAudioSound   │  │ World acoustics              │ │
+│  │ Platform takeover│  │ SpatialAudioSound   │  │ World acoustics              │ │
 │  │ (Harmony, verify │  │ : ILoadedSound    │  │  chunk snapshots → mesher →  │ │
 │  │  & fallback)     │  │ (handle + state)  │  │  material mapping → voxel    │ │
 │  └────────┬─────────┘  └─────────┬─────────┘  │  transmission field          │ │
@@ -245,7 +245,7 @@ asset PCM ─► variable-rate resampler (rate ratio × pitch; polyphase windowe
 
 - Base table keyed by `EnumBlockMaterial` (Stone, Ore, Brick, Ceramic, Metal, Wood, Soil, Gravel, Sand, Snow, Ice, Glass, Leaves, Plant, Cloth, Liquid, Lava, Mantle, …).
 - Each entry has 3-band absorption, scattering and 3-band transmission. Values start from Steam Audio's preset materials.
-- Overrides by block code (wildcards) live in a JSON asset, `assets/vsteamaudio/config/acousticmaterials.json`. Other mods can extend it through the asset system or a block attribute (`attributes.acoustics`).
+- Overrides by block code (wildcards) live in a JSON asset, `assets/spatialaudio/config/acousticmaterials.json`. Other mods can extend it through the asset system or a block attribute (`attributes.acoustics`).
 - Material IDs are dense `uint16`. The native side holds the `IPLMaterial` array per sub-scene.
 
 ### 5.3 Direct sound: occlusion, transmission, distance
@@ -317,7 +317,7 @@ Steam Audio's pathing needs **baked** probe-to-probe visibility data (`iplPathBa
 - Only if all of that succeeds does it apply the Harmony patches.
 - Any failure leaves vanilla audio untouched and shows a clear in-game notice. The notice explains the version mismatch or missing native library.
 
-### 6.2 `SteamAudioSound : ILoadedSound`
+### 6.2 `SpatialAudioSound : ILoadedSound`
 
 - Implements the full interface contract (§2.2). It is thread-safe: an immutable handle ID plus atomics, with commands going to the ring buffer.
 - `FadeTo`/`FadeIn`/`FadeOut` are native sample-accurate gain ramps. The callbacks are raised on the main thread, as in vanilla.
@@ -369,7 +369,7 @@ Main-menu music and UI clicks therefore stay vanilla. The only way to own them w
 ## 7. Repository layout
 
 ```text
-VintageStorySteamAudio/
+VintageStorySpatialAudio/
   docs/           PLAN.md, BUILDING.md, adr/NNNN-*.md, investigations/
   native/         C++20 engine (CMake + presets: win-x64, linux-x64, linux-x64-asan, osx)
     include/vsaudio.h        stable C ABI (the only managed/native interface)
@@ -383,13 +383,13 @@ VintageStorySteamAudio/
                              vsaudio_core_tests (engine internals, zero-allocation render, load test)
     cmake/                   platform/RID, Steam Audio import, warnings
   src/
-    VintageStorySteamAudio/          the mod (net10, client)
+    VintageStorySpatialAudio/          the mod (net10, client)
       Native/                         LibraryImport bindings, native resolver, AudioEngine wrapper
       Platform/                       integration-point catalogue + verifier; (Phase 2) Harmony takeover
       Config/  Diagnostics/
       (later) Sounds/  World/  UI/
   tests/
-    VintageStorySteamAudio.Tests/    xUnit v3: ABI layout, verifier, type names, game + native integration
+    VintageStorySpatialAudio.Tests/    xUnit v3: ABI layout, verifier, type names, game + native integration
   tools/
     VsaDoctor/                       checks a game install + native engine without launching the game
     SceneLab/                        headless CLI: JSON scenario → offline render → WAV + metrics (later: voxel scenes)
@@ -455,7 +455,7 @@ Every phase ends with the game fully playable and the phase's tests green.
 |---|---|---|
 | **0 · Foundations** ✅ | repo, CI for 3 OSes, CMake/native skeleton, C ABI + LibraryImport bindings, native loading from `Cache/unpack`, Steam Audio + Embree smoke test per RID; re-verify §2 against the current build; main-menu hook investigation; door state-change hook; ADRs 1–5 | CI green on all RIDs; mod loads natively in-game on Win (Linux/mac via CI + one manual test); seam verified |
 | **1 · Engine core** | miniaudio backend, device enumeration/hot-plug, RT render thread, command ring, asset store + libvorbis + streaming, voices, resampler, buses, master limiter, telemetry, SceneLab skeleton | golden tests for resampling/looping/fades; SceneLab renders WAVs; no xruns under a synthetic 256-voice load |
-| **2 · Engine takeover** | Harmony takeover + verification + fallback, `SteamAudioSound` (full API contract), physical distance model, voice virtualisation, 250-cap removal, categories, pitch, underwater/glitch, live-sound migration and hand-back, settings device list; Steam Audio direct effect + panning/binaural (first real Steam Audio output) | full play session with no missing, stuck or misbehaving sounds; category mix rebalanced by ear; OpenAL context closed in-world and restored at the menu |
+| **2 · Engine takeover** | Harmony takeover + verification + fallback, `SpatialAudioSound` (full API contract), physical distance model, voice virtualisation, 250-cap removal, categories, pitch, underwater/glitch, live-sound migration and hand-back, settings device list; Steam Audio direct effect + panning/binaural (first real Steam Audio output) | full play session with no missing, stuck or misbehaving sounds; category mix rebalanced by ear; OpenAL context closed in-world and restored at the menu |
 | **3 · Output modes** ✅ | HRTF (+SOFA), stereo, 5.1/7.1 panning, ambisonic world bus + decode, 7.1.4 custom layout, Windows Spatial backend (bed + dynamic objects, budget, fallback) | per-mode direction tests (front/back/above/below, turning, looking up/down); receiver shows Atmos with correct height |
 | **4 · World geometry** | material table + overrides, chunk snapshots, greedy mesher, collision-box shapes, door hooks, instanced-mesh scene manager, LOD ring, OBJ export, scene-truth overlay | mesh matches world in test scenes; edit → scene latency ≤ 250 ms; triangle/memory budgets met |
 | **5 · Direct simulation** | simulator threads, sources, volumetric occlusion, voxel transmission, air absorption, importance/LOD, acoustic-truth overlay | thickness test matrix passes (glass < wood < 1 stone < 3 stone < 6 stone, per band); smooth updates while moving |
@@ -482,7 +482,7 @@ Verified on Linux x64 in the build sandbox:
 
 Still to confirm on real machines:
 
-- an in-game load on Windows (`.steamaudio status`)
+- an in-game load on Windows (`.spatialaudio status`)
 - the first CI run: the MSVC and macOS builds, Embree on Apple Silicon, and the server-package reference assemblies
 
 Findings: [investigations/phase0.md](investigations/phase0.md).
@@ -497,7 +497,7 @@ Implemented on branch `phase1-engine-core` (details and measurements in [HANDOVE
 - the render core: SPSC command ring, voice slots with immediate state reporting, declicked transport, gain ramps and dB-linear fades, five buses, master gain, true-peak look-ahead limiter
 - assets: WAV and Ogg Vorbis decoding, per-voice decode-ahead streaming of long Ogg assets
 - bandlimited-interpolation resampler (Low/Medium/High), SIMD on SSE2 and NEON
-- telemetry and events; ABI v2 with managed bindings; SceneLab; `.steamaudio devices/play/stop/stats`
+- telemetry and events; ABI v2 with managed bindings; SceneLab; `.spatialaudio devices/play/stop/stats`
 
 Exit criteria met on Windows: golden resampling/looping/fade tests pass, SceneLab renders WAVs with pass/fail expectations, and 256 voices render at ~25 % of the block period at p99 with no allocation on the render path. Outstanding: an in-game listening test and the first CI run (GCC, macOS, sanitizers).
 

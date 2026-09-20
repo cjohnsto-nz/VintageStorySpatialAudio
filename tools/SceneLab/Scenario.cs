@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using VintageStorySteamAudio.Native;
+using VintageStorySpatialAudio.Native;
 
 namespace SceneLab;
 

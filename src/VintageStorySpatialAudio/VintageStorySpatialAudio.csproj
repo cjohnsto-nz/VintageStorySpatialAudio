@@ -1,0 +1,76 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Vintage Story 1.22 runs on .NET 10. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>VintageStorySpatialAudio</AssemblyName>
+    <RootNamespace>VintageStorySpatialAudio</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <RequiresVintageStory>true</RequiresVintageStory>
+    <!-- Game assemblies are provided by the game at runtime. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="VintagestoryAPI">
+      <HintPath>$(VintageStoryPath)/VintagestoryAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(VintageStoryPath)/Lib/Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!--
+      The takeover's Harmony patches name game-internal types in their signatures. Everything they
+      touch is listed in Platform/AudioPatchTargets.cs and verified before any patch is applied, so
+      a game update that changes these types refuses the takeover instead of failing at run time.
+    -->
+    <Reference Include="VintagestoryLib">
+      <HintPath>$(VintageStoryPath)/VintagestoryLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(VintageStoryPath)/Lib/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="VintageStorySpatialAudio.Tests" />
+    <InternalsVisibleTo Include="VsaDoctor" />
+    <InternalsVisibleTo Include="SceneLab" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="modinfo.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
+    Assembles the mod folder layout under bin/<Configuration>/mod/:
+      modinfo.json, VintageStorySpatialAudio.dll, assets/ (acoustic materials), native/<rid>/{vsaudio, phonon}
+    Natives come from artifacts/native (produced by the CMake install step). Missing
+    natives are a warning locally (managed-only iteration) and an error when
+    -p:RequireNatives=true (packaging / CI).
+  -->
+  <Target Name="VsaAssembleModFolder" AfterTargets="Build">
+    <PropertyGroup>
+      <ModFolder>$(OutDir)mod/</ModFolder>
+    </PropertyGroup>
+    <ItemGroup>
+      <VsaNativeFiles Include="$(NativeArtifactsDir)**/*" />
+      <VsaAssetFiles Include="$(MSBuildProjectDirectory)/assets/**/*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(ModFolder)" />
+    <Copy SourceFiles="$(TargetPath);$(OutDir)modinfo.json" DestinationFolder="$(ModFolder)" />
+    <Copy SourceFiles="@(VsaNativeFiles)" DestinationFiles="@(VsaNativeFiles->'$(ModFolder)native/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="@(VsaAssetFiles)" DestinationFiles="@(VsaAssetFiles->'$(ModFolder)assets/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Warning Condition="'@(VsaNativeFiles)' == '' and '$(RequireNatives)' != 'true'"
+             Text="No native binaries in $(NativeArtifactsDir). The mod folder will not load in-game until you build the native engine (see docs/BUILDING.md)." />
+    <Error Condition="'@(VsaNativeFiles)' == '' and '$(RequireNatives)' == 'true'"
+           Text="RequireNatives=true but $(NativeArtifactsDir) is empty." />
+  </Target>
+
+</Project>

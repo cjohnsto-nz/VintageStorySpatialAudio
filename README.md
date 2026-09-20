@@ -1,4 +1,4 @@
-# Steam Audio for Vintage Story
+# Spatial Audio for Vintage Story
 
 A client mod that replaces Vintage Story's audio engine with a native engine built on [Steam Audio](https://valvesoftware.github.io/steam-audio/). Sound propagation (occlusion, thickness-aware transmission, reflections, reverb and pathing around corners) is simulated from the actual world geometry. Output modes are HRTF headphones, stereo, 5.1/7.1, 7.1.4 and Windows Spatial Audio (Windows Sonic / Dolby Atmos).
 
@@ -9,8 +9,8 @@ A client mod that replaces Vintage Story's audio engine with a native engine bui
 | Path | What |
 |---|---|
 | `native/` | `vsaudio`, the C++20 engine (CMake). Public C ABI in `native/include/vsaudio.h` |
-| `src/VintageStorySteamAudio/` | the Vintage Story mod (C#, .NET 10) |
-| `tests/VintageStorySteamAudio.Tests/` | managed unit + integration tests (xUnit v3) |
+| `src/VintageStorySpatialAudio/` | the Vintage Story mod (C#, .NET 10) |
+| `tests/VintageStorySpatialAudio.Tests/` | managed unit + integration tests (xUnit v3) |
 | `tools/VsaDoctor/` | checks a game install and the native engine without launching the game |
 | `third_party/` | pinned dependency manifest (`deps.json`); fetched content is not committed |
 | `scripts/` | `fetch-deps`, `build` |
@@ -24,6 +24,6 @@ A client mod that replaces Vintage Story's audio engine with a native engine bui
 ./deploy.ps1 -LaunchGame     # build (Release) and install into VintagestoryData/Mods
 ```
 
-In game, type `.steamaudio status` or `.steamaudio targets`.
+In game, type `.spatialaudio status` or `.spatialaudio targets`.
 
 See [docs/BUILDING.md](docs/BUILDING.md) for Linux, macOS and details.

@@ -122,12 +122,12 @@ jobs:
           find artifacts/native -type f
 
       - name: Build
-        run: dotnet build VintageStorySteamAudio.sln -c Release -p:VintageStoryPath="$VS_REFERENCE_PATH" -p:RequireNatives=true
+        run: dotnet build VintageStorySpatialAudio.sln -c Release -p:VintageStoryPath="$VS_REFERENCE_PATH" -p:RequireNatives=true
 
       # VINTAGE_STORY is deliberately unset: game-integration tests skip, the native engine
       # test runs against artifacts/native/linux-x64.
       - name: Test
-        run: dotnet test VintageStorySteamAudio.sln -c Release --no-build
+        run: dotnet test VintageStorySpatialAudio.sln -c Release --no-build
 
       # Golden scenes with pass/fail expectations (levels, underruns, render load) on linux-x64.
       - name: SceneLab
@@ -151,6 +151,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: vssteamaudio-mod
-          path: artifacts/vssteamaudio_*.zip
+          name: spatialaudio-mod
+          path: artifacts/spatialaudio_*.zip
           if-no-files-found: error

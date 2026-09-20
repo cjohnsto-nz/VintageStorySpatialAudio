@@ -15,7 +15,7 @@
 .OUTPUTS
     artifacts/native/<rid>/       native engine + phonon
     artifacts/mod/                 the mod folder (drop-in for VintagestoryData/Mods)
-    artifacts/vssteamaudio_<version>.zip
+    artifacts/spatialaudio_<version>.zip
 .NOTES
     Requires VINTAGE_STORY (or a default install) for the game reference assemblies.
 #>
@@ -63,7 +63,7 @@ if (-not $SkipNative) {
     finally { Pop-Location }
 }
 
-$solution = Join-Path $Root 'VintageStorySteamAudio.sln'
+$solution = Join-Path $Root 'VintageStorySpatialAudio.sln'
 if ($SkipTests) {
     # Only the shipped mod and the doctor tool; the test project (and its NuGet restore) is skipped.
     Step "Managed: build mod + VsaDoctor ($Configuration)"
@@ -91,7 +91,7 @@ if (-not $SkipTests) {
 }
 
 Step 'Packaging'
-$modBuild = Join-Path $Root "src/VintageStorySteamAudio/bin/$Configuration/net10.0/mod"
+$modBuild = Join-Path $Root "src/VintageStorySpatialAudio/bin/$Configuration/net10.0/mod"
 $modArtifact = Join-Path $Artifacts 'mod'
 if (Test-Path $modArtifact) { Remove-Item -Recurse -Force $modArtifact }
 Copy-Item -Recurse $modBuild $modArtifact
