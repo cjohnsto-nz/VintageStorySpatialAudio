@@ -1488,8 +1488,12 @@ void Mixer::inspect(VoiceSlot& s, const SpatialParams& params, const float* mono
         }
     }
 
-    flags |= v.is_virtual ? VSA_AUDIBLE_VIRTUAL : 0u;
-    flags |= v.tier == SpatialTier::Binaural ? VSA_AUDIBLE_BINAURAL : 0u;
+    if (v.is_virtual) {
+        flags |= VSA_AUDIBLE_VIRTUAL;
+    }
+    if (v.tier == SpatialTier::Binaural) {
+        flags |= VSA_AUDIBLE_BINAURAL;
+    }
     s.heard_db.store(db(heard), std::memory_order_relaxed);
     s.direct_db.store(db(direct), std::memory_order_relaxed);
     s.path_db.store(db(path), std::memory_order_relaxed);
