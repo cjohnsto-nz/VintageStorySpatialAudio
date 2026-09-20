@@ -13,7 +13,9 @@ if(MSVC)
 endif()
 vsa_disable_warnings(vsa_vorbisenc)
 
-add_library(vsa_test_support STATIC support/signals.cpp support/signals.hpp)
+add_library(vsa_test_support STATIC
+    support/budgets.cpp support/budgets.hpp
+    support/signals.cpp support/signals.hpp)
 target_include_directories(vsa_test_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(vsa_test_support PRIVATE vsa_vorbisenc)
 vsa_enable_warnings(vsa_test_support)
