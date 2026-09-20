@@ -29,6 +29,29 @@ public sealed class PerfMonitorTests
     }
 
     [Fact]
+    public void Calls_long_enough_to_cost_a_frame_are_counted_apart()
+    {
+        var perf = new PerfMonitor();
+        perf.AttachThread();
+        using (perf.Measure(PerfSection.ChunkRead))
+        {
+            Spin(PerfMonitor.SlowCallMs * 2.0);
+        }
+
+        for (int i = 0; i < 5; i++)
+        {
+            using (perf.Measure(PerfSection.ChunkRead))
+            {
+                Spin(0.1);
+            }
+        }
+
+        PerfSectionTotals read = perf.Snapshot().Sections.Single(s => s.Section == PerfSection.ChunkRead);
+        Assert.Equal(6, read.Calls);
+        Assert.Equal(1, read.SlowCalls);
+    }
+
+    [Fact]
     public void A_nested_scope_of_the_same_section_counts_once_and_allocations_are_attributed()
     {
         var perf = new PerfMonitor();

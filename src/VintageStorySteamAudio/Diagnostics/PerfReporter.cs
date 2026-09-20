@@ -32,6 +32,8 @@ public sealed class PerfReporter
     private int[] startCollections = new int[3];
     private ulong startOverloads;
     private ulong startUnderruns;
+    private long startBakes;
+    private long startChunksBuilt;
 
     public PerfReporter(PerfMonitor monitor, AudioEngine engine, Func<AudioSession?> session)
     {
@@ -54,6 +56,8 @@ public sealed class PerfReporter
         EngineStats stats = engine.GetStats();
         startOverloads = stats.Overloads;
         startUnderruns = stats.StreamUnderruns;
+        startBakes = TryGet(engine.GetPathingStats)?.Bakes ?? 0;
+        startChunksBuilt = TryGet(engine.GetSceneStats)?.ChunksBuilt ?? 0;
     }
 
     /// <summary>".steamaudio perf [reset]".</summary>
@@ -138,7 +142,7 @@ public sealed class PerfReporter
         foreach (PerfSectionTotals s in snap.Sections.Where(s => s.Calls > 0).OrderByDescending(s => s.TotalMs))
         {
             double perFrame = snap.Frames > 0 ? s.TotalMs / snap.Frames : 0.0;
-            text.Append(F($"  {Label(s.Section),-16} {perFrame,7:0.000} ms/frame  {s.Calls,7} calls, worst {s.MaxMs,6:0.00} ms, {s.AllocatedBytes / 1024.0,8:0} KB\n"));
+            text.Append(F($"  {Label(s.Section),-16} {perFrame,7:0.000} ms/frame  {s.Calls,7} calls, {s.SlowCalls,5} over {PerfMonitor.SlowCallMs:0} ms, worst {s.MaxMs,6:0.00} ms, {s.AllocatedBytes / 1024.0,8:0} KB\n"));
         }
 
         text.Append("Threads, share of one core:\n");
@@ -164,7 +168,9 @@ public sealed class PerfReporter
 
             if (pathing is { Enabled: true })
             {
-                text.Append(F($" pathing {pathing.LastTickMs:0.00} ms/tick, bake {pathing.LastBakeMs:0} ms (worst {pathing.MaxBakeMs:0}), {pathing.Probes} probes;"));
+                long bakes = pathing.Bakes - startBakes;
+                double bakeShare = wallMs > 0.0 ? 100.0 * bakes * pathing.LastBakeMs / wallMs : 0.0;
+                text.Append(F($" pathing {pathing.LastTickMs:0.00} ms/tick, {bakes} bakes this window ({bakeShare:0} % of it baking), {pathing.LastBakeMs:0} ms each (worst {pathing.MaxBakeMs:0}), {pathing.Probes} probes;"));
             }
 
             text.Length--;
@@ -176,7 +182,7 @@ public sealed class PerfReporter
         text.Append(F($"GC heap {GC.GetTotalMemory(false) / 1048576.0:0} MB, {allocated / 1048576.0 / Math.Max(0.001, wallMs / 1000.0):0.0} MB/s allocated by all, collections gen0 {GC.CollectionCount(0) - startCollections[0]} gen1 {GC.CollectionCount(1) - startCollections[1]} gen2 {GC.CollectionCount(2) - startCollections[2]}"));
         if (scene is not null)
         {
-            text.Append(F($"; scene {scene.Chunks} chunks, {scene.Triangles / 1000.0:0} k triangles, {scene.MemoryBytes / 1048576.0:0.0} MB"));
+            text.Append(F($"; scene {scene.Chunks} chunks ({scene.ChunksBuilt - startChunksBuilt} meshed this window, worst {scene.MaxBuildMs:0} ms), {scene.Triangles / 1000.0:0} k triangles, {scene.MemoryBytes / 1048576.0:0.0} MB"));
         }
 
         if (audio is not null)

@@ -39,10 +39,11 @@ public enum PerfSection
 /// <summary>One section's totals over the window.</summary>
 /// <param name="Section">Which.</param>
 /// <param name="Calls">Scopes entered (outermost only).</param>
+/// <param name="SlowCalls">Of those, the ones long enough to cost a frame (see <see cref="PerfMonitor.SlowCallMs"/>).</param>
 /// <param name="TotalMs">Time inside, summed.</param>
 /// <param name="MaxMs">The longest single scope.</param>
 /// <param name="AllocatedBytes">Managed memory allocated inside, summed.</param>
-public readonly record struct PerfSectionTotals(PerfSection Section, long Calls, double TotalMs, double MaxMs, long AllocatedBytes);
+public readonly record struct PerfSectionTotals(PerfSection Section, long Calls, long SlowCalls, double TotalMs, double MaxMs, long AllocatedBytes);
 
 /// <summary>What the monitor saw since its last reset.</summary>
 /// <param name="WindowSeconds">Wall time since the reset.</param>
@@ -77,6 +78,12 @@ public sealed record PerfSnapshot(
 /// </summary>
 public sealed class PerfMonitor
 {
+    /// <summary>
+    /// A call at least this long is counted apart: on a 60 fps frame of 16.7 ms, one of these
+    /// is a visible part of the frame, and the average hides them.
+    /// </summary>
+    public const double SlowCallMs = 2.0;
+
     private const double FrameBinMs = 0.25;
     private const int FrameBins = 800;  // to 200 ms
 
@@ -89,6 +96,7 @@ public sealed class PerfMonitor
 
     private readonly long[] ticks = new long[SectionCount];
     private readonly long[] calls = new long[SectionCount];
+    private readonly long[] slowCalls = new long[SectionCount];
     private readonly long[] maxTicks = new long[SectionCount];
     private readonly long[] bytes = new long[SectionCount];
     private readonly int[] depth = new int[SectionCount];
@@ -127,6 +135,7 @@ public sealed class PerfMonitor
     {
         Array.Clear(ticks);
         Array.Clear(calls);
+        Array.Clear(slowCalls);
         Array.Clear(maxTicks);
         Array.Clear(bytes);
         Array.Clear(frameBins);
@@ -141,7 +150,7 @@ public sealed class PerfMonitor
         var sections = new PerfSectionTotals[SectionCount];
         for (int i = 0; i < SectionCount; i++)
         {
-            sections[i] = new PerfSectionTotals((PerfSection)i, calls[i], Ms(ticks[i]), Ms(maxTicks[i]), bytes[i]);
+            sections[i] = new PerfSectionTotals((PerfSection)i, calls[i], slowCalls[i], Ms(ticks[i]), Ms(maxTicks[i]), bytes[i]);
         }
 
         return new PerfSnapshot(
@@ -166,6 +175,11 @@ public sealed class PerfMonitor
         int i = (int)section;
         ticks[i] += elapsedTicks;
         calls[i]++;
+        if (Ms(elapsedTicks) >= SlowCallMs)
+        {
+            slowCalls[i]++;
+        }
+
         maxTicks[i] = Math.Max(maxTicks[i], elapsedTicks);
         bytes[i] += Math.Max(0, allocated);
     }
