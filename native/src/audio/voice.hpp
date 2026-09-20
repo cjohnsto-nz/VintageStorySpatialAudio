@@ -155,6 +155,8 @@ struct VoiceSlot {
     std::atomic<float> path_db{-200.0f};
     std::atomic<float> reflection_db{-200.0f};
     std::atomic<float> heard_distance{0.0f};
+    std::atomic<float> heard_position[3] = {};
+    std::atomic<float> heard_arrival[3] = {};
     std::atomic<uint32_t> heard_flags{0};
     std::atomic<uint64_t> heard_block{0};
 

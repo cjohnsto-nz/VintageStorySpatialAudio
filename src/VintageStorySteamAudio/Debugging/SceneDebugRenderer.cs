@@ -23,6 +23,13 @@ public enum SceneOverlay
     Bounds = 4,
 
     /// <summary>
+    /// Every sound you can hear, drawn the way the inspector lists it: a line to the sound,
+    /// coloured by how it is reaching you, and for one arriving round a corner an arrow from
+    /// you towards where it is really coming in from.
+    /// </summary>
+    Sounds = 64,
+
+    /// <summary>
     /// A line from the listener to every simulated sound, coloured by what reaches the listener:
     /// green clear, through yellow (-20 dB) to red (-40 dB and below); a white stub where a sound
     /// was moved out of the block it sits in.
@@ -73,6 +80,8 @@ internal sealed class SceneDebugRenderer : IRenderer
     private MeshRef? probeLines;
     private MeshRef? probeFace;
     private MeshRef? sourceLines;
+    private MeshRef? soundLines;
+    private Vec3d soundAnchor = new();
     private Vec3d sourceAnchor = new();
     private MeshRef? rayLines;
     private MeshRef? slotLines;
@@ -100,6 +109,93 @@ internal sealed class SceneDebugRenderer : IRenderer
 
     /// <summary>Triangles currently shown (for the HUD).</summary>
     public long TrianglesShown { get; private set; }
+
+    /// <summary>The colour a sound is drawn in, by the way it reaches the listener.</summary>
+    public static int RouteColor(SoundRoutes routes, float directDb, float pathDb, float reflectionDb, float heardDb)
+    {
+        if (routes.HasFlag(SoundRoutes.HeadLocked))
+        {
+            return unchecked((int)0xFF888888);  // grey: at your head, nowhere to draw
+        }
+
+        float best = Math.Max(directDb, Math.Max(pathDb, reflectionDb));
+        if (best == pathDb && pathDb > -199f)
+        {
+            return unchecked((int)0xFFFF8000);  // blue: round a corner
+        }
+
+        if (best == reflectionDb && reflectionDb > -199f)
+        {
+            return unchecked((int)0xFFFF00FF);  // magenta: only its reflections
+        }
+
+        return directDb > heardDb - 3f
+            ? unchecked((int)0xFF00FF00)   // green: in the clear
+            : unchecked((int)0xFF0080FF);  // orange: through walls
+    }
+
+    /// <summary>
+    /// The sounds the inspector lists: a line from <paramref name="from"/> to each, in the
+    /// colour of the way it arrives, and an arrow towards where a sound coming round a corner
+    /// really arrives from.
+    /// </summary>
+    public void SetSounds(IReadOnlyList<AudibleVoice> sounds, (int X, int Y, int Z) origin, Vec3d from)
+    {
+        ArgumentNullException.ThrowIfNull(sounds);
+        soundLines?.Dispose();
+        soundLines = null;
+        if (sounds.Count == 0)
+        {
+            return;
+        }
+
+        soundAnchor = from.Clone();
+        var lines = new MeshData(sounds.Count * 16, sounds.Count * 16, withNormals: false, withUv: false, withRgba: true, withFlags: true);
+        lines.SetMode(EnumDrawMode.Lines);
+        void Line(double ax, double ay, double az, double bx, double by, double bz, int rgba)
+        {
+            lines.AddVertexSkipTex((float)(ax - soundAnchor.X), (float)(ay - soundAnchor.Y), (float)(az - soundAnchor.Z), rgba);
+            lines.AddIndex(lines.VerticesCount - 1);
+            lines.AddVertexSkipTex((float)(bx - soundAnchor.X), (float)(by - soundAnchor.Y), (float)(bz - soundAnchor.Z), rgba);
+            lines.AddIndex(lines.VerticesCount - 1);
+        }
+
+        foreach (AudibleVoice v in sounds)
+        {
+            if (v.Routes.HasFlag(SoundRoutes.HeadLocked))
+            {
+                continue;
+            }
+
+            int color = RouteColor(v.Routes, v.DirectDb, v.PathDb, v.ReflectionDb, v.HeardDb);
+            double px = v.Position.X + origin.X;
+            double py = v.Position.Y + origin.Y;
+            double pz = v.Position.Z + origin.Z;
+            Line(from.X, from.Y, from.Z, px, py, pz, color);
+            const double c = 0.3;  // a cross where the sound is
+            Line(px - c, py, pz, px + c, py, pz, color);
+            Line(px, py - c, pz, px, py + c, pz, color);
+            Line(px, py, pz - c, px, py, pz + c, color);
+
+            // Where it really arrives from, when that is not where it is.
+            if (v.Arrival is { X: 0f, Y: 0f, Z: 0f })
+            {
+                continue;
+            }
+
+            const double reach = 4.0;
+            double ax = from.X + (v.Arrival.X * reach);
+            double ay = from.Y + (v.Arrival.Y * reach);
+            double az = from.Z + (v.Arrival.Z * reach);
+            Line(from.X, from.Y, from.Z, ax, ay, az, color);
+            // A cross-bar at the end, so an arrow reads as an arrow rather than another line.
+            Line(ax - 0.4, ay, az, ax + 0.4, ay, az, color);
+            Line(ax, ay - 0.4, az, ax, ay + 0.4, az, color);
+        }
+
+        lines.Flags = Enumerable.Repeat(256, lines.VerticesCount).ToArray();
+        soundLines = capi.Render.UploadMesh(lines);
+    }
 
     /// <summary>
     /// The direct simulation's sources, drawn as lines from <paramref name="from"/> (world
@@ -368,6 +464,7 @@ internal sealed class SceneDebugRenderer : IRenderer
         TrianglesShown = shown;
         RenderProbe(camera, program);
         RenderSources(camera, program);
+        RenderSounds(camera, program);
         RenderReflections(camera, program);
         RenderPaths(camera, program);
     }
@@ -430,6 +527,29 @@ internal sealed class SceneDebugRenderer : IRenderer
 
         capi.Render.LineWidth = 1.6f;
         program.Stop();
+    }
+
+    private void RenderSounds(Vec3d camera, IShaderProgram program)
+    {
+        if ((Overlay & SceneOverlay.Sounds) == 0 || soundLines is null)
+        {
+            return;
+        }
+
+        matrix.Identity().Set(capi.Render.CameraMatrixOrigin)
+            .Translate(soundAnchor.X - camera.X, soundAnchor.Y - camera.Y, soundAnchor.Z - camera.Z);
+        program.Use();
+        capi.Render.GLDisableDepthTest();  // through walls: that is the point
+        capi.Render.GlToggleBlend(blend: true);
+        program.Uniform("origin", 0f, 0f, 0f);
+        program.UniformMatrix("projectionMatrix", capi.Render.CurrentProjectionMatrix);
+        program.UniformMatrix("modelViewMatrix", matrix.Values);
+        program.Uniform("colorIn", white);
+        capi.Render.LineWidth = 3f;
+        capi.Render.RenderMesh(soundLines);
+        capi.Render.LineWidth = 1.6f;
+        program.Stop();
+        capi.Render.GLEnableDepthTest();
     }
 
     private void RenderSources(Vec3d camera, IShaderProgram program)
@@ -502,6 +622,8 @@ internal sealed class SceneDebugRenderer : IRenderer
         SetProbe(null);
         sourceLines?.Dispose();
         sourceLines = null;
+        soundLines?.Dispose();
+        soundLines = null;
         rayLines?.Dispose();
         rayLines = null;
         slotLines?.Dispose();

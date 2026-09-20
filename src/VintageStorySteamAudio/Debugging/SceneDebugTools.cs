@@ -34,6 +34,7 @@ internal sealed class SceneDebugTools : IDisposable
 
     // Sound paths drawn by the reflections overlay.
     private bool inspecting;
+    private IReadOnlyList<AudibleVoice> audible = [];
     private int soundPage = 1;
     private const int OverlayRays = 48;
     private const int OverlayBounces = 6;
@@ -119,11 +120,11 @@ internal sealed class SceneDebugTools : IDisposable
                 SetOverlay(renderer.Overlay ^ SceneOverlay.Paths);
                 return $"Overlay: {Describe(renderer.Overlay)}";
             case "sounds":
-                // A page number keeps the panel short enough to read; "sounds off" ends it.
                 if (string.Equals(argument, "off", StringComparison.OrdinalIgnoreCase))
                 {
                     inspecting = false;
                     engine.SetInspect(false);
+                    SetOverlay(renderer.Overlay & ~SceneOverlay.Sounds);
                     return "Sound inspector off.";
                 }
 
@@ -132,7 +133,10 @@ internal sealed class SceneDebugTools : IDisposable
                     : 1;
                 inspecting = true;
                 engine.SetInspect(true);
-                return SoundsText();
+                SetOverlay(renderer.Overlay | SceneOverlay.Sounds);
+                return "Sound inspector on: the panel lists what you can hear, loudest first, and each one is drawn "
+                    + "in the world -- green in the clear, orange through walls, blue round a corner (with an arrow "
+                    + "to where it comes in), magenta only its reflections. '.steamaudio scene sounds off' ends it.";
             case "off":
                 SetOverlay(SceneOverlay.None);
                 inspecting = false;
@@ -218,7 +222,6 @@ internal sealed class SceneDebugTools : IDisposable
     /// </summary>
     private string SoundsText()
     {
-        IReadOnlyList<AudibleVoice> audible = engine.GetAudible();
         if (audible.Count == 0)
         {
             return "No sound is playing (or the inspector has only just been switched on).";
@@ -231,22 +234,25 @@ internal sealed class SceneDebugTools : IDisposable
             walls[s.Voice] = s;
         }
 
-        int pages = (audible.Count + SoundsPerPage - 1) / SoundsPerPage;
+        // Two lines a sound, plus the heading: as many as the window can show.
+        int perPage = Math.Clamp((hud.LineBudget - 2) / 2, 3, 40);
+        int pages = (audible.Count + perPage - 1) / perPage;
         int shown = Math.Clamp(soundPage, 1, pages);
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture, $"Sounds: {audible.Count} playing, loudest first (page {shown} of {pages}");
         text.Append(pages > 1 ? ", .steamaudio scene sounds <page>)" : ")");
+        text.Append("\n     green in the clear, orange through walls, blue round a corner (arrow: where it comes in), magenta reflections only");
         foreach ((AudibleVoice v, int index) in audible
             .Select((v, i) => (v, i))
-            .Skip((shown - 1) * SoundsPerPage)
-            .Take(SoundsPerPage))
+            .Skip((shown - 1) * perPage)
+            .Take(perPage))
         {
             string name = describeVoice(v.Voice) ?? $"voice {v.Voice}";
             text.Append(CultureInfo.InvariantCulture, $"\n{index + 1,3}. {v.HeardDb,6:0.0} dB {v.Bus,-7} {name}");
             text.Append(v.Routes.HasFlag(SoundRoutes.HeadLocked)
                 ? " (at your head)"
                 : string.Create(CultureInfo.InvariantCulture, $" {v.Distance:0.0} m"));
-            text.Append(CultureInfo.InvariantCulture, $"\n     arrives {v.Arrival}:");
+            text.Append(CultureInfo.InvariantCulture, $"\n     arrives {v.Route}:");
             text.Append(CultureInfo.InvariantCulture, $" direct {Level(v.DirectDb)}");
             if (v.Routes.HasFlag(SoundRoutes.Path))
             {
@@ -281,11 +287,9 @@ internal sealed class SceneDebugTools : IDisposable
             CultureInfo.InvariantCulture, $"{(amplitude > 1e-9f ? 20.0 * Math.Log10(amplitude) : -200.0):0}");
     }
 
-    private const int SoundsPerPage = 8;
-
     private void UpdateHud()
     {
-        if (renderer.Overlay == SceneOverlay.None || !hud.IsOpened())
+        if ((renderer.Overlay == SceneOverlay.None && !inspecting) || !hud.IsOpened())
         {
             return;
         }
@@ -293,6 +297,15 @@ internal sealed class SceneDebugTools : IDisposable
         using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.Hud);
         try
         {
+            if (inspecting)
+            {
+                // The inspector's own panel: what is sounding and how it reaches the listener,
+                // and nothing else, so that the lines it needs are not pushed off the bottom.
+                UpdateSounds();
+                hud.SetText(SoundsText());
+                return;
+            }
+
             UpdateProbe();
             UpdateSources();
             UpdateReflections();
@@ -321,6 +334,23 @@ internal sealed class SceneDebugTools : IDisposable
             (view.X, view.Y, view.Z),
             64f);
         renderer.SetProbe(probe);
+    }
+
+    /// <summary>The sounds the inspector lists, drawn in the world in the same colours.</summary>
+    private void UpdateSounds()
+    {
+        audible = engine.GetAudible();
+        if ((renderer.Overlay & SceneOverlay.Sounds) == 0 || capi.World.Player?.Entity is not { } player)
+        {
+            renderer.SetSounds([], default, new Vec3d());
+            return;
+        }
+
+        // From just in front of and below the eyes, so the lines are visible rather than end-on.
+        Vec3d camera = player.CameraPos;
+        Vec3f view = player.Pos.GetViewVector();
+        var from = new Vec3d(camera.X + (view.X * 0.6), camera.Y + (view.Y * 0.6) - 0.35, camera.Z + (view.Z * 0.6));
+        renderer.SetSounds(audible, world.Status().Origin, from);
     }
 
     private void UpdateSources()
@@ -503,11 +533,6 @@ internal sealed class SceneDebugTools : IDisposable
         }
 
         text.Append('\n').Append(ProbeText());
-        if (inspecting)
-        {
-            text.Append('\n').Append(SoundsText());
-        }
-
         text.Append('\n').Append(SourcesText());
         text.Append('\n').Append(ReflectionsText(detailed: false));
         text.Append('\n').Append(PathingText());

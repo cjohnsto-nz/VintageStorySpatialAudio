@@ -201,6 +201,36 @@ TEST_CASE("pathing: a sound in a room is heard through its doorway, from the doo
     CHECK(without.x < -0.2);
 }
 
+TEST_CASE("pathing: the inspector says a blocked sound arrives from the doorway, not from the sound") {
+    // The number Chris needs to tell a broken mod from one working as designed: the goat is
+    // ahead-left behind a wall, and what he hears comes in at the doorway, straight ahead.
+    OfflineEngine e(pathing_config());
+    set_materials(e);
+    set_chunk(e, room(true));
+    e.listener(8.0f, 3.6f, 16.0f, 0.0f, 0.0f, -1.0f);
+    REQUIRE(vsa_engine_set_inspect(e.engine, 1) == VSA_OK);
+    e.render(kRate / 2);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+    REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, 5.0f, 3.0f, 6.0f)) == VSA_OK);
+    e.render(kRate);
+
+    std::vector<vsa_audible_voice> rows(8);
+    rows[0].struct_size = sizeof(vsa_audible_voice);
+    uint32_t count = 0;
+    REQUIRE(vsa_engine_get_audible(e.engine, rows.data(), 8, &count) == VSA_OK);
+    REQUIRE(count == 1);
+    const vsa_audible_voice& v = rows[0];
+    CHECK((v.flags & VSA_AUDIBLE_HAS_PATH) != 0);
+    CHECK(v.path_db > v.direct_db);  // the way round is the loud way: the wall is in the way
+    MESSAGE("arrives from " << v.arrival[0] << "," << v.arrival[1] << "," << v.arrival[2]
+            << "; the sound is at " << v.position[0] << "," << v.position[2]
+            << ", path " << v.path_db << " dB against direct " << v.direct_db << " dB");
+    // The doorway is due north of the listener (-z); the goat is north-west. What arrives comes
+    // from the doorway.
+    CHECK(v.arrival[2] < -0.5f);
+    CHECK(std::abs(v.arrival[0]) < 0.4f);
+}
+
 TEST_CASE("pathing: a sealed room has no path, and a sound in the open needs none") {
     OfflineEngine e(pathing_config());
     set_materials(e);

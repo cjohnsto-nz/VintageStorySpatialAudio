@@ -483,7 +483,7 @@ internal unsafe struct VsaRayHit
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct VsaAudibleVoice
+internal unsafe struct VsaAudibleVoice
 {
     public uint StructSize;
     public uint Bus;
@@ -494,6 +494,8 @@ internal struct VsaAudibleVoice
     public float DirectDb;
     public float PathDb;
     public float ReflectionDb;
+    public fixed float Position[3];
+    public fixed float Arrival[3];
     public uint Reserved;
 }
 
@@ -600,7 +602,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 15;
+    public const uint AbiVersion = 16;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;

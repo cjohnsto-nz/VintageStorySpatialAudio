@@ -214,6 +214,10 @@ std::vector<vsa_audible_voice> Engine::audible() const {
         row.direct_db = s.direct_db.load(std::memory_order_relaxed);
         row.path_db = s.path_db.load(std::memory_order_relaxed);
         row.reflection_db = s.reflection_db.load(std::memory_order_relaxed);
+        for (int k = 0; k < 3; ++k) {
+            row.position[k] = s.heard_position[k].load(std::memory_order_relaxed);
+            row.arrival[k] = s.heard_arrival[k].load(std::memory_order_relaxed);
+        }
         rows.push_back(row);
     }
     std::sort(rows.begin(), rows.end(), [](const vsa_audible_voice& a, const vsa_audible_voice& b) {

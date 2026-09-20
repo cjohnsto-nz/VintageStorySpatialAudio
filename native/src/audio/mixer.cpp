@@ -1436,6 +1436,7 @@ void Mixer::inspect(VoiceSlot& s, const SpatialParams& params, const float* mono
 
     float path = 0.0f;
     float reflection = 0.0f;
+    float arrival[3] = {0.0f, 0.0f, 0.0f};
     if (positioned && v.effect_set >= 0) {
         const float loudness = std::clamp(params.distance, 1.0f, std::max(1.0f, v.min_distance));
         if (paths_ != nullptr) {
@@ -1444,6 +1445,21 @@ void Mixer::inspect(VoiceSlot& s, const SpatialParams& params, const float* mono
                 // The path effect's omnidirectional coefficient carries the way round's falloff.
                 path = rms * loudness * std::abs(state.sh[0]);
                 flags |= VSA_AUDIBLE_HAS_PATH;
+                // Where it arrives from: the first-order part of the same field, which points
+                // back along the way round -- at the doorway, not at the sound. This is what
+                // tells you that a sound you can hear through a wall is really coming in at the
+                // door. Steam Audio projects a direction (x, y, z) into the Google SH library's
+                // frame as (-z, -x, y), and that library's order-1 coefficients are its (Y, Z,
+                // X), so the scene direction back out of them is (-sh[1], sh[2], -sh[3]).
+                const float x = -state.sh[1];
+                const float y = state.sh[2];
+                const float z = -state.sh[3];
+                const float length = std::sqrt(x * x + y * y + z * z);
+                if (length > 1e-6f) {
+                    arrival[0] = x / length;
+                    arrival[1] = y / length;
+                    arrival[2] = z / length;
+                }
             }
         }
         if (reflections_ != nullptr && v.reflection_slot > 0) {
@@ -1459,6 +1475,11 @@ void Mixer::inspect(VoiceSlot& s, const SpatialParams& params, const float* mono
     s.path_db.store(db(path), std::memory_order_relaxed);
     s.reflection_db.store(db(reflection), std::memory_order_relaxed);
     s.heard_distance.store(positioned ? params.distance : 0.0f, std::memory_order_relaxed);
+    for (int k = 0; k < 3; ++k) {
+        s.heard_position[k].store(v.position[k], std::memory_order_relaxed);
+        s.heard_arrival[k].store(arrival[k], std::memory_order_relaxed);
+    }
+
     s.heard_flags.store(flags, std::memory_order_relaxed);
     s.heard_block.store(block_index_, std::memory_order_release);
 }

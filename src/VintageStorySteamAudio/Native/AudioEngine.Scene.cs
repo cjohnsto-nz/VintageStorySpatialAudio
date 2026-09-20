@@ -304,6 +304,11 @@ public enum SoundRoutes
 /// <param name="DirectDb">Of that, what the direct effect passes: what is visible plus what gets through.</param>
 /// <param name="PathDb">What is arriving round corners.</param>
 /// <param name="ReflectionDb">What it is feeding its place's reflections.</param>
+/// <param name="Position">Where the sound is, in scene coordinates.</param>
+/// <param name="Arrival">
+/// The direction the way round brings it from, in scene coordinates: where to look to find the
+/// doorway it is coming through. Zero when nothing is arriving that way.
+/// </param>
 public readonly record struct AudibleVoice(
     ulong Voice,
     AudioBus Bus,
@@ -312,10 +317,12 @@ public readonly record struct AudibleVoice(
     float HeardDb,
     float DirectDb,
     float PathDb,
-    float ReflectionDb)
+    float ReflectionDb,
+    (float X, float Y, float Z) Position,
+    (float X, float Y, float Z) Arrival)
 {
     /// <summary>The loudest way it is arriving by, for a one-word answer.</summary>
-    public string Arrival
+    public string Route
     {
         get
         {
@@ -641,7 +648,9 @@ public sealed partial class AudioEngine
             {
                 result.Add(new AudibleVoice(
                     p[i].Voice, (AudioBus)p[i].Bus, (SoundRoutes)p[i].Flags, p[i].Distance,
-                    p[i].HeardDb, p[i].DirectDb, p[i].PathDb, p[i].ReflectionDb));
+                    p[i].HeardDb, p[i].DirectDb, p[i].PathDb, p[i].ReflectionDb,
+                    (p[i].Position[0], p[i].Position[1], p[i].Position[2]),
+                    (p[i].Arrival[0], p[i].Arrival[1], p[i].Arrival[2])));
             }
         }
 

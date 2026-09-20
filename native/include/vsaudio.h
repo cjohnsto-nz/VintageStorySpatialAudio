@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 15u
+#define VSA_ABI_VERSION 16u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -869,6 +869,13 @@ typedef struct vsa_audible_voice {
     float path_db;
     /** What it is feeding its place's reflections. */
     float reflection_db;
+    /** Where the sound is, in scene coordinates. */
+    float position[3];
+    /**
+     * The direction the way round brings it from, a unit vector in scene coordinates: where to
+     * look to find the doorway it is coming through. All zero when nothing is arriving that way.
+     */
+    float arrival[3];
     uint32_t reserved;
 } vsa_audible_voice;
 

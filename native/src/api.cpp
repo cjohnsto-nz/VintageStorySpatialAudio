@@ -37,8 +37,9 @@ static_assert(sizeof(vsa_pathing_stats) == 128 && offsetof(vsa_pathing_stats, ba
               offsetof(vsa_pathing_stats, box_centre) == 48 && offsetof(vsa_pathing_stats, ticks) == 72 &&
               offsetof(vsa_pathing_stats, listener) == 112);
 static_assert(sizeof(vsa_path_segment) == 32 && offsetof(vsa_path_segment, to) == 20);
-static_assert(sizeof(vsa_audible_voice) == 48 && offsetof(vsa_audible_voice, voice) == 8 &&
-              offsetof(vsa_audible_voice, heard_db) == 24);
+static_assert(sizeof(vsa_audible_voice) == 72 && offsetof(vsa_audible_voice, voice) == 8 &&
+              offsetof(vsa_audible_voice, heard_db) == 24 && offsetof(vsa_audible_voice, position) == 40 &&
+              offsetof(vsa_audible_voice, arrival) == 52);
 static_assert(sizeof(vsa_thread_stats) == 72 && offsetof(vsa_thread_stats, cpu_ms) == 16 && offsetof(vsa_thread_stats, name) == 24);
 static_assert(sizeof(vsa_reflection_stats) == 120 && offsetof(vsa_reflection_stats, ticks) == 56 &&
               offsetof(vsa_reflection_stats, listener_reverb_times) == 88 && offsetof(vsa_reflection_stats, listener) == 108);
