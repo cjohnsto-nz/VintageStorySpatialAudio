@@ -73,6 +73,10 @@ public:
     void fade_voice(vsa_voice voice, float target, float seconds, uint32_t flags, uint64_t token);
     void set_voice_position(vsa_voice voice, uint32_t spatial, float x, float y, float z);
     void set_voice_lowpass(vsa_voice voice, float gain_hf);
+    /// Debugging: silences a voice whatever its gain and fades say; it then asks for no simulation.
+    void set_voice_muted(vsa_voice voice, bool muted);
+    /// Debugging: gains on the direct sound and on the paths (the reflections have their own).
+    void set_route_gains(float direct, float path);
     [[nodiscard]] vsa_voice_status voice_status(vsa_voice voice) const;
 
     void set_bus_gain(uint32_t bus, float gain);
@@ -110,6 +114,18 @@ public:
         world::PathSimSettings path_sim;
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
+
+    /// Turns the sound inspector on (the render thread then works out each voice's breakdown).
+    void set_inspect(bool on) noexcept {
+        mixer_.set_inspect(on);
+        if (path_sim_) {
+            path_sim_->set_baked_only(on);  // so that the legs drawn are the legs heard
+        }
+    }
+    [[nodiscard]] bool inspecting() const noexcept { return mixer_.inspecting(); }
+    /// What each voice sounded like in the latest block and how it reached the listener,
+    /// loudest first. Empty unless the inspector is on.
+    [[nodiscard]] std::vector<vsa_audible_voice> audible() const;
 
     /// A config with every field resolved: what a zeroed config would actually run as, including
     /// the values that depend on the machine (the reflection threads). The settings file is

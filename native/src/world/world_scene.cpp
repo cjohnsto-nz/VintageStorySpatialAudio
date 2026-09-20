@@ -48,6 +48,17 @@ bool boundary_differs(const ChunkVoxels& a, const ChunkVoxels& b, std::size_t f)
     return false;
 }
 
+// iplInstancedMeshCreate commits the sub-scene it instances (EmbreeInstancedMesh's constructor
+// calls mSubScene->commit(), which reassigns the sub-scene's mesh lists), and a top-level commit
+// reads those lists. Chunks' sub-scenes are shared between the live top-level scene, a compacted
+// one being built and the path baker's snapshots, on three threads: two of them instancing the
+// same chunk at once crashed inside Steam Audio. Everything that commits or instances a scene
+// holds this. Recursive: retiring a top-level scene releases chunks, which commit their own.
+std::recursive_mutex& commit_mutex() {
+    static std::recursive_mutex mutex;
+    return mutex;
+}
+
 double since_ms(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
@@ -64,6 +75,7 @@ struct WorldScene::Built {
     steam::StaticMesh static_mesh;
 
     ~Built() {
+        std::lock_guard commits(commit_mutex());
         if (static_mesh) {
             iplStaticMeshRemove(static_mesh.get(), sub.get());
             iplSceneCommit(sub.get());
@@ -122,6 +134,7 @@ WorldScene::Instances WorldScene::instances_locked() const {
 }
 
 std::unique_ptr<WorldScene::Top> WorldScene::build_top(const Instances& instances) const {
+    std::lock_guard commits(commit_mutex());
     auto top = std::make_unique<Top>();
     IPLSceneSettings settings = steam_.scene_settings();
     check(iplSceneCreate(steam_.context(), &settings, top->scene.out()), "iplSceneCreate");
@@ -145,6 +158,7 @@ void WorldScene::retire(std::unique_ptr<Top>& top) noexcept {
     if (!top) {
         return;
     }
+    std::lock_guard commits(commit_mutex());
     for (auto& [key, mesh] : top->live) {
         iplInstancedMeshRemove(mesh.get(), top->scene.get());
     }
@@ -431,6 +445,7 @@ void WorldScene::worker_main() {
             bool compact_now = false;
             {
                 std::lock_guard scene(scene_mutex_);
+                std::lock_guard commits(commit_mutex());
                 Top& top = *top_;
                 for (Change& change : changes) {
                     if (const auto it = top.live.find(change.key); it != top.live.end()) {

@@ -301,6 +301,10 @@ void Mixer::apply(const Command& c) noexcept {
             return;
         case Op::SetMasterGain: master_gain_.linear(c.value, smooth_frames_); return;
         case Op::SetReflectionGain: reflection_gain_.linear(c.value, smooth_frames_); return;
+        case Op::SetRouteGains:
+            direct_route_gain_ = c.vec[0];
+            path_route_gain_ = c.vec[1];
+            return;
         case Op::SetReflectionMix:
             if (reflections_ != nullptr) {
                 reflections_->set_mix(c.value, c.seconds, smooth_frames_);
@@ -362,6 +366,7 @@ void Mixer::apply(const Command& c) noexcept {
             v.position[1] = c.vec[1];
             v.position[2] = c.vec[2];
             break;
+        case Op::SetMuted: v.muted = c.flags != 0; break;
         case Op::SetLowpass:
             if (!v.shelf.active() && c.value < 1.0f) {
                 v.shelf.reset();
@@ -587,7 +592,7 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
     // positional voices need an effect set to be heard.
     const bool spatial = v.spatial != VSA_SPATIAL_NONE;
     SpatialParams params;
-    float level = v.gain.value() * bus_gain_[s.bus].value() * master_gain_.value();
+    float level = v.muted ? 0.0f : v.gain.value() * bus_gain_[s.bus].value() * master_gain_.value();
     if (spatial) {
         params = spatial_params(v);
         level *= params.distance_gain;
@@ -642,6 +647,9 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
         advance_env(v, frames);
     } else {
         ramp_done = v.gain.render(gain, frames);
+        if (v.muted) {
+            std::fill(gain, gain + frames, 0.0f);  // a stream cannot go virtual; it plays silence
+        }
         if (v.env != 1.0f || v.env_target != 1.0f) {
             float env = v.env;
             const float target = v.env_target;
@@ -715,6 +723,12 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         }
         send_reflections(s, params, left);
         send_path(s, params, left);
+        inspect(s, params, left, true);
+        if (direct_route_gain_ != 1.0f) {
+            for (uint32_t j = 0; j < frames; ++j) {
+                left[j] *= direct_route_gain_;
+            }
+        }
         if (v.tier == SpatialTier::Ambisonic) {
             // The shared bus is decoded after every bus gain, so this voice's is applied now.
             const float* bus_gain = bus_gains_[b];
@@ -755,6 +769,7 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
             v.shelf.process(x, frames, c);
         }
     }
+    inspect(s, params, voice_out_[0], false);  // head-locked, a bed, or waiting for an effect set
     if (bed) {
         mix_bed(*s.asset, b);
     } else if (used == 1) {
@@ -1178,7 +1193,9 @@ void Mixer::update_path(VoiceSlot& s, const SpatialParams& params) noexcept {
     // hovering about the threshold), and Steam Audio answers a clear centre ray with the direct
     // path itself, which would double a source in plain view.
     const DirectState& direct = direct_state_[set];
-    const bool wanted = direct_ == nullptr || (direct.primed && direct.occlusion < kPathWanted);
+    // A silenced voice needs no way round (and, while debugging with one sound soloed, leaves
+    // every leg the pathing draws belonging to that sound).
+    const bool wanted = !v.muted && (direct_ == nullptr || (direct.primed && direct.occlusion < kPathWanted));
     const float weight = direct_ == nullptr ? 1.0f : std::clamp((kPathWanted - direct.occlusion) / kPathWanted, 0.0f, 1.0f);
     const uint32_t generation = set_generation_[set];
     in.x.store(v.position[0], std::memory_order_relaxed);
@@ -1259,6 +1276,11 @@ void Mixer::send_path(VoiceSlot& s, const SpatialParams& params, const float* mo
 void Mixer::mix_paths() noexcept {
     if (!path_bus_used_) {
         return;
+    }
+    if (path_route_gain_ != 1.0f) {
+        for (float& x : path_bus_storage_) {
+            x *= path_route_gain_;
+        }
     }
     if (render_mode_ == VSA_RENDER_HEADPHONES) {
         spatial_.add_ambisonic(path_bus_.data(), 4);
@@ -1400,6 +1422,86 @@ void Mixer::gather(const Asset& asset, int64_t first, int64_t end, bool loop, bo
         i += run;
         out += static_cast<std::size_t>(run);
     }
+}
+
+void Mixer::inspect(VoiceSlot& s, const SpatialParams& params, const float* mono, bool positioned) noexcept {
+    if (!inspect_.load(std::memory_order_relaxed) || s.render.muted) {
+        return;  // off; or silenced while another sound is soloed, and no part of what is heard
+    }
+    const RenderVoice& v = s.render;
+    // What the voice itself is worth this block, after its gain, fades and the bus.
+    double sum = 0.0;
+    for (uint32_t j = 0; j < block_frames_; ++j) {
+        const auto sample = static_cast<double>(mono[j]);
+        sum += sample * sample;
+    }
+    const auto rms = static_cast<float>(std::sqrt(sum / std::max(1u, block_frames_)));
+    const auto db = [](float amplitude) { return amplitude > 1e-9f ? 20.0f * std::log10(amplitude) : -200.0f; };
+
+    // Each way it can reach the listener, as the amplitude that way carries into its effect --
+    // not a measurement of what comes out of one. Enough to say which way a sound is arriving
+    // by, and how much louder one way is than another.
+    const float heard = rms * (positioned ? params.distance_gain : 1.0f);
+    float direct = heard;
+    uint32_t flags = 0;
+    if (positioned) {
+        const float air = (params.air_absorption[0] + params.air_absorption[1] + params.air_absorption[2]) / 3.0f;
+        const float through = (params.transmission[0] + params.transmission[1] + params.transmission[2]) / 3.0f;
+        // What the direct effect passes: the visible part of the source, plus what gets through
+        // whatever hides the rest (the engine's own occlusion + (1 - occlusion) * T).
+        direct = heard * air * (params.occlusion + (1.0f - params.occlusion) * through);
+    } else {
+        flags |= VSA_AUDIBLE_HEAD_LOCKED;
+    }
+
+    float path = 0.0f;
+    float reflection = 0.0f;
+    float arrival[3] = {0.0f, 0.0f, 0.0f};
+    if (positioned && v.effect_set >= 0) {
+        const float loudness = std::clamp(params.distance, 1.0f, std::max(1.0f, v.min_distance));
+        if (paths_ != nullptr) {
+            const PathState& state = path_state_[static_cast<std::size_t>(v.effect_set)];
+            if (state.sounding) {
+                // The path effect's omnidirectional coefficient carries the way round's falloff.
+                path = rms * loudness * std::abs(state.sh[0]);
+                flags |= VSA_AUDIBLE_HAS_PATH;
+                // Where it arrives from: the first-order part of the same field, which points
+                // back along the way round -- at the doorway, not at the sound. This is what
+                // tells you that a sound you can hear through a wall is really coming in at the
+                // door. Steam Audio projects a direction (x, y, z) into the Google SH library's
+                // frame as (-z, -x, y), and that library's order-1 coefficients are its (Y, Z,
+                // X), so the scene direction back out of them is (-sh[1], sh[2], -sh[3]).
+                const float x = -state.sh[1];
+                const float y = state.sh[2];
+                const float z = -state.sh[3];
+                const float length = std::sqrt(x * x + y * y + z * z);
+                if (length > 1e-6f) {
+                    arrival[0] = x / length;
+                    arrival[1] = y / length;
+                    arrival[2] = z / length;
+                }
+            }
+        }
+        if (reflections_ != nullptr && v.reflection_slot > 0) {
+            reflection = rms * loudness * reflection_gain_.value();
+            flags |= VSA_AUDIBLE_HAS_PLACE;
+        }
+    }
+
+    flags |= v.is_virtual ? VSA_AUDIBLE_VIRTUAL : 0u;
+    flags |= v.tier == SpatialTier::Binaural ? VSA_AUDIBLE_BINAURAL : 0u;
+    s.heard_db.store(db(heard), std::memory_order_relaxed);
+    s.direct_db.store(db(direct), std::memory_order_relaxed);
+    s.path_db.store(db(path), std::memory_order_relaxed);
+    s.reflection_db.store(db(reflection), std::memory_order_relaxed);
+    s.heard_distance.store(positioned ? params.distance : 0.0f, std::memory_order_relaxed);
+    for (int k = 0; k < 3; ++k) {
+        s.heard_position[k].store(v.position[k], std::memory_order_relaxed);
+        s.heard_arrival[k].store(arrival[k], std::memory_order_relaxed);
+    }
+
+    s.heard_flags.store(flags, std::memory_order_relaxed);
+    s.heard_block.store(block_index_, std::memory_order_release);
 }
 
 void Mixer::publish_position(VoiceSlot& s) noexcept {

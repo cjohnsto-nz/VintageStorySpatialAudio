@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Newtonsoft.Json;
@@ -78,6 +79,56 @@ internal sealed class WorldAcoustics : IDisposable
     }
 
     public MaterialTable? Materials => blocks?.Materials;
+
+    /// <summary>
+    /// Debugging: the block in a cell and what the acoustic scene makes of it ("game:anvil-iron:
+    /// metal, 2 boxes"), or null for air. Read now, from the game; the scene holds what was read
+    /// when the chunk was last meshed.
+    /// </summary>
+    public string? DescribeCell(int x, int y, int z)
+    {
+        if (blocks is null)
+        {
+            return null;
+        }
+
+        var at = new BlockPos(x, y, z, 0);
+        IBlockAccessor accessor = capi.World.BlockAccessor;
+        Block block = accessor.GetBlock(at);
+        if (block.BlockId == 0)
+        {
+            block = accessor.GetBlock(at, BlockLayersAccess.Fluid);
+            if (block.BlockId == 0)
+            {
+                return null;
+            }
+        }
+
+        BlockAcoustics type = blocks[block.BlockId];
+        string shape;
+        if (type.Shape == CellShape.Dynamic)
+        {
+            Cuboidf[]? boxes = block.GetCollisionBoxes(accessor, at);
+            BlockAcoustics live = boxes is null
+                ? BlockAcoustics.Air
+                : BlockClassifier.Classify(BlockTable.Describe(block, boxes) with { HasBlockEntity = false, DelegatesShape = false }, blocks.Materials);
+            shape = "read per snapshot, now " + ShapeText(live);
+        }
+        else
+        {
+            shape = ShapeText(type);
+        }
+
+        return $"{block.Code}: {blocks.Materials.NameOf(type.Material)}, {shape}";
+    }
+
+    private static string ShapeText(BlockAcoustics a) => a.Shape switch
+    {
+        CellShape.Air => "NOT IN THE SCENE (sound passes)",
+        CellShape.Full => "a full cube",
+        CellShape.Partial => string.Create(CultureInfo.InvariantCulture, $"{a.Boxes?.Length ?? 0} boxes"),
+        _ => a.Shape.ToString(),
+    };
 
     /// <summary>Starts streaming (call once the level is finalized: the block list comes from the server).</summary>
     public void Start()

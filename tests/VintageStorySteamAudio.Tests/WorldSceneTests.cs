@@ -42,6 +42,9 @@ public sealed class WorldSceneTests
         MaterialTable table = MaterialTable.Build(ShippedConfig());
         Assert.Equal("stone", table.NameOf(table.Resolve("game:rock-granite", "Stone")));
         Assert.Equal("cloth", table.NameOf(table.Resolve("game:hay-normal-ud", "Plant")));  // rule beats the block material
+        Assert.Equal("cloth", table.NameOf(table.Resolve("game:slantedroofing-thatch-north-free", "Plant")));  // a thatch roof is a roof
+        Assert.Equal("soil", table.NameOf(table.Resolve("game:beam-ridge-sod-ns", "Plant")));
+        Assert.Equal("air", table.NameOf(table.Resolve("game:tallgrass-tall-free", "Plant")));
         Assert.Equal("glass", table.NameOf(table.Resolve("game:glasspane-leaded-oak-ns", "Wood")));
         Assert.Equal("air", table.NameOf(table.Resolve("game:tallgrass-eaten-free", "Plant")));
         Assert.Equal("air", table.NameOf(table.Resolve("game:groundstorage", "Ceramic")));

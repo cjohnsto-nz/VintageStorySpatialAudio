@@ -201,6 +201,89 @@ TEST_CASE("pathing: a sound in a room is heard through its doorway, from the doo
     CHECK(without.x < -0.2);
 }
 
+TEST_CASE("pathing: the inspector says a blocked sound arrives from the doorway, not from the sound") {
+    // The number Chris needs to tell a broken mod from one working as designed: the goat is
+    // ahead-left behind a wall, and what he hears comes in at the doorway, straight ahead.
+    OfflineEngine e(pathing_config());
+    set_materials(e);
+    set_chunk(e, room(true));
+    e.listener(8.0f, 3.6f, 16.0f, 0.0f, 0.0f, -1.0f);
+    REQUIRE(vsa_engine_set_inspect(e.engine, 1) == VSA_OK);
+    e.render(kRate / 2);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+    REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, 5.0f, 3.0f, 6.0f)) == VSA_OK);
+    e.render(kRate);
+
+    std::vector<vsa_audible_voice> rows(8);
+    rows[0].struct_size = sizeof(vsa_audible_voice);
+    uint32_t count = 0;
+    REQUIRE(vsa_engine_get_audible(e.engine, rows.data(), 8, &count) == VSA_OK);
+    REQUIRE(count == 1);
+    const vsa_audible_voice& v = rows[0];
+    CHECK((v.flags & VSA_AUDIBLE_HAS_PATH) != 0);
+    CHECK(v.path_db > v.direct_db);  // the way round is the loud way: the wall is in the way
+    MESSAGE("arrives from " << v.arrival[0] << "," << v.arrival[1] << "," << v.arrival[2]
+            << "; the sound is at " << v.position[0] << "," << v.position[2]
+            << ", path " << v.path_db << " dB against direct " << v.direct_db << " dB");
+    // The doorway is due north of the listener (-z); the goat is north-west. What arrives comes
+    // from the doorway.
+    CHECK(v.arrival[2] < -0.5f);
+    CHECK(std::abs(v.arrival[0]) < 0.4f);
+}
+
+TEST_CASE("debugging: the way round can be muted, and a muted voice asks for no path") {
+    // To find which way a leaking sound arrives by: mute one way at a time; and with every other
+    // voice muted, every leg the pathing draws belongs to the one still sounding.
+    OfflineEngine e(pathing_config());
+    REQUIRE(vsa_engine_set_render_mode(e.engine, VSA_RENDER_SPEAKERS) == VSA_OK);
+    vsa_output_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.kind = VSA_OUTPUT_NONE;
+    desc.channels = 12;
+    REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+    set_materials(e);
+    set_chunk(e, room(true));
+    e.listener(8.0f, 3.6f, 16.0f, 0.0f, 0.0f, -1.0f);
+    render12(e, kRate / 2);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+    const vsa_voice goat = e.positioned(tone, VSA_SPATIAL_WORLD, 5.0f, 3.0f, 6.0f);
+    REQUIRE(vsa_voice_start(e.engine, goat) == VSA_OK);
+    render12(e, kRate / 2);
+    const double with_path = lean(render12(e, kRate / 2)).energy;
+    REQUIRE(stats(e).found == 1);
+
+    // The way round muted: what is left is what comes through the wall, far quieter.
+    REQUIRE(vsa_engine_set_route_gains(e.engine, 1.0f, 0.0f) == VSA_OK);
+    render12(e, kRate / 4);
+    const double without_path = lean(render12(e, kRate / 2)).energy;
+    CHECK(without_path < 1e-4 * with_path);
+    REQUIRE(vsa_engine_set_route_gains(e.engine, 1.0f, 1.0f) == VSA_OK);
+    CHECK(vsa_engine_set_route_gains(e.engine, -1.0f, 1.0f) == VSA_ERROR_INVALID_ARGUMENT);
+
+    // The voice muted: silence, and the pathing is no longer asked about it.
+    REQUIRE(vsa_voice_set_muted(e.engine, goat, 1) == VSA_OK);
+    render12(e, kRate / 2);
+    CHECK(lean(render12(e, kRate / 4)).energy < 1e-9 * with_path);
+    CHECK(stats(e).wanted == 0);
+    // Nor is it listed among what is heard.
+    REQUIRE(vsa_engine_set_inspect(e.engine, 1) == VSA_OK);
+    render12(e, kRate / 4);
+    uint32_t heard = 0;
+    REQUIRE(vsa_engine_get_audible(e.engine, nullptr, 0, &heard) == VSA_OK);
+    CHECK(heard == 0);
+    std::vector<vsa_path_segment> legs(8);
+    legs[0].struct_size = sizeof(vsa_path_segment);
+    uint32_t count = 0;
+    REQUIRE(vsa_engine_get_path_segments(e.engine, legs.data(), 8, &count) == VSA_OK);
+    CHECK(count == 0);
+
+    // And back.
+    REQUIRE(vsa_voice_set_muted(e.engine, goat, 0) == VSA_OK);
+    render12(e, kRate);
+    CHECK(stats(e).found == 1);
+    CHECK(lean(render12(e, kRate / 2)).energy > 0.5 * with_path);
+}
+
 TEST_CASE("pathing: a sealed room has no path, and a sound in the open needs none") {
     OfflineEngine e(pathing_config());
     set_materials(e);
@@ -223,6 +306,62 @@ TEST_CASE("pathing: a sealed room has no path, and a sound in the open needs non
     uint32_t count = 0;
     REQUIRE(vsa_engine_get_path_segments(e.engine, segments.data(), 16, &count) == VSA_OK);
     CHECK(count == 0);
+}
+
+TEST_CASE("pathing: an anvil against the wall of a sealed room is not heard from outside that wall") {
+    // A sound is simulated from outside the block it sits in, on the listener's side. With the
+    // block against a wall that used to carry on through the wall: the anvil was pathed (and
+    // reverberated) from the open air outside the room, from wherever the listener stood.
+    OfflineEngine e(pathing_config());
+    set_materials(e);
+    const std::vector<uint16_t> cells = room(false);
+    vsa_box body{{0.1f, 0.0f, 0.25f}, {0.9f, 0.7f, 0.75f}};
+    vsa_partial_block anvil{static_cast<uint32_t>(cell(11, 2, 8)), Stone, 0, 1};  // the east wall is x 12
+    vsa_chunk_desc chunk{};
+    chunk.struct_size = sizeof chunk;
+    chunk.materials = cells.data();
+    chunk.partials = &anvil;
+    chunk.partial_count = 1;
+    chunk.boxes = &body;
+    chunk.box_count = 1;
+    REQUIRE(vsa_scene_set_chunk(e.engine, &chunk) == VSA_OK);
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+    REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, 11.5f, 2.5f, 8.5f)) == VSA_OK);
+    for (const float z : {8.5f, 5.0f, 11.0f}) {
+        e.listener(17.0f, 3.6f, z, -1.0f, 0.0f, 0.0f);  // outside, east of the wall
+        e.render(kRate);
+        const vsa_pathing_stats s = stats(e);
+        CHECK(s.wanted == 1);
+        CHECK(s.found == 0);
+    }
+}
+
+TEST_CASE("pathing: sources come and go while the scene worker commits the simulators") {
+    // The scene worker commits every simulator when a chunk changes; the pathing gives each
+    // wanted sound a fresh source every run. Adding one during the worker's commit (a list copied
+    // while it grows) crashed the game walking towards an occluded sound.
+    OfflineEngine e(pathing_config());
+    set_materials(e);
+    const std::vector<uint16_t> cells = room(true);
+    set_chunk(e, cells);
+    e.listener(8.0f, 3.6f, 16.0f, 0.0f, 0.0f, -1.0f);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000 * 4, 0.3f), 1, kRate);
+    for (const float x : {5.0f, 6.0f, 9.0f, 10.0f}) {
+        REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, x, 3.0f, 6.0f)) == VSA_OK);
+    }
+    e.render(kRate / 2);
+    CHECK(stats(e).wanted >= 1);
+    vsa_chunk_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.materials = cells.data();
+    for (int i = 0; i < 400; ++i) {
+        desc.x = 1 + i % 3;  // neighbours, re-sent: the worker commits the scene and the simulators
+        REQUIRE(vsa_scene_set_chunk(e.engine, &desc) == VSA_OK);
+        e.render(kRate / 10);  // a pathing run: every source removed, fresh ones added
+    }
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+    CHECK(stats(e).wanted >= 1);
 }
 
 TEST_CASE("pathing: a sound with no path inherits none from the sound before it") {

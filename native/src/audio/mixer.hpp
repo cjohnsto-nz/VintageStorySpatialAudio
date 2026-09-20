@@ -83,6 +83,13 @@ public:
         return static_cast<double>(block_frames_) / sample_rate_;
     }
     [[nodiscard]] MixerStats& stats() noexcept { return stats_; }
+    /// Blocks rendered so far (the inspector's readings are stamped with it).
+    [[nodiscard]] uint64_t block_index() const noexcept { return block_index_; }
+
+    /// Turns the sound inspector on: the render thread then works out, per voice per block, what
+    /// it sounded like and how much of it came by each way. Off, it costs nothing.
+    void set_inspect(bool on) noexcept { inspect_.store(on, std::memory_order_relaxed); }
+    [[nodiscard]] bool inspecting() const noexcept { return inspect_.load(std::memory_order_relaxed); }
 
 private:
     enum class Generated { Silent, SilentAndEnded, Produced, ProducedAndEnded };
@@ -146,6 +153,8 @@ private:
     bool update_direct(VoiceSlot& s, SpatialParams& params) noexcept;
     void advance_env(RenderVoice& v, uint32_t frames) const noexcept;
     void gather(const Asset& asset, int64_t first, int64_t end, bool loop, bool wrap_before_start) noexcept;
+    /// Leaves this voice's level and the way it reached the listener on its slot.
+    void inspect(VoiceSlot& s, const SpatialParams& params, const float* mono, bool positioned) noexcept;
     void publish_position(VoiceSlot& s) noexcept;
     void post_event(vsa_event_type type, vsa_voice voice, uint64_t token, uint32_t flags) noexcept;
 
@@ -238,6 +247,12 @@ private:
     std::vector<float> bus_gain_storage_;
     std::array<float*, VSA_BUS_COUNT> bus_gains_{};
     std::vector<float> spatial_storage_;
+    /// Whether the render thread works out each voice's breakdown (off: it costs nothing).
+    std::atomic<bool> inspect_{false};
+    // Debugging (vsa_engine_set_route_gains): the render thread's own copies.
+    float direct_route_gain_ = 1.0f;
+    float path_route_gain_ = 1.0f;
+
     std::array<float*, kMaxOutputChannels> spatial_out_{};
     std::vector<float> gain_buf_;
     std::vector<float> bus_storage_;

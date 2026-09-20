@@ -84,8 +84,15 @@ public:
 
     /// Moves `point` towards `target` until nothing of `what` holds it (at most `max_cells`
     /// steps), ending `beyond` metres past the last face. Returns true if the point moved.
+    /// Only the block it starts in is left through solid: where the way out of that block leads
+    /// into another solid cell, the point leaves by an open face instead (`sidestep`), so it
+    /// never comes out on the far side of a wall.
     bool escape(double point[3], const double target[3], int max_cells, double beyond = 1e-3,
                 Escaping what = Escaping::Blocks) const;
+    /// Moves `point` just out of its cell by the face, with no solid cell behind it, that lies
+    /// most towards `target`; false (and no move) when every neighbour is solid.
+    bool sidestep(double point[3], const double target[3]) const;
+    [[nodiscard]] bool solid_at(const double point[3]) const;
     /// The bounds of what holds `point` in the sense of `what`: its cell, or the partial block
     /// box it is inside; false in the open.
     bool enclosure(const double point[3], double lo[3], double hi[3], Escaping what) const;

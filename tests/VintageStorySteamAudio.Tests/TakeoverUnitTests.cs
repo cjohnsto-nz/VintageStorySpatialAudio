@@ -71,6 +71,28 @@ public sealed class TakeoverUnitTests
     }
 
     [Fact]
+    public void The_reference_distance_multiplier_carries_every_sound_further()
+    {
+        try
+        {
+            // Doubling it doubles the distance a sound plays at full volume, and the engine's
+            // 1/d beyond that then gives about 6 dB more wherever you stand.
+            SteamAudioSound.ReferenceDistanceScale = 2f;
+            Assert.Equal(16f, SteamAudioSound.Placement(new SoundParams { Position = new Vec3f(10, 64, -5), Range = 100 }).MinDistance);
+            Assert.Equal(6f, SteamAudioSound.Placement(new SoundParams { Position = new Vec3f(1, 1, 1), Range = 16 }).MinDistance);
+            // An explicit reference distance is carried too: it is the same curve either way.
+            Assert.Equal(3f, SteamAudioSound.Placement(new SoundParams { Position = new Vec3f(1, 1, 1), ReferenceDistance = 1.5f }).MinDistance);
+
+            // At 32 m a sound with an 8 m reference is 0.25; at 16 m it is 0.5: 6 dB louder.
+            Assert.Equal(6.02f, 20f * MathF.Log10(16f / 8f), 1);
+        }
+        finally
+        {
+            SteamAudioSound.ReferenceDistanceScale = 1f;
+        }
+    }
+
+    [Fact]
     public void The_sound_cap_transpiler_replaces_exactly_the_250_constant()
     {
         CodeInstruction[] original =

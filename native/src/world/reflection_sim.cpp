@@ -88,7 +88,10 @@ ReflectionSimulator::ReflectionSimulator(const steam::SteamContext& steam, World
             IPLSourceSettings source_settings{};
             source_settings.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
             check(iplSourceCreate(simulator_.get(), &source_settings, source.handle.out()), "iplSourceCreate");
-            iplSourceAdd(source.handle.get(), simulator_.get());
+            {
+                std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                iplSourceAdd(source.handle.get(), simulator_.get());
+            }
             IPLSimulationOutputs outputs{};
             iplSourceGetOutputs(source.handle.get(), IPL_SIMULATIONFLAGS_REFLECTIONS, &outputs);
             source.ir = outputs.reflections.ir;
@@ -98,7 +101,10 @@ ReflectionSimulator::ReflectionSimulator(const steam::SteamContext& steam, World
     } catch (...) {
         for (Source& source : sources_) {
             if (source.handle) {
-                iplSourceRemove(source.handle.get(), simulator_.get());
+                {
+                    std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                    iplSourceRemove(source.handle.get(), simulator_.get());
+                }
             }
         }
         {
@@ -123,7 +129,10 @@ ReflectionSimulator::~ReflectionSimulator() {
     set_threaded(false);
     // Remove + Commit before Release.
     for (Source& source : sources_) {
-        iplSourceRemove(source.handle.get(), simulator_.get());
+        {
+            std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+            iplSourceRemove(source.handle.get(), simulator_.get());
+        }
     }
     {
         std::shared_lock lock(scene_.scene_lock());

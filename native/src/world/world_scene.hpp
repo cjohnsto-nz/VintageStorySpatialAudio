@@ -156,6 +156,11 @@ public:
     /// commits). Detach before destroying the simulator or this scene.
     void attach(IPLSimulator simulator);
     void detach(IPLSimulator simulator);
+    /// The scene worker commits every attached simulator (iplSimulatorCommit) under this lock,
+    /// held exclusively, whenever the scene changes. A commit copies the simulator's pending
+    /// source and probe batch lists, so a simulator's own thread must hold the lock (shared) for
+    /// every iplSourceAdd/Remove and iplSimulatorAdd/RemoveProbeBatch as well: an unlocked add
+    /// during the worker's commit crashed the game inside Steam Audio.
     [[nodiscard]] SceneLock& scene_lock() noexcept { return scene_mutex_; }
     /// The current top-level scene, for Steam Audio calls that take a scene. Hold scene_lock()
     /// shared for as long as the handle is used: a compaction replaces the scene.

@@ -7,6 +7,7 @@
 #include "world/path_baker.hpp"
 #include "world/path_channel.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -68,6 +69,8 @@ public:
 
     void set_listener(const ListenerPose& pose) noexcept { listener_.publish(pose); }
     void set_threaded(bool threaded);
+    /// Debugging: no alternates to a blocked baked path, so the legs reported are the legs heard.
+    void set_baked_only(bool on) noexcept { baked_only_.store(on, std::memory_order_relaxed); }
     [[nodiscard]] bool threaded() const noexcept { return thread_.joinable(); }
     void offline_tick(double seconds);
     /// One run. Not concurrent with itself.
@@ -77,6 +80,7 @@ public:
     [[nodiscard]] std::vector<PathSegment> segments() const;
 
 private:
+    std::atomic<bool> baked_only_{false};
     struct Source {
         steam::Source handle;
         bool added = false;

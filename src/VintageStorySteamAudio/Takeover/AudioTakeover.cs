@@ -96,6 +96,9 @@ internal sealed class AudioTakeover : IDisposable
         };
         float rangeScale = float.IsFinite(config.SoundRangeMultiplier) ? Math.Clamp(config.SoundRangeMultiplier, 1f, 16f) : 3f;
         PlatformPatches.RangeScaleSquared = rangeScale * rangeScale;
+        SteamAudioSound.ReferenceDistanceScale = float.IsFinite(config.ReferenceDistanceMultiplier)
+            ? Math.Clamp(config.ReferenceDistanceMultiplier, 0.25f, 8f)
+            : 1f;
         var takeover = new AudioTakeover(api, logger, session, members, config);
         try
         {

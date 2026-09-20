@@ -32,6 +32,8 @@ enum class Op : uint32_t {
     SetMasterGain,
     SetRenderMode,
     SetReflectionGain,
+    SetMuted,       // debugging: this voice is silenced whatever its gain and fades say
+    SetRouteGains,  // debugging: vec[0] the direct sound's gain, vec[1] the paths' 
     SetReflectionMix,  // value: early reflections' gain, seconds: the tail's
 };
 
@@ -86,6 +88,7 @@ struct RenderVoice {
     int effect_set = -1;
     /// Inaudible: position advances, nothing is rendered.
     bool is_virtual = false;
+    bool muted = false;  // debugging (vsa_voice_set_muted): silent, and asks for no simulation
     /// Estimated output level from the last block (gain x bus x master x distance), times what
     /// walls let through.
     float level = 0.0f;
@@ -145,6 +148,20 @@ struct VoiceSlot {
     uint32_t initial_spatial = VSA_SPATIAL_NONE;
     float initial_position[3] = {0.0f, 0.0f, 0.0f};
     float initial_min_distance = 1.0f;
+
+    // What this voice sounded like in the latest block, and by which way it reached the
+    // listener, for the sound inspector (".steamaudio scene sounds"). Written by the render
+    // thread when the engine is asked for it, read by the API: a torn read is a wrong decimal
+    // in a debug view, and the render thread must not lock for it.
+    std::atomic<float> heard_db{-200.0f};
+    std::atomic<float> direct_db{-200.0f};
+    std::atomic<float> path_db{-200.0f};
+    std::atomic<float> reflection_db{-200.0f};
+    std::atomic<float> heard_distance{0.0f};
+    std::atomic<float> heard_position[3] = {};
+    std::atomic<float> heard_arrival[3] = {};
+    std::atomic<uint32_t> heard_flags{0};
+    std::atomic<uint64_t> heard_block{0};
 
     RenderVoice render;
 };

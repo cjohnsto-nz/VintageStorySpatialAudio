@@ -295,7 +295,8 @@ void PathBaker::bake(const Box& box) {
     for (int k = 0; k < 3; ++k) {
         stats_.centre[k] = (box.min[k] + box.max[k]) / 2.0;
     }
-    Log::writef(VSA_LOG_INFO, "pathing: baked %u probes %.1f m apart over %u x %u x %u blocks from %zu chunks in %.0f ms",
+    // Every few seconds while the player walks: for the debug log, not the main one.
+    Log::writef(VSA_LOG_DEBUG, "pathing: baked %u probes %.1f m apart over %u x %u x %u blocks from %zu chunks in %.0f ms",
                 batch->probes, static_cast<double>(spacing), settings_.range, settings_.height, settings_.range,
                 snapshot->chunk_count(), batch->bake_ms);
 }

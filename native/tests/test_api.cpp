@@ -207,3 +207,57 @@ TEST_CASE("the default config reports every setting resolved, and running it cha
     REQUIRE(vsa_get_default_config(&again) == VSA_OK);
     CHECK(std::memcmp(&again, &defaults, sizeof again) == 0);
 }
+
+TEST_CASE("the sound inspector says how loud each voice is and which way it reaches the listener") {
+    OfflineEngine e(make_config(VSA_RAY_TRACER_AUTO));
+    const AssetPtr tone = e.pcm(sine(440.0, 48000.0, 48000, 0.5f), 1, 48000);
+    const AssetPtr quiet = e.pcm(sine(660.0, 48000.0, 48000, 0.05f), 1, 48000);
+    std::vector<vsa_audible_voice> rows(32);
+    uint32_t count = 0;
+
+    // Off by default: nothing reported, and the render thread does none of the work.
+    REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, 2.0f, 0.0f, 0.0f)) == VSA_OK);
+    REQUIRE(vsa_voice_start(e.engine, e.positioned(quiet, VSA_SPATIAL_WORLD, 3.0f, 0.0f, 0.0f)) == VSA_OK);
+    e.render(4800);
+    rows[0].struct_size = sizeof(vsa_audible_voice);
+    REQUIRE(vsa_engine_get_audible(e.engine, rows.data(), 32, &count) == VSA_OK);
+    CHECK(count == 0);
+
+    REQUIRE(vsa_engine_set_inspect(e.engine, 1) == VSA_OK);
+    e.render(4800);
+    rows[0].struct_size = sizeof(vsa_audible_voice);
+    REQUIRE(vsa_engine_get_audible(e.engine, rows.data(), 32, &count) == VSA_OK);
+    REQUIRE(count == 2);
+    CHECK(rows[0].struct_size == sizeof(vsa_audible_voice));
+    // Loudest first, and the louder tone really is the louder one.
+    CHECK(rows[0].heard_db > rows[1].heard_db);
+    CHECK(rows[0].heard_db > -60.0f);
+    CHECK(rows[0].voice != rows[1].voice);
+    // In the open, everything it is worth arrives by the direct way.
+    CHECK(rows[0].direct_db == doctest::Approx(rows[0].heard_db).epsilon(0.05));
+    CHECK(rows[0].distance == doctest::Approx(2.0f).epsilon(0.2));
+    CHECK((rows[0].flags & VSA_AUDIBLE_HEAD_LOCKED) == 0);
+
+    // A head-locked sound is reported as one, at no distance.
+    REQUIRE(vsa_voice_start(e.engine, e.voice(tone, 1.0f, false, 1.0f, VSA_BUS_MUSIC)) == VSA_OK);
+    e.render(4800);
+    rows[0].struct_size = sizeof(vsa_audible_voice);
+    REQUIRE(vsa_engine_get_audible(e.engine, rows.data(), 32, &count) == VSA_OK);
+    REQUIRE(count == 3);
+    const auto locked = std::find_if(rows.begin(), rows.begin() + count, [](const vsa_audible_voice& r) {
+        return (r.flags & VSA_AUDIBLE_HEAD_LOCKED) != 0;
+    });
+    REQUIRE(locked != rows.begin() + count);
+    CHECK(locked->distance == 0.0f);
+    CHECK(locked->bus == VSA_BUS_MUSIC);
+
+    // The count alone, and switching it off again.
+    uint32_t total = 0;
+    REQUIRE(vsa_engine_get_audible(e.engine, nullptr, 0, &total) == VSA_OK);
+    CHECK(total == count);
+    REQUIRE(vsa_engine_set_inspect(e.engine, 0) == VSA_OK);
+    e.render(4800);
+    rows[0].struct_size = sizeof(vsa_audible_voice);
+    REQUIRE(vsa_engine_get_audible(e.engine, rows.data(), 32, &count) == VSA_OK);
+    CHECK(count == 0);
+}
