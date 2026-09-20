@@ -20,12 +20,13 @@ void check(IPLerror error, const char* what) {
     }
 }
 
+// Steam Audio 4.8.1's path baker calls its progress callback unconditionally: it must not be
+// null. It is a no-op: cancelling a bake through it is not safe (ADR 0017).
+void IPLCALL no_progress(IPLfloat32, void*) {}
+
 double since_ms(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
-
-// Steam Audio 4.8.1's path baker calls its progress callback unconditionally: it must not be null.
-void IPLCALL no_progress(IPLfloat32, void*) {}
 
 constexpr auto kPoll = std::chrono::milliseconds(100);
 
@@ -47,9 +48,7 @@ void PathBaker::set_listener(const ListenerPose& pose) noexcept {
     for (int k = 0; k < 3; ++k) {
         const float centre = baking_centre_[k].load(std::memory_order_relaxed);
         if (std::abs(pose.position[k] - centre) > size[k] / 3.0f) {
-            if (!abandoned_.exchange(true, std::memory_order_acq_rel)) {
-                iplPathBakerCancelBake(steam_.context());
-            }
+            abandoned_.store(true, std::memory_order_release);  // the result will be thrown away
             return;
         }
     }
@@ -61,9 +60,9 @@ PathBaker::~PathBaker() {
             std::lock_guard lock(thread_mutex_);
             stop_ = true;
         }
-        iplPathBakerCancelBake(steam_.context());
+        abandoned_.store(true, std::memory_order_release);  // its result will be thrown away
         wake_.notify_all();
-        thread_.join();
+        thread_.join();  // a bake in flight runs to the end: about a second (ADR 0015)
     }
 }
 
@@ -82,9 +81,9 @@ void PathBaker::set_threaded(bool threaded) {
             std::lock_guard lock(thread_mutex_);
             stop_ = true;
         }
-        iplPathBakerCancelBake(steam_.context());
+        abandoned_.store(true, std::memory_order_release);  // its result will be thrown away
         wake_.notify_all();
-        thread_.join();
+        thread_.join();  // a bake in flight runs to the end: about a second (ADR 0015)
     }
 }
 
@@ -264,6 +263,7 @@ void PathBaker::bake(const Box& box) {
         bake.visRange = settings_.vis_range;
         bake.pathRange = settings_.path_range;
         bake.numThreads = static_cast<IPLint32>(settings_.threads);
+        // The callback is not optional: Steam Audio 4.8.1 calls it unconditionally (ADR 0013).
         iplPathBakerBake(steam_.context(), &bake, &no_progress, nullptr);
     }
     batch->bake_ms = since_ms(started);

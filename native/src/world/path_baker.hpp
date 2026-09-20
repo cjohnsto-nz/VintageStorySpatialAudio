@@ -131,6 +131,12 @@ private:
 
     // Read by set_listener on the game's thread while a bake runs on ours.
     std::atomic<bool> baking_{false};
+    /// Set when the listener leaves the box being baked: the result is thrown away when the
+    /// bake finishes. The bake itself is never cut short -- see ADR 0017. Steam Audio 4.8.1's
+    /// `iplPathBakerCancelBake` cannot be used at all: its thread pool's cancel flag is never
+    /// cleared, so once set the workers stop waiting and spin calling `processNextJob` on a
+    /// `JobGraph` the bake has already destroyed. The game then dies seconds later, somewhere
+    /// else, with no managed exception to show for it.
     std::atomic<bool> abandoned_{false};
     std::atomic<float> baking_centre_[3] = {};
 

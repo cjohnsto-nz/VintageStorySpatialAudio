@@ -7,7 +7,7 @@ Guidance for Claude Code in this repo. The current state and next steps are in [
 A Vintage Story client mod that replaces the game's audio engine with a native engine built on Steam Audio 4.8.1.
 
 - The plan is in `docs/PLAN.md`.
-- The decisions are in `docs/adr/` (ADRs 0001–0016).
+- The decisions are in `docs/adr/` (ADRs 0001–0017).
 - The evidence behind them is in `docs/investigations/phase0.md`.
 
 ## Build and test (Windows, PowerShell 7)

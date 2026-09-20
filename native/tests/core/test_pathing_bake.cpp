@@ -14,6 +14,7 @@
 #include <cmath>
 #include <memory>
 #include <shared_mutex>
+#include <thread>
 #include <vector>
 
 using namespace vsa::world;
@@ -288,6 +289,58 @@ TEST_CASE("pathing: the probe budget bounds the bake, whatever the terrain holds
             CHECK(stats.spacing > settings.spacing);
             CHECK(stats.last_bake_ms < loose_ms);
         }
+    }
+}
+
+TEST_CASE("pathing: a listener that keeps moving abandons bakes without corrupting anything") {
+    // A bake the listener has walked out of is thrown away when it finishes; it is never cut
+    // short, because Steam Audio 4.8.1's cancel poisons its thread pool (ADR 0017) and the game
+    // then dies seconds later, somewhere else. This walks a listener far enough, often enough,
+    // to abandon bake after bake: it crashed within seconds while the bake was being cancelled.
+    vsa::steam::SteamContext steam({VSA_RAY_TRACER_STEAM, false});
+    WorldScene scene(steam);
+    scene.set_materials(materials());
+    const Region region;
+    for (int cy = 0; cy < 2; ++cy) {
+        for (int cz = 0; cz < 2; ++cz) {
+            for (int cx = 0; cx < 2; ++cx) {
+                scene.set_chunk({cx, cy, cz}, region.chunk(cx, cy, cz), 0);
+            }
+        }
+    }
+    REQUIRE(scene.wait_idle(30s));
+
+    PathBakeSettings settings;
+    settings.range = 64;
+    settings.height = 64;
+    PathBaker baker(steam, scene, settings);
+    vsa::ListenerPose pose{};
+    pose.position[1] = kRegion / 2.0f;
+    baker.set_listener(pose);
+    baker.set_threaded(true);
+
+    // Walk from one end of the region to the other and back, a stride at a time. Each leg is
+    // more than a third of the box, so every bake in flight is abandoned.
+    const auto started = std::chrono::steady_clock::now();
+    for (int step = 0; std::chrono::steady_clock::now() - started < 6s; ++step) {
+        const float t = static_cast<float>(step % 20) / 19.0f;
+        pose.position[0] = 8.0f + t * (kRegion - 16.0f);
+        pose.position[2] = kRegion / 2.0f;
+        baker.set_listener(pose);
+        std::this_thread::sleep_for(60ms);
+    }
+    baker.set_threaded(false);
+
+    const PathBakeStats stats = baker.stats();
+    MESSAGE("moving: " << stats.bakes << " bakes, " << stats.cancelled << " abandoned, last " << stats.last_bake_ms << " ms");
+    CHECK(stats.cancelled > 0);            // the point of the exercise
+    CHECK_FALSE(stats.baking);             // nothing left running
+    CHECK(stats.bakes + stats.cancelled > 0);
+    // Whatever it settled on is a whole batch, or none at all.
+    const std::shared_ptr<const PathBatch> batch = baker.current();
+    if (batch) {
+        CHECK(batch->probes > 0);
+        CHECK(batch->probes <= settings.max_probes);
     }
 }
 
