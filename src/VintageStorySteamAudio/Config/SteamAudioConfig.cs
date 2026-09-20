@@ -100,6 +100,19 @@ public sealed class SteamAudioConfig
     public float SoundRangeMultiplier { get; set; } = 3f;
 
     /// <summary>
+    /// How far a sound carries. Every sound's reference distance -- the distance within which it
+    /// plays at full volume -- is multiplied by this (0.25 to 8). The fall-off stays physical
+    /// beyond it (inverse distance, about 6 dB quieter each time the distance doubles), so this
+    /// moves the whole curve outwards rather than bending it: 2 is roughly 6 dB more at every
+    /// distance past the reference, and twice the distance for a given loudness.
+    ///
+    /// Raise <see cref="SoundRangeMultiplier"/> alongside it, or the game will still not start
+    /// sounds that are far away. Louder distant sounds also stay simulated for longer, so more
+    /// of them hold Steam Audio effects at once.
+    /// </summary>
+    public float ReferenceDistanceMultiplier { get; set; } = 1f;
+
+    /// <summary>
     /// Sounds a creature or player makes follow them while they play. Vanilla leaves each sound where
     /// it started, so a running wolf's growl stays behind it.
     /// </summary>

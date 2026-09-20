@@ -22,6 +22,15 @@ public sealed class SteamAudioSound : ILoadedSound
 {
     private const float VanillaDefaultReferenceDistance = 3f;
 
+    /// <summary>
+    /// Every sound's reference distance is multiplied by this (ReferenceDistanceMultiplier in
+    /// the settings). The fall-off itself stays physical -- the engine plays a sound at full
+    /// volume within its reference distance and at 1/d beyond it -- so this moves the whole
+    /// curve outwards rather than bending it: 2 is about 6 dB more at every distance past the
+    /// reference, and twice the distance for a given loudness.
+    /// </summary>
+    public static float ReferenceDistanceScale { get; set; } = 1f;
+
     private readonly AudioSession session;
     private readonly Func<AudioAsset?> resolveAsset;
     private readonly Lock gate = new();
@@ -451,6 +460,7 @@ public sealed class SteamAudioSound : ILoadedSound
         float minDistance = soundParams.ReferenceDistance != VanillaDefaultReferenceDistance
             ? soundParams.ReferenceDistance
             : Math.Max(VanillaDefaultReferenceDistance, MathF.Sqrt(soundParams.Range) - 2f);
+        minDistance *= ReferenceDistanceScale;
 
         if (soundParams.RelativePosition)
         {
