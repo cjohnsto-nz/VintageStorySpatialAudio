@@ -55,6 +55,11 @@
     // box can be a full cube. Kept out of the scene.
     { "code": "game:groundstorage*", "material": "air" },
     { "code": "game:hay*", "material": "cloth" },
+    // Thatch and sod roofing (and its beams) are "Plant" to the game, which would leave a roof
+    // out of the scene: a house with no lid.
+    { "code": "game:*-agedthatch-*", "material": "cloth" },
+    { "code": "game:*-thatch-*", "material": "cloth" },
+    { "code": "game:*-sod-*", "material": "soil" },
     { "code": "game:glasspane*", "material": "glass" }
   ]
 }
