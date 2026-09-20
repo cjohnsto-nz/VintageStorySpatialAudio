@@ -431,7 +431,10 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             }
 
             // The file holds what the engine will actually do, not zeros standing for defaults
-            // (ADR 0018), and gains the settings a new version added.
+            // (ADR 0018), and gains the settings a new version added. The defaults come from the
+            // native library, and this is the first thing in a session to call into it: without
+            // the resolver it is not found, and the whole settings file was thrown away for defaults.
+            NativeLibraryResolver.Register(NativeLibraryResolver.DefaultNativeDirectory(typeof(SteamAudioModSystem).Assembly.Location));
             if (config.Populate(EngineDefaults.Read()) && !fresh)
             {
                 Mod.Logger.Notification("{0}: settings without a value were written out in full.", SteamAudioConfig.FileName);
