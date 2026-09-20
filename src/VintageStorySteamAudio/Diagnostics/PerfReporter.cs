@@ -6,6 +6,12 @@ using VintageStorySteamAudio.Takeover;
 
 namespace VintageStorySteamAudio.Diagnostics;
 
+/// <summary>What one part of the mod costs over the window.</summary>
+/// <param name="Name">The part, as a player would name it.</param>
+/// <param name="CorePercent">Its CPU, in percent of one core.</param>
+/// <param name="Detail">Where the number comes from, or what sets it.</param>
+public readonly record struct CostRow(string Name, double CorePercent, string Detail);
+
 /// <summary>A thread's, or a group of threads', share of one core over the window.</summary>
 /// <param name="Name">The engine's name, or the module.</param>
 /// <param name="Kind">Whose.</param>
@@ -115,6 +121,69 @@ public sealed class PerfReporter
             .ToList();
     }
 
+    /// <summary>
+    /// What each part of the mod costs, largest first: the engine's own threads measured one by
+    /// one, our work on the game's frame, and Steam Audio's ray tracing. Steam Audio runs its
+    /// workers for whichever simulation asked, so that row is not split between them; the
+    /// simulations' own tick times below say which one is asking.
+    /// </summary>
+    public static IReadOnlyList<CostRow> Costs(
+        IReadOnlyList<ThreadShare> shares, PerfSnapshot snapshot, ReflectionStats? reflections, PathingStats? pathing)
+    {
+        ArgumentNullException.ThrowIfNull(shares);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var rows = new List<CostRow>();
+        foreach (ThreadShare share in shares.Where(s => s.Kind != ThreadKind.Other && s.CorePercent >= 0.05))
+        {
+            rows.Add(new CostRow(Rename(share.Name), share.CorePercent, Detail(share.Name, reflections, pathing)));
+        }
+
+        // Our work on the game's own thread, as a share of one core.
+        double mainThread = snapshot.WindowSeconds > 0.0
+            ? snapshot.Sections.Sum(s => s.TotalMs) / (snapshot.WindowSeconds * 1000.0) * 100.0
+            : 0.0;
+        if (mainThread >= 0.05)
+        {
+            rows.Add(new CostRow("the game's own frame", mainThread, $"{snapshot.MainThreadMsPerFrame:0.000} ms per frame"));
+        }
+
+        return rows.OrderByDescending(r => r.CorePercent).ToList();
+
+        static string Rename(string thread) => thread switch
+        {
+            "steam audio workers" => "ray tracing (Steam Audio)",
+            "reflection simulation" => "reflections: the simulation",
+            "render (spatial audio)" or "render (device callback)" => "rendering the sound",
+            "scene builder" or "scene build worker" => "building the world scene",
+            "path baker" => "pathing: the bake",
+            "pathing simulation" => "pathing: the simulation",
+            "direct simulation" => "occlusion and transmission",
+            "engine worker" => "housekeeping",
+            _ => thread,
+        };
+    }
+
+    private static string Detail(string thread, ReflectionStats? reflections, PathingStats? pathing) => thread switch
+    {
+        "steam audio workers" => reflections is { Enabled: true }
+            ? F($"mostly the reflections: {reflections.LastTickMs:0} ms every {1000.0 / Math.Max(1, reflections.RateHz):0} ms on {reflections.Threads} threads")
+            : "the simulations' rays",
+        "reflection simulation" => reflections is { Enabled: true }
+            ? F($"{reflections.LiveSlots} places, {reflections.Rays} rays x {reflections.Bounces} bounces at {reflections.RateHz} Hz")
+            : "",
+        "path baker" => pathing is { Enabled: true }
+            ? F($"{pathing.Probes} probes, {pathing.LastBakeMs:0} ms a bake")
+            : "",
+        _ => "",
+    };
+
+    /// <summary>A bar of `width` at most, in units of one core.</summary>
+    private static string Bar(double corePercent, double topPercent, int width)
+    {
+        int filled = topPercent <= 0.0 ? 0 : (int)Math.Round(width * Math.Clamp(corePercent / topPercent, 0.0, 1.0));
+        return new string('#', Math.Max(corePercent > 0.0 ? 1 : 0, filled));
+    }
+
     public string Report()
     {
         double wallMs = clock.Elapsed.TotalMilliseconds;
@@ -145,6 +214,19 @@ public sealed class PerfReporter
         {
             double perFrame = snap.Frames > 0 ? s.TotalMs / snap.Frames : 0.0;
             text.Append(F($"  {Label(s.Section),-16} {perFrame,7:0.000} ms/frame  {s.Calls,7} calls, {s.SlowCalls,5} over {PerfMonitor.SlowCallMs:0} ms, worst {s.MaxMs,6:0.00} ms, {s.AllocatedBytes / 1024.0,8:0} KB\n"));
+        }
+
+        IReadOnlyList<CostRow> costs = Costs(shares, snap, reflections, pathing);
+        if (costs.Count > 0)
+        {
+            double top = costs[0].CorePercent;
+            double total = costs.Sum(c => c.CorePercent);
+            text.Append(F($"What costs what ({total:0} % of one core in total):\n"));
+            foreach (CostRow c in costs)
+            {
+                text.Append(F($"  {c.Name,-27} {c.CorePercent,5:0.0} % {Bar(c.CorePercent, top, 24),-24}"));
+                text.Append(c.Detail.Length > 0 ? F($"  {c.Detail}\n") : "\n");
+            }
         }
 
         text.Append("Threads, share of one core:\n");

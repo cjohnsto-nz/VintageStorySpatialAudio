@@ -162,6 +162,65 @@ public sealed class PerfMonitorTests
         Assert.Empty(PerfReporter.ThreadShares(start, end, 0.0));
     }
 
+    [Fact]
+    public void The_profiler_costs_little_enough_to_leave_on_in_a_release()
+    {
+        // It measures every frame of a published build, so its own cost has to be lost in the
+        // noise. The busiest section in play is the sound API at a few hundred calls a second.
+        var perf = new PerfMonitor();
+        perf.AttachThread();
+        for (int i = 0; i < 10_000; i++)
+        {
+            using (perf.Measure(PerfSection.SoundApi))
+            {
+            }
+        }
+
+        const int Calls = 500_000;
+        long start = Stopwatch.GetTimestamp();
+        for (int i = 0; i < Calls; i++)
+        {
+            using (perf.Measure(PerfSection.SoundApi))
+            {
+            }
+        }
+
+        double nanosecondsPerCall = (Stopwatch.GetTimestamp() - start) * 1e9 / Stopwatch.Frequency / Calls;
+        Assert.InRange(nanosecondsPerCall, 0.0, 2000.0);
+        // At 1000 calls a second -- far more than any frame makes -- that is under 0.2 % of one core.
+        Assert.True(nanosecondsPerCall * 1000 < 0.002 * 1e9, $"{nanosecondsPerCall:0} ns per scope");
+    }
+
+    [Fact]
+    public void The_cost_breakdown_ranks_the_parts_and_leaves_the_game_out()
+    {
+        ThreadShare[] shares =
+        [
+            new("steam audio workers", ThreadKind.SteamAudio, 14, 82.1),
+            new("reflection simulation", ThreadKind.Engine, 1, 15.4),
+            new("render (spatial audio)", ThreadKind.Engine, 1, 11.0),
+            new("path baker", ThreadKind.Engine, 1, 2.5),
+            new("pathing simulation", ThreadKind.Engine, 1, 0.01),   // below the floor
+            new("Vintagestory.exe", ThreadKind.Other, 1, 42.2),      // the game's, not ours
+        ];
+        var perf = new PerfMonitor();
+        perf.AttachThread();
+        using (perf.Measure(PerfSection.SceneTick))
+        {
+            Spin(5.0);
+        }
+
+        IReadOnlyList<CostRow> costs = PerfReporter.Costs(shares, perf.Snapshot(), null, null);
+        Assert.True(costs.Zip(costs.Skip(1)).All(p => p.First.CorePercent >= p.Second.CorePercent), "largest first");
+        Assert.Equal(82.1, costs.Single(c => c.Name == "ray tracing (Steam Audio)").CorePercent);
+        Assert.Equal(15.4, costs.Single(c => c.Name == "reflections: the simulation").CorePercent);
+        Assert.Equal(11.0, costs.Single(c => c.Name == "rendering the sound").CorePercent);
+        Assert.Equal(2.5, costs.Single(c => c.Name == "pathing: the bake").CorePercent);
+        Assert.Contains(costs, c => c.Name == "the game's own frame");       // our main-thread work
+        Assert.DoesNotContain(costs, c => c.Name.Contains("Vintagestory"));  // never the game's own
+        Assert.DoesNotContain(costs, c => c.Name == "pathing: the simulation");  // too small to list
+    }
+
     private static void Spin(double ms)
     {
         long until = Stopwatch.GetTimestamp() + Ticks(ms);
