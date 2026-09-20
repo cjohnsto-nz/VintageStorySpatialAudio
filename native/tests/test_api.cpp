@@ -165,3 +165,45 @@ TEST_CASE("thread stats name the engine's threads and measure their CPU time") {
     REQUIRE(vsa_engine_get_thread_stats(e.engine, nullptr, 0, &total) == VSA_OK);
     CHECK(total == count);
 }
+
+TEST_CASE("the default config reports every setting resolved, and running it changes nothing") {
+    vsa_engine_config defaults{};
+    defaults.struct_size = sizeof defaults;
+    REQUIRE(vsa_get_default_config(&defaults) == VSA_OK);
+    CHECK(defaults.struct_size == sizeof defaults);
+    // Nothing is left at zero but the fields where zero is the value: the flags, the ray tracer
+    // (auto), the ABI version and the reserved word.
+    CHECK(defaults.sample_rate == 48000);
+    CHECK(defaults.block_frames == 256);
+    CHECK(defaults.max_voices > 0);
+    CHECK(defaults.max_real_voices > 0);
+    CHECK(defaults.max_binaural_voices > 0);
+    CHECK(defaults.stream_threshold_ms > 0);
+    CHECK(defaults.occlusion_samples > 0);
+    CHECK(defaults.direct_rate_hz > 0);
+    CHECK(defaults.reflection_sources > 0);
+    CHECK(defaults.reflection_rays >= 256);
+    CHECK(defaults.reflection_bounces > 0);
+    CHECK(defaults.reflection_duration > 0.0f);
+    CHECK(defaults.reflection_order > 0);
+    CHECK(defaults.reflection_rate_hz > 0);
+    CHECK(defaults.reflection_threads > 0);  // from this machine's cores
+    CHECK(defaults.reflection_transition > 0.0f);
+    CHECK(defaults.pathing_range >= 32);
+    CHECK(defaults.pathing_height >= 16);
+    CHECK(defaults.pathing_probe_spacing > 0.0f);
+    CHECK(defaults.pathing_vis_samples > 0);
+    CHECK(defaults.pathing_rate_hz > 0);
+    CHECK(defaults.pathing_sources > 0);
+    CHECK(defaults.pathing_max_probes >= 64);
+
+    // Every one of them is accepted, and resolves to itself: writing them into a settings file
+    // and reading it back must not change what the engine does.
+    defaults.abi_version = VSA_ABI_VERSION;
+    defaults.ray_tracer = VSA_RAY_TRACER_AUTO;
+    ScopedEngine e(defaults);
+    vsa_engine_config again{};
+    again.struct_size = sizeof again;
+    REQUIRE(vsa_get_default_config(&again) == VSA_OK);
+    CHECK(std::memcmp(&again, &defaults, sizeof again) == 0);
+}

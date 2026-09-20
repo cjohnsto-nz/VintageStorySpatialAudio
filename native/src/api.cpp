@@ -134,6 +134,16 @@ vsa::Engine& engine_of(vsa_engine* engine) {
 
 extern "C" {
 
+VSA_API vsa_result VSA_CALL vsa_get_default_config(vsa_engine_config* out) {
+    return guarded([&] {
+        check_out_struct(out, "vsa_engine_config");
+        const uint32_t size = out->struct_size;
+        *out = vsa::Engine::default_config();
+        out->struct_size = size;  // the caller's, which may be an older (smaller) layout
+        return VSA_OK;
+    });
+}
+
 VSA_API vsa_result VSA_CALL vsa_get_version(vsa_version_info* out) {
     return guarded([&] {
         check_out_struct(out, "vsa_version_info");

@@ -585,7 +585,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 13;
+    public const uint AbiVersion = 14;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;
@@ -791,6 +791,10 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_path_segments")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult EngineGetPathSegments(nint engine, VsaPathSegment* segments, uint capacity, out uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_get_default_config")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult GetDefaultConfig(ref VsaEngineConfig config);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_thread_stats")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

@@ -25,6 +25,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
     private AudioTakeover? takeover;
     private TestPlayback? playback;
     private PerfReporter? perf;
+    private SteamAudioConfig? config;
     private FrameProbe? frameProbe;
     private WorldAcoustics? world;
     private SceneDebugTools? sceneTools;
@@ -74,6 +75,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         if (engine is not null)
         {
             SteamAudioConfig config = LoadConfig(api);
+            this.config = config;
             playback = new TestPlayback(engine, Mod.Logger, config.TestOutputDevice);
             PerfMonitor.Instance.AttachThread();
             perf = new PerfReporter(PerfMonitor.Instance, engine, () => takeover?.Session);
@@ -120,6 +122,11 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .WithDescription("Noise from each 7.1.4 speaker position in turn, then overhead; '.steamaudio speakertest stop' ends it")
                 .WithArgs(parsers.OptionalWord("stop"))
                 .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
+            .EndSubCommand()
+            .BeginSubCommand("config")
+                .WithDescription("The settings file: where it is, and 'reset' to put every setting back to its default (the new defaults of a new version included)")
+                .WithArgs(parsers.OptionalWord("action"))
+                .HandleWith(args => WithEngine(() => ConfigCommand(api, args[0] as string)))
             .EndSubCommand()
             .BeginSubCommand("perf")
                 .WithDescription("What the mod costs since the last reset: our main-thread time per frame by section, every thread's share of a core, memory; 'reset' starts a new window")
@@ -298,6 +305,38 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         _ => "none (offline)",
     };
 
+    /// <summary>".steamaudio config [reset]".</summary>
+    private string ConfigCommand(ICoreClientAPI api, string? action)
+    {
+        if (config is null)
+        {
+            return "The engine is not running.";
+        }
+
+        string path = Path.Combine(api.GetOrCreateDataPath("ModConfig"), SteamAudioConfig.FileName);
+        if (action is null)
+        {
+            return $"Settings: {path}\n" + string.Create(
+                CultureInfo.InvariantCulture,
+                $"Reflections: {config.ReflectionQuality}, {config.ReflectionSources} places, {config.ReflectionRays} rays x {config.ReflectionBounces} bounces, " +
+                $"{config.ReflectionDurationSeconds:0.##} s order {config.ReflectionOrder}, {config.ReflectionRateHz} Hz, {config.ReflectionThreads} threads, gain {config.ReflectionGain:0.##}\n" +
+                $"Pathing: {config.PathingRangeBlocks} x {config.PathingHeightBlocks} x {config.PathingRangeBlocks} blocks, probes {config.PathingProbeSpacing:0.#} m apart up to {config.PathingMaxProbes}, " +
+                $"{config.PathingRateHz} Hz, {config.PathingSources} sounds\n" +
+                $"Occlusion: {config.OcclusionSamples} samples at {config.OcclusionRateHz} Hz\n") +
+                "Every value is written out in full; edit the file and restart. '.steamaudio config reset' restores the defaults.";
+        }
+
+        if (!string.Equals(action, "reset", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Usage: .steamaudio config [reset]";
+        }
+
+        config.ResetToDefaults(EngineDefaults.Read());
+        api.StoreModConfig(config, SteamAudioConfig.FileName);
+        Mod.Logger.Notification("{0} was reset to the defaults.", SteamAudioConfig.FileName);
+        return $"Settings reset to the defaults and written to {path}. Restart the game to apply them.";
+    }
+
     /// <summary>
     /// ".steamaudio perf [reset]". The report also goes to client-main.log: chat text cannot be
     /// copied out of the game, and these numbers are read afterwards, not in the moment.
@@ -391,7 +430,13 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 Mod.Logger.Notification("{0} was written by an earlier version; defaults that changed since were updated.", SteamAudioConfig.FileName);
             }
 
-            // Rewritten every time so new options appear in the file with their defaults.
+            // The file holds what the engine will actually do, not zeros standing for defaults
+            // (ADR 0018), and gains the settings a new version added.
+            if (config.Populate(EngineDefaults.Read()) && !fresh)
+            {
+                Mod.Logger.Notification("{0}: settings without a value were written out in full.", SteamAudioConfig.FileName);
+            }
+
             api.StoreModConfig(config, SteamAudioConfig.FileName);
             return config;
         }

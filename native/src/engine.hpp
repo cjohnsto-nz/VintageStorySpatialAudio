@@ -111,6 +111,11 @@ public:
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
+    /// A config with every field resolved: what a zeroed config would actually run as, including
+    /// the values that depend on the machine (the reflection threads). The settings file is
+    /// written from this, so it holds real numbers rather than zeros (ADR 0018).
+    [[nodiscard]] static vsa_engine_config default_config();
+
     /// The world as Steam Audio geometry (thread-safe).
     [[nodiscard]] world::WorldScene& scene() noexcept { return *scene_; }
     /// The direct simulation (thread-safe queries); null when disabled.

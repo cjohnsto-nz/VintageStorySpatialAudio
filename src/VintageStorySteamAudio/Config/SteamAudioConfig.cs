@@ -1,3 +1,4 @@
+using System.Globalization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using VintageStorySteamAudio.Native;
@@ -127,6 +128,12 @@ public sealed class SteamAudioConfig
     /// materials make them. Replaces vanilla's reverb presets.
     /// </summary>
     public bool Reflections { get; set; } = true;
+
+    /// <summary>
+    /// The preset the reflection numbers below were worked out from. The mod sets it; change
+    /// <see cref="ReflectionQuality"/> and they are worked out again from the new preset.
+    /// </summary>
+    public ReflectionQuality? ReflectionQualityApplied { get; set; }
 
     /// <summary>Low, Medium, High or Ultra (see <see cref="ReflectionPresets"/>); the settings below override single values.</summary>
     [JsonConverter(typeof(StringEnumConverter))]
@@ -266,6 +273,100 @@ public sealed class SteamAudioConfig
 
         return changed;
     }
+
+    /// <summary>
+    /// Writes the effective value into every setting that is still unset, so the file says what
+    /// the engine will actually do rather than leaving zeros to stand for "the default"
+    /// (ADR 0018). Reflection values come from <see cref="ReflectionQuality"/>'s preset, the
+    /// rest from the engine; a value already set is kept. Changing the quality works the
+    /// reflection numbers out again. Returns true if anything changed.
+    /// </summary>
+    public bool Populate(EngineDefaults defaults)
+    {
+        ArgumentNullException.ThrowIfNull(defaults);
+        string before = Fingerprint();
+        if (ReflectionQualityApplied is not null && ReflectionQualityApplied != ReflectionQuality)
+        {
+            // A new preset replaces the numbers it is responsible for. Only once one has been
+            // applied: on a file from before this, the values in it are the player's own.
+            ReflectionSources = 0;
+            ReflectionRays = 0;
+            ReflectionBounces = 0;
+            ReflectionDurationSeconds = 0f;
+            ReflectionOrder = 0;
+            ReflectionRateHz = 0;
+            ReflectionThreads = 0;
+            ReflectionTransitionSeconds = 0f;
+        }
+
+        ReflectionQualityApplied = ReflectionQuality;
+
+        ReflectionQualitySettings reflections = ReflectionPresets.Resolve(ReflectionQuality, new ReflectionQualitySettings
+        {
+            Sources = ReflectionSources,
+            Rays = ReflectionRays,
+            Bounces = ReflectionBounces,
+            DurationSeconds = ReflectionDurationSeconds,
+            Order = ReflectionOrder,
+            RateHz = ReflectionRateHz,
+            Threads = ReflectionThreads,
+            TransitionSeconds = ReflectionTransitionSeconds,
+        });
+
+        BlockFrames = Keep(BlockFrames, defaults.BlockFrames);
+        MaxVoices = Keep(MaxVoices, defaults.MaxVoices);
+        MaxRealVoices = Keep(MaxRealVoices, defaults.MaxRealVoices);
+        MaxBinauralVoices = Keep(MaxBinauralVoices, defaults.MaxBinauralVoices);
+        OcclusionSamples = Keep(OcclusionSamples, defaults.OcclusionSamples);
+        OcclusionRateHz = Keep(OcclusionRateHz, defaults.OcclusionRateHz);
+
+        ReflectionSources = Keep(reflections.Sources, defaults.ReflectionSources);
+        ReflectionRays = Keep(reflections.Rays, defaults.ReflectionRays);
+        ReflectionBounces = Keep(reflections.Bounces, defaults.ReflectionBounces);
+        ReflectionDurationSeconds = KeepF(reflections.DurationSeconds, defaults.ReflectionDurationSeconds);
+        ReflectionOrder = Keep(reflections.Order, defaults.ReflectionOrder);
+        ReflectionRateHz = Keep(reflections.RateHz, defaults.ReflectionRateHz);
+        ReflectionThreads = Keep(reflections.Threads, defaults.ReflectionThreads);
+        ReflectionTransitionSeconds = KeepF(reflections.TransitionSeconds, defaults.ReflectionTransitionSeconds);
+
+        PathingRangeBlocks = Keep(PathingRangeBlocks, defaults.PathingRangeBlocks);
+        PathingHeightBlocks = Keep(PathingHeightBlocks, defaults.PathingHeightBlocks);
+        PathingProbeSpacing = KeepF(PathingProbeSpacing, defaults.PathingProbeSpacing);
+        PathingVisibilitySamples = Keep(PathingVisibilitySamples, defaults.PathingVisibilitySamples);
+        PathingRateHz = Keep(PathingRateHz, defaults.PathingRateHz);
+        PathingSources = Keep(PathingSources, defaults.PathingSources);
+        PathingMaxProbes = Keep(PathingMaxProbes, defaults.PathingMaxProbes);
+        return Fingerprint() != before;
+
+        static int Keep(int value, int fallback) => value > 0 ? value : fallback;
+        static float KeepF(float value, float fallback) => float.IsFinite(value) && value > 0f ? value : fallback;
+    }
+
+    /// <summary>Every setting back to its default, keeping only the quality preset chosen.</summary>
+    public void ResetToDefaults(EngineDefaults defaults)
+    {
+        ArgumentNullException.ThrowIfNull(defaults);
+        var fresh = new SteamAudioConfig { ReflectionQuality = ReflectionQuality };
+        foreach (System.Reflection.PropertyInfo p in typeof(SteamAudioConfig).GetProperties())
+        {
+            if (p.CanRead && p.CanWrite)
+            {
+                p.SetValue(this, p.GetValue(fresh));
+            }
+        }
+
+        ConfigVersion = CurrentConfigVersion;
+        Populate(defaults);
+    }
+
+    /// <summary>Everything that decides what the engine does, for telling one config from another.</summary>
+    private string Fingerprint() => string.Create(
+        CultureInfo.InvariantCulture,
+        $"{ConfigVersion} {BlockFrames} {MaxVoices} {MaxRealVoices} {MaxBinauralVoices} {OcclusionSamples} {OcclusionRateHz} " +
+        $"{ReflectionQualityApplied} {ReflectionSources} {ReflectionRays} {ReflectionBounces} {ReflectionDurationSeconds} " +
+        $"{ReflectionOrder} {ReflectionRateHz} {ReflectionThreads} {ReflectionTransitionSeconds} " +
+        $"{PathingRangeBlocks} {PathingHeightBlocks} {PathingProbeSpacing} {PathingVisibilitySamples} {PathingRateHz} " +
+        $"{PathingSources} {PathingMaxProbes}");
 
     /// <summary>The reflection gain, clamped to what the engine accepts.</summary>
     public float ReflectionGainClamped() => ClampGain(ReflectionGain);

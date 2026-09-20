@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 13u
+#define VSA_ABI_VERSION 14u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -1052,6 +1052,15 @@ typedef struct vsa_thread_stats {
  */
 VSA_API vsa_result VSA_CALL vsa_engine_get_thread_stats(vsa_engine* engine, vsa_thread_stats* out, uint32_t capacity,
                                                         uint32_t* out_count);
+
+/**
+ * Fills `out` with every setting resolved: what a zeroed config would actually run as, the
+ * values that depend on the machine included (the reflection threads). `out->struct_size` must
+ * be set. No engine is needed. A settings file written from this holds real numbers rather than
+ * zeros, which is what a reader of it needs (ADR 0018); a zero in a config still means "the
+ * default", so an older file keeps working.
+ */
+VSA_API vsa_result VSA_CALL vsa_get_default_config(vsa_engine_config* out);
 
 /** One leg of a traced sound path (vsa_scene_trace_rays). */
 typedef struct vsa_ray_segment {

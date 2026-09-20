@@ -187,6 +187,38 @@ vsa_event make_event(vsa_event_type type) noexcept {
 
 }  // namespace
 
+vsa_engine_config Engine::default_config() {
+    vsa_engine_config config{};
+    config.struct_size = sizeof config;
+    config.abi_version = VSA_ABI_VERSION;
+    const Settings s = validate(config);
+    config.sample_rate = s.sample_rate;
+    config.block_frames = s.block_frames;
+    config.max_voices = s.max_voices;
+    config.resampler_quality = static_cast<uint32_t>(s.resampler_quality);
+    config.stream_threshold_ms = s.stream_threshold_ms;
+    config.max_real_voices = s.max_real_voices;
+    config.max_binaural_voices = s.max_binaural_voices;
+    config.occlusion_samples = s.occlusion_samples;
+    config.direct_rate_hz = s.direct_rate_hz;
+    config.reflection_sources = s.reflection.sources;
+    config.reflection_rays = s.reflection.rays;
+    config.reflection_bounces = s.reflection.bounces;
+    config.reflection_duration = s.reflection.duration;
+    config.reflection_order = s.reflection.order;
+    config.reflection_rate_hz = s.reflection.rate_hz;
+    config.reflection_threads = s.reflection.threads;
+    config.reflection_transition = s.reflection.transition;
+    config.pathing_range = s.path_bake.range;
+    config.pathing_height = s.path_bake.height;
+    config.pathing_probe_spacing = s.path_bake.spacing;
+    config.pathing_vis_samples = s.path_bake.vis_samples;
+    config.pathing_max_probes = s.path_bake.max_probes;
+    config.pathing_rate_hz = s.path_sim.rate_hz;
+    config.pathing_sources = s.path_sim.max_sources;
+    return config;
+}
+
 Engine::Engine(const vsa_engine_config& config)
     : settings_(validate(config)),
       steam_(make_steam(config)),
