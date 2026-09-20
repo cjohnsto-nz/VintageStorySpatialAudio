@@ -29,7 +29,7 @@ This runs the following steps in order:
 3. Managed: build the solution (and run tests unless `-SkipTests`).
 4. `VsaDoctor` verifies every game integration point against your installed game and runs the native self-test.
 5. SceneLab renders every scenario in `tools/SceneLab/scenarios/` to `artifacts/scenelab/` (WAV + metrics JSON) and fails the build if a scenario's expectations are not met (unless `-SkipTests`).
-6. Packaging: `artifacts/mod/` (a drop-in mod folder) and `artifacts/vssteamaudio_<version>.zip`.
+6. Packaging: `artifacts/mod/` (a drop-in mod folder) and `artifacts/spatialaudio_<version>.zip`.
 
 `./deploy.ps1` runs the build (Debug, tests off by default) and copies the zip into `VintagestoryData/Mods`. Add `-StopGame` and/or `-LaunchGame` as needed.
 
@@ -62,7 +62,7 @@ When Vintage Story updates, run this before anything else:
 dotnet tools/VsaDoctor/bin/Release/net10.0/VsaDoctor.dll --game <install> --targets-only
 ```
 
-Every failing entry names the member, what was expected and what exists now (including types that moved namespace). Update `src/VintageStorySteamAudio/Platform/AudioPatchTargets.cs` first, then the code that uses the target.
+Every failing entry names the member, what was expected and what exists now (including types that moved namespace). Update `src/VintageStorySpatialAudio/Platform/AudioPatchTargets.cs` first, then the code that uses the target.
 
 ## CI
 

@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using VintageStorySteamAudio.Native;
+using VintageStorySpatialAudio.Native;
 
 namespace SceneLab;
 

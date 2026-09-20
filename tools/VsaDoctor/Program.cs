@@ -1,8 +1,8 @@
 using System.Reflection;
 using System.Runtime.Loader;
-using VintageStorySteamAudio.Diagnostics;
-using VintageStorySteamAudio.Native;
-using VintageStorySteamAudio.Platform;
+using VintageStorySpatialAudio.Diagnostics;
+using VintageStorySpatialAudio.Native;
+using VintageStorySpatialAudio.Platform;
 
 // VsaDoctor --game <Vintage Story folder> [--native <folder with vsaudio + phonon>] [--targets-only]
 //

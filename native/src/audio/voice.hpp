@@ -150,7 +150,7 @@ struct VoiceSlot {
     float initial_min_distance = 1.0f;
 
     // What this voice sounded like in the latest block, and by which way it reached the
-    // listener, for the sound inspector (".steamaudio scene sounds"). Written by the render
+    // listener, for the sound inspector (".spatialaudio scene sounds"). Written by the render
     // thread when the engine is asked for it, read by the API: a torn read is a wrong decimal
     // in a debug view, and the render thread must not lock for it.
     std::atomic<float> heard_db{-200.0f};

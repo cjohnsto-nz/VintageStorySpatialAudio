@@ -32,7 +32,7 @@ if (-not $NoBuild) {
     & (Join-Path $Root 'scripts/build.ps1') -Configuration $Configuration -SkipTests:(-not $RunTests)
 }
 
-$modInfo = Get-Content -Raw (Join-Path $Root 'src/VintageStorySteamAudio/modinfo.json') | ConvertFrom-Json
+$modInfo = Get-Content -Raw (Join-Path $Root 'src/VintageStorySpatialAudio/modinfo.json') | ConvertFrom-Json
 $zip = Join-Path $Root "artifacts/$($modInfo.modid)_$($modInfo.version).zip"
 if (-not (Test-Path $zip)) { throw "Package not found: $zip (run without -NoBuild)" }
 
@@ -53,6 +53,8 @@ if ($StopGame) {
 
 New-Item -ItemType Directory -Force -Path $modsDir | Out-Null
 Get-ChildItem -Path $modsDir -Filter "$($modInfo.modid)_*.zip" | Remove-Item -Force
+# The mod's name before its first release: both installed would both try to take the audio over.
+Get-ChildItem -Path $modsDir -Filter 'vssteamaudio_*.zip' | Remove-Item -Force
 Copy-Item $zip $modsDir
 Write-Host "Installed $(Split-Path $zip -Leaf) into $modsDir" -ForegroundColor Green
 

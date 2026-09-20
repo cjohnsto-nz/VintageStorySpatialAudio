@@ -7,7 +7,7 @@ page holds the method and the numbers.
 
 ## Tools
 
-- **`.steamaudio perf`** (in game): since the last `.steamaudio perf reset`, the mod's own
+- **`.spatialaudio perf`** (in game): since the last `.spatialaudio perf reset`, the mod's own
   main-thread time per frame by section (listener, entity tracking, event pump, sound creation
   including asset decoding, the `ILoadedSound` calls, the scene tick and its chunk reads, the
   debug HUD and overlay) with the managed memory each allocated; frame time median / p99 / worst
@@ -27,9 +27,9 @@ page holds the method and the numbers.
 One world, one spot, one activity, twice.
 
 **The baseline run** keeps the mod loaded but idle: `"TakeOverGameAudio": false` and
-`"BuildWorldScene": false` in `vssteamaudio.json`. Vanilla OpenAL plays every sound, the engine
+`"BuildWorldScene": false` in `spatialaudio.json`. Vanilla OpenAL plays every sound, the engine
 sits with its threads parked and no device open, and the mod's only work is counting frames — so
-`.steamaudio perf` reports the game's own frame times, measured exactly as they are measured in
+`.spatialaudio perf` reports the game's own frame times, measured exactly as they are measured in
 the other run. Its first line says which run it is. (Disabling the mod outright gives a purer
 CPU and memory baseline, but then nothing inside the game measures frames and the comparison
 rests on the debug screen's fps: worth one run as a sanity check on the process figures, not the
@@ -45,8 +45,8 @@ spots that work the mod hard:
 2. **Cave**: reverb and pathing round bends.
 3. **Forest at night**: lots of ambient sources, few walls.
 
-For each spot, in both runs: `.steamaudio perf reset`, then `perf-sample.ps1` for the sixty
-seconds, then `.steamaudio perf`. Note the CPU model and core count. The game's own debug screen
+For each spot, in both runs: `.spatialaudio perf reset`, then `perf-sample.ps1` for the sixty
+seconds, then `.spatialaudio perf`. Note the CPU model and core count. The game's own debug screen
 is **Ctrl+F3** (Alt+F3 for the fps graph alone) if you want to watch the frame rate live; plain
 F3 is not bound to anything.
 

@@ -4,7 +4,7 @@
 
 ## Context
 
-Every tunable in `vssteamaudio.json` used `0` to mean "use the default", resolved in three
+Every tunable in `spatialaudio.json` used `0` to mean "use the default", resolved in three
 layers: an explicit value, else the named quality preset, else the engine's own default. The
 file a player opened was mostly zeros, and nothing in it said what the engine would actually do —
 `"ReflectionRateHz": 0` is 10 Hz, `"PathingRangeBlocks": 0` is 64 blocks, and the only way to
@@ -26,7 +26,7 @@ settings is the wrong trade. Chris, tuning reflections, could not tell what the 
   resolves a zeroed config through the same code an engine is built with and hands back every
   value, the ones that depend on the machine included (the reflection thread count). There is one
   source of truth.
-- **`.steamaudio config`** prints the file's path and the settings that matter; **`.steamaudio
+- **`.spatialaudio config`** prints the file's path and the settings that matter; **`.spatialaudio
   config reset`** puts every setting back to its default and rewrites the file, which is how a
   player picks up defaults that changed in a new version.
 - **A zero in the file still means "the default"**, so a file written by an older version, or
@@ -38,10 +38,10 @@ settings is the wrong trade. Chris, tuning reflections, could not tell what the 
 
 ## Consequences
 
-- The file is self-documenting, and `.steamaudio config` answers "what is it doing" without the
+- The file is self-documenting, and `.spatialaudio config` answers "what is it doing" without the
   log.
 - **A default that changes no longer reaches an existing config on its own.** That is the cost of
-  the trade, and `.steamaudio config reset` is the answer; release notes should say when a
+  the trade, and `.spatialaudio config reset` is the answer; release notes should say when a
   default worth adopting has changed. `Migrate` (from `ConfigVersion`) stays for defaults that
   must change under a player who never runs reset.
 - Editing a single value still works and still wins, as before.

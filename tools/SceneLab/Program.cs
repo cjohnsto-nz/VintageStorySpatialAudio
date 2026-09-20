@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using SceneLab;
-using VintageStorySteamAudio.Native;
+using VintageStorySpatialAudio.Native;
 
 // SceneLab <scenario.json>... [--out <dir>] [--native <folder with vsaudio + phonon>]
 //
