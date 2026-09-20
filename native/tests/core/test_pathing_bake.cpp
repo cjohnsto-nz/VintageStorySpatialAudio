@@ -101,13 +101,13 @@ private:
             for (int x = x0 - 1; x <= x1 + 1; ++x) {
                 for (int y = floor - 1; y <= floor + tall; ++y) {
                     const bool shell = x == x0 - 1 || x == x1 + 1 || z == z0 - 1 || z == z1 + 1 || y == floor - 1 || y == floor + tall;
-                    set(x, y, z, shell ? wall : Air);
+                    set(x, y, z, shell ? wall : static_cast<uint16_t>(Air));
                 }
                 for (int y = floor + tall + 1; y < kRegion; ++y) {
                     set(x, y, z, Air);  // nothing above the roof
                 }
                 for (int y = 0; y < floor - 1; ++y) {
-                    set(x, y, z, get(x, y, z) == Air ? Stone : get(x, y, z));  // solid ground under it
+                    set(x, y, z, get(x, y, z) == Air ? static_cast<uint16_t>(Stone) : get(x, y, z));  // solid ground under it
                 }
             }
         }

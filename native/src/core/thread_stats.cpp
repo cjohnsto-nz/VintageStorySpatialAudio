@@ -22,6 +22,9 @@
 
 #include <cstdio>
 #include <cstring>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/thread_act.h>
 #endif
 #endif
 
@@ -162,6 +165,20 @@ void ThreadRegistry::close(Entry& entry) noexcept {
 double ThreadRegistry::cpu_ms(const Entry& entry) noexcept {
 #if defined(_WIN32)
     return handle_cpu_ms(static_cast<HANDLE>(entry.handle));
+#elif defined(__APPLE__)
+    // `clock` holds a Mach thread port here, not a clock id; see register_current.
+    if (entry.clock > 0) {
+        thread_basic_info_data_t info{};
+        mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+        if (thread_info(static_cast<thread_inspect_t>(entry.clock), THREAD_BASIC_INFO,
+                        reinterpret_cast<thread_info_t>(&info), &count) == KERN_SUCCESS) {
+            const auto ms = [](const time_value_t& t) {
+                return static_cast<double>(t.seconds) * 1000.0 + static_cast<double>(t.microseconds) / 1000.0;
+            };
+            return ms(info.user_time) + ms(info.system_time);
+        }
+    }
+    return 0.0;
 #else
     if (entry.clock >= 0) {
         timespec ts{};
@@ -190,14 +207,17 @@ void ThreadRegistry::register_current(const std::string& name) {
     entry.handle = handle;
     std::wstring wide(name.begin(), name.end());
     SetThreadDescription(GetCurrentThread(), wide.c_str());
+#elif defined(__APPLE__)
+    // macOS has no pthread_getcpuclockid. The thread's Mach port answers the same question through
+    // thread_info, so `clock` carries the port here. pthread_mach_thread_np hands it over without
+    // taking a reference: there is nothing to deallocate, and it stops answering once the thread
+    // ends, which is exactly when the entry stops being read.
+    entry.clock = static_cast<long>(pthread_mach_thread_np(pthread_self()));
+    pthread_setname_np(name.c_str());
 #else
     clockid_t clock{};
     entry.clock = pthread_getcpuclockid(pthread_self(), &clock) == 0 ? static_cast<long>(clock) : -1;
-#if defined(__linux__)
     pthread_setname_np(pthread_self(), name.substr(0, 15).c_str());
-#else
-    pthread_setname_np(name.c_str());
-#endif
 #endif
     std::lock_guard lock(mutex_);
     for (Entry& existing : entries_) {
