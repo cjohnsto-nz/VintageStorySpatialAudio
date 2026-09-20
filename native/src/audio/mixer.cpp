@@ -715,6 +715,7 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         }
         send_reflections(s, params, left);
         send_path(s, params, left);
+        inspect(s, params, left, true);
         if (v.tier == SpatialTier::Ambisonic) {
             // The shared bus is decoded after every bus gain, so this voice's is applied now.
             const float* bus_gain = bus_gains_[b];
@@ -755,6 +756,7 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
             v.shelf.process(x, frames, c);
         }
     }
+    inspect(s, params, voice_out_[0], false);  // head-locked, a bed, or waiting for an effect set
     if (bed) {
         mix_bed(*s.asset, b);
     } else if (used == 1) {
@@ -1400,6 +1402,65 @@ void Mixer::gather(const Asset& asset, int64_t first, int64_t end, bool loop, bo
         i += run;
         out += static_cast<std::size_t>(run);
     }
+}
+
+void Mixer::inspect(VoiceSlot& s, const SpatialParams& params, const float* mono, bool positioned) noexcept {
+    if (!inspect_.load(std::memory_order_relaxed)) {
+        return;
+    }
+    const RenderVoice& v = s.render;
+    // What the voice itself is worth this block, after its gain, fades and the bus.
+    double sum = 0.0;
+    for (uint32_t j = 0; j < block_frames_; ++j) {
+        const auto sample = static_cast<double>(mono[j]);
+        sum += sample * sample;
+    }
+    const auto rms = static_cast<float>(std::sqrt(sum / std::max(1u, block_frames_)));
+    const auto db = [](float amplitude) { return amplitude > 1e-9f ? 20.0f * std::log10(amplitude) : -200.0f; };
+
+    // Each way it can reach the listener, as the amplitude that way carries into its effect --
+    // not a measurement of what comes out of one. Enough to say which way a sound is arriving
+    // by, and how much louder one way is than another.
+    const float heard = rms * (positioned ? params.distance_gain : 1.0f);
+    float direct = heard;
+    uint32_t flags = 0;
+    if (positioned) {
+        const float air = (params.air_absorption[0] + params.air_absorption[1] + params.air_absorption[2]) / 3.0f;
+        const float through = (params.transmission[0] + params.transmission[1] + params.transmission[2]) / 3.0f;
+        // What the direct effect passes: the visible part of the source, plus what gets through
+        // whatever hides the rest (the engine's own occlusion + (1 - occlusion) * T).
+        direct = heard * air * (params.occlusion + (1.0f - params.occlusion) * through);
+    } else {
+        flags |= VSA_AUDIBLE_HEAD_LOCKED;
+    }
+
+    float path = 0.0f;
+    float reflection = 0.0f;
+    if (positioned && v.effect_set >= 0) {
+        const float loudness = std::clamp(params.distance, 1.0f, std::max(1.0f, v.min_distance));
+        if (paths_ != nullptr) {
+            const PathState& state = path_state_[static_cast<std::size_t>(v.effect_set)];
+            if (state.sounding) {
+                // The path effect's omnidirectional coefficient carries the way round's falloff.
+                path = rms * loudness * std::abs(state.sh[0]);
+                flags |= VSA_AUDIBLE_HAS_PATH;
+            }
+        }
+        if (reflections_ != nullptr && v.reflection_slot > 0) {
+            reflection = rms * loudness * reflection_gain_.value();
+            flags |= VSA_AUDIBLE_HAS_PLACE;
+        }
+    }
+
+    flags |= v.is_virtual ? VSA_AUDIBLE_VIRTUAL : 0u;
+    flags |= v.tier == SpatialTier::Binaural ? VSA_AUDIBLE_BINAURAL : 0u;
+    s.heard_db.store(db(heard), std::memory_order_relaxed);
+    s.direct_db.store(db(direct), std::memory_order_relaxed);
+    s.path_db.store(db(path), std::memory_order_relaxed);
+    s.reflection_db.store(db(reflection), std::memory_order_relaxed);
+    s.heard_distance.store(positioned ? params.distance : 0.0f, std::memory_order_relaxed);
+    s.heard_flags.store(flags, std::memory_order_relaxed);
+    s.heard_block.store(block_index_, std::memory_order_release);
 }
 
 void Mixer::publish_position(VoiceSlot& s) noexcept {

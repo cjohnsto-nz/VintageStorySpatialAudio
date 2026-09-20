@@ -269,6 +269,78 @@ public sealed record PathingStats(
 /// <param name="Occluded">Blocked in the live scene.</param>
 public readonly record struct PathSegment((float X, float Y, float Z) From, (float X, float Y, float Z) To, bool Occluded);
 
+/// <summary>How a sound is reaching the listener.</summary>
+[Flags]
+public enum SoundRoutes
+{
+    None = 0,
+
+    /// <summary>At the listener's head: the player's own sounds, the interface.</summary>
+    HeadLocked = 1,
+
+    /// <summary>Inaudible: advancing without being rendered.</summary>
+    Virtual = 2,
+
+    /// <summary>Some of it is arriving round a corner.</summary>
+    Path = 4,
+
+    /// <summary>It has a place, so it has reflections.</summary>
+    Place = 8,
+
+    /// <summary>Rendered with its own HRTF rather than through the shared Ambisonic mix.</summary>
+    Binaural = 16,
+}
+
+/// <summary>
+/// One sounding voice and the ways it reaches the listener. The levels are the amplitude each
+/// way carries into its effect, in dB, not a measurement of what comes out of one: enough to say
+/// which way a sound arrives by, and how much louder one way is than another. -200 is silence.
+/// </summary>
+/// <param name="Voice">The engine's handle, which names the sound through the session.</param>
+/// <param name="Bus">Which category it plays on.</param>
+/// <param name="Routes">What is carrying it.</param>
+/// <param name="Distance">Metres to the listener (0 when head-locked).</param>
+/// <param name="HeardDb">The voice itself, after its gain, fades, the bus and the distance.</param>
+/// <param name="DirectDb">Of that, what the direct effect passes: what is visible plus what gets through.</param>
+/// <param name="PathDb">What is arriving round corners.</param>
+/// <param name="ReflectionDb">What it is feeding its place's reflections.</param>
+public readonly record struct AudibleVoice(
+    ulong Voice,
+    AudioBus Bus,
+    SoundRoutes Routes,
+    float Distance,
+    float HeardDb,
+    float DirectDb,
+    float PathDb,
+    float ReflectionDb)
+{
+    /// <summary>The loudest way it is arriving by, for a one-word answer.</summary>
+    public string Arrival
+    {
+        get
+        {
+            if (Routes.HasFlag(SoundRoutes.HeadLocked))
+            {
+                return "at your head";
+            }
+
+            float best = Math.Max(DirectDb, Math.Max(PathDb, ReflectionDb));
+            if (best <= -199f)
+            {
+                return "silent";
+            }
+
+            if (best == DirectDb)
+            {
+                // Straight through, or mostly through what is in the way.
+                return DirectDb > HeardDb - 3f ? "in the clear" : "through walls";
+            }
+
+            return best == PathDb ? "round a corner" : "only its reflections";
+        }
+    }
+}
+
 /// <summary>Whose a thread is (vsa_thread_kind).</summary>
 public enum ThreadKind
 {
@@ -531,6 +603,45 @@ public sealed partial class AudioEngine
             {
                 string name = Marshal.PtrToStringUTF8((nint)p[i].Name) ?? "";
                 result.Add(new ThreadStats(name, (ThreadKind)p[i].Kind, p[i].ThreadId, p[i].CpuMs));
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Turns the sound inspector on: the render thread then works out, per voice per block, what
+    /// it sounded like and which way it came. Off by default, and off it costs nothing.
+    /// </summary>
+    public void SetInspect(bool on)
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineSetInspect(lease.Engine, on ? 1u : 0u), "vsa_engine_set_inspect");
+    }
+
+    /// <summary>The voices that sounded in the latest block, loudest first. Empty unless the inspector is on.</summary>
+    public unsafe IReadOnlyList<AudibleVoice> GetAudible()
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineGetAudible(lease.Engine, null, 0, out uint count), "vsa_engine_get_audible");
+        if (count == 0)
+        {
+            return [];
+        }
+
+        var buffer = new VsaAudibleVoice[count + 16];
+        buffer[0].StructSize = (uint)sizeof(VsaAudibleVoice);
+        var result = new List<AudibleVoice>();
+        fixed (VsaAudibleVoice* p = buffer)
+        {
+            NativeException.ThrowIfFailed(VsaNative.EngineGetAudible(lease.Engine, p, (uint)buffer.Length, out count), "vsa_engine_get_audible");
+            int n = (int)Math.Min(count, (uint)buffer.Length);
+            result.Capacity = n;
+            for (int i = 0; i < n; i++)
+            {
+                result.Add(new AudibleVoice(
+                    p[i].Voice, (AudioBus)p[i].Bus, (SoundRoutes)p[i].Flags, p[i].Distance,
+                    p[i].HeardDb, p[i].DirectDb, p[i].PathDb, p[i].ReflectionDb));
             }
         }
 

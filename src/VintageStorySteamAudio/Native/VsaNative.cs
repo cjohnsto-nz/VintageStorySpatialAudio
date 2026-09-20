@@ -483,6 +483,21 @@ internal unsafe struct VsaRayHit
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct VsaAudibleVoice
+{
+    public uint StructSize;
+    public uint Bus;
+    public ulong Voice;
+    public uint Flags;
+    public float Distance;
+    public float HeardDb;
+    public float DirectDb;
+    public float PathDb;
+    public float ReflectionDb;
+    public uint Reserved;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal unsafe struct VsaSourceDebug
 {
     public uint StructSize;
@@ -585,12 +600,18 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 14;
+    public const uint AbiVersion = 15;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;
     public const uint EngineFlagNoReflections = 1u << 2;
     public const uint EngineFlagNoPathing = 1u << 3;
+    public const uint AudibleHeadLocked = 1u << 0;
+    public const uint AudibleVirtual = 1u << 1;
+    public const uint AudibleHasPath = 1u << 2;
+    public const uint AudibleHasPlace = 1u << 3;
+    public const uint AudibleBinaural = 1u << 4;
+
     public const uint SourceEscaped = 1u << 0;
     public const uint FadeStopWhenDone = 1u << 0;
     public const uint EventFlagFadeCancelled = 1u << 0;
@@ -759,6 +780,14 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_scene_save_obj")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult SceneSaveObj(nint engine, byte* path);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_audible")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineGetAudible(nint engine, VsaAudibleVoice* rows, uint capacity, out uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_set_inspect")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineSetInspect(nint engine, uint on);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_engine_get_sources")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

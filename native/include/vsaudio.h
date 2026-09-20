@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 14u
+#define VSA_ABI_VERSION 15u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -832,6 +832,56 @@ VSA_API vsa_result VSA_CALL vsa_scene_save_obj(vsa_engine* engine, const char* p
 
 /** vsa_source_debug.flags: the simulated position was moved out of a solid block. */
 #define VSA_SOURCE_ESCAPED (1u << 0)
+
+/** Flags on vsa_audible_voice. */
+enum {
+    /** Rendered at the listener's head (the player's own sounds, UI). */
+    VSA_AUDIBLE_HEAD_LOCKED = 1u << 0,
+    /** Inaudible: advancing without being rendered. */
+    VSA_AUDIBLE_VIRTUAL = 1u << 1,
+    /** Some of it is arriving round a corner (pathing). */
+    VSA_AUDIBLE_HAS_PATH = 1u << 2,
+    /** It has a place, so it has reflections. */
+    VSA_AUDIBLE_HAS_PLACE = 1u << 3,
+    /** Rendered with its own HRTF rather than through the shared Ambisonic mix. */
+    VSA_AUDIBLE_BINAURAL = 1u << 4
+};
+
+/**
+ * One sounding voice and the ways it is reaching the listener. The levels are the amplitude
+ * each way carries into its effect, in dB, not a measurement of what comes out: enough to say
+ * which way a sound arrives by and how much louder one way is than another. -200 is silence.
+ */
+typedef struct vsa_audible_voice {
+    uint32_t struct_size;
+    /** A vsa_bus value. */
+    uint32_t bus;
+    vsa_voice voice;
+    /** VSA_AUDIBLE_* flags. */
+    uint32_t flags;
+    /** Metres to the listener (0 when head-locked). */
+    float distance;
+    /** The voice itself, after its gain, fades, the bus and the distance. */
+    float heard_db;
+    /** Of that, what the direct effect passes: what is visible, plus what gets through. */
+    float direct_db;
+    /** What is arriving round corners. */
+    float path_db;
+    /** What it is feeding its place's reflections. */
+    float reflection_db;
+    uint32_t reserved;
+} vsa_audible_voice;
+
+/**
+ * The voices that sounded in the latest block, loudest first. Needs the inspector on
+ * (vsa_engine_set_inspect): off, this reports nothing and costs the render thread nothing.
+ * Fills up to `capacity` entries (out[0].struct_size set) and sets *out_count to the total.
+ */
+VSA_API vsa_result VSA_CALL vsa_engine_get_audible(vsa_engine* engine, vsa_audible_voice* out, uint32_t capacity,
+                                                   uint32_t* out_count);
+
+/** Turns the sound inspector on or off. Off by default. */
+VSA_API vsa_result VSA_CALL vsa_engine_set_inspect(vsa_engine* engine, uint32_t on);
 
 typedef struct vsa_source_debug {
     uint32_t struct_size;

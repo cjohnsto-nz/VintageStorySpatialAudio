@@ -33,6 +33,8 @@ internal sealed class SceneDebugTools : IDisposable
     ];
 
     // Sound paths drawn by the reflections overlay.
+    private bool inspecting;
+    private int soundPage = 1;
     private const int OverlayRays = 48;
     private const int OverlayBounces = 6;
     private const float OverlayRayMetres = 48f;
@@ -116,8 +118,25 @@ internal sealed class SceneDebugTools : IDisposable
             case "paths":
                 SetOverlay(renderer.Overlay ^ SceneOverlay.Paths);
                 return $"Overlay: {Describe(renderer.Overlay)}";
+            case "sounds":
+                // A page number keeps the panel short enough to read; "sounds off" ends it.
+                if (string.Equals(argument, "off", StringComparison.OrdinalIgnoreCase))
+                {
+                    inspecting = false;
+                    engine.SetInspect(false);
+                    return "Sound inspector off.";
+                }
+
+                soundPage = int.TryParse(argument, NumberStyles.Integer, CultureInfo.InvariantCulture, out int page) && page > 0
+                    ? page
+                    : 1;
+                inspecting = true;
+                engine.SetInspect(true);
+                return SoundsText();
             case "off":
                 SetOverlay(SceneOverlay.None);
+                inspecting = false;
+                engine.SetInspect(false);
                 return "Overlay off.";
             case "radius":
                 if (!int.TryParse(argument, NumberStyles.Integer, CultureInfo.InvariantCulture, out int radius) || radius < 0 || radius > 4)
@@ -139,7 +158,7 @@ internal sealed class SceneDebugTools : IDisposable
                 renderer.Clear();
                 return world.Reload();
             default:
-                return "Usage: .steamaudio scene [status|wire|faces|bounds|sources|rays|paths|off|radius N|legend|export|reload]";
+                return "Usage: .steamaudio scene [status|sounds [page|off]|wire|faces|bounds|sources|rays|paths|off|radius N|legend|export|reload]";
         }
     }
 
@@ -191,6 +210,78 @@ internal sealed class SceneDebugTools : IDisposable
         hud.TryClose();
         hud.Dispose();
     }
+
+    /// <summary>
+    /// ".steamaudio scene sounds [page]": every sound that is sounding, loudest first, with which
+    /// way it is reaching the listener. A page at a time, because the HUD cuts off what it cannot
+    /// fit. The engine only works the numbers out while this is on.
+    /// </summary>
+    private string SoundsText()
+    {
+        IReadOnlyList<AudibleVoice> audible = engine.GetAudible();
+        if (audible.Count == 0)
+        {
+            return "No sound is playing (or the inspector has only just been switched on).";
+        }
+
+        // What the direct simulation knows about each of them, by voice.
+        var walls = new Dictionary<ulong, SourceDebugInfo>();
+        foreach (SourceDebugInfo s in sources)
+        {
+            walls[s.Voice] = s;
+        }
+
+        int pages = (audible.Count + SoundsPerPage - 1) / SoundsPerPage;
+        int shown = Math.Clamp(soundPage, 1, pages);
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture, $"Sounds: {audible.Count} playing, loudest first (page {shown} of {pages}");
+        text.Append(pages > 1 ? ", .steamaudio scene sounds <page>)" : ")");
+        foreach ((AudibleVoice v, int index) in audible
+            .Select((v, i) => (v, i))
+            .Skip((shown - 1) * SoundsPerPage)
+            .Take(SoundsPerPage))
+        {
+            string name = describeVoice(v.Voice) ?? $"voice {v.Voice}";
+            text.Append(CultureInfo.InvariantCulture, $"\n{index + 1,3}. {v.HeardDb,6:0.0} dB {v.Bus,-7} {name}");
+            text.Append(v.Routes.HasFlag(SoundRoutes.HeadLocked)
+                ? " (at your head)"
+                : string.Create(CultureInfo.InvariantCulture, $" {v.Distance:0.0} m"));
+            text.Append(CultureInfo.InvariantCulture, $"\n     arrives {v.Arrival}:");
+            text.Append(CultureInfo.InvariantCulture, $" direct {Level(v.DirectDb)}");
+            if (v.Routes.HasFlag(SoundRoutes.Path))
+            {
+                text.Append(CultureInfo.InvariantCulture, $", round {Level(v.PathDb)}");
+            }
+
+            if (v.Routes.HasFlag(SoundRoutes.Place))
+            {
+                text.Append(CultureInfo.InvariantCulture, $", reflections {Level(v.ReflectionDb)}");
+            }
+
+            if (walls.TryGetValue(v.Voice, out SourceDebugInfo? w))
+            {
+                text.Append(CultureInfo.InvariantCulture, $"; {w.Occlusion:0%} of it visible");
+                if (w.Crossings > 0)
+                {
+                    (float low, float mid, float high) = w.Transmission;
+                    text.Append(CultureInfo.InvariantCulture,
+                        $", {w.SolidMetres:0.0} m through {w.Crossings} material(s), passing {Db(low)}/{Db(mid)}/{Db(high)} dB");
+                }
+            }
+            else if (!v.Routes.HasFlag(SoundRoutes.HeadLocked))
+            {
+                text.Append(" (not simulated: too quiet, or no effect set to spare)");
+            }
+        }
+
+        return text.ToString();
+
+        static string Level(float db) => db <= -199f ? "-" : string.Create(CultureInfo.InvariantCulture, $"{db:0.0} dB");
+        static string Db(float amplitude) => string.Create(
+            CultureInfo.InvariantCulture, $"{(amplitude > 1e-9f ? 20.0 * Math.Log10(amplitude) : -200.0):0}");
+    }
+
+    private const int SoundsPerPage = 8;
 
     private void UpdateHud()
     {
@@ -412,6 +503,11 @@ internal sealed class SceneDebugTools : IDisposable
         }
 
         text.Append('\n').Append(ProbeText());
+        if (inspecting)
+        {
+            text.Append('\n').Append(SoundsText());
+        }
+
         text.Append('\n').Append(SourcesText());
         text.Append('\n').Append(ReflectionsText(detailed: false));
         text.Append('\n').Append(PathingText());

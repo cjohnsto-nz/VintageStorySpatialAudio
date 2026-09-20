@@ -134,7 +134,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .HandleWith(args => WithEngine(() => PerfCommand(args[0] as string)))
             .EndSubCommand()
             .BeginSubCommand("scene")
-                .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|rays|paths|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
+                .WithDescription("The acoustic scene: status, sounds [page|off] (every sound and how it reaches you), or wire|faces|bounds|sources|rays|paths|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
                 .WithArgs(parsers.OptionalWord("action"), parsers.OptionalWord("value"))
                 .HandleWith(args => WithEngine(() => sceneTools is null
                     ? "The world scene is off (BuildWorldScene in " + SteamAudioConfig.FileName + ")."

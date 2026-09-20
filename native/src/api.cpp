@@ -37,6 +37,8 @@ static_assert(sizeof(vsa_pathing_stats) == 128 && offsetof(vsa_pathing_stats, ba
               offsetof(vsa_pathing_stats, box_centre) == 48 && offsetof(vsa_pathing_stats, ticks) == 72 &&
               offsetof(vsa_pathing_stats, listener) == 112);
 static_assert(sizeof(vsa_path_segment) == 32 && offsetof(vsa_path_segment, to) == 20);
+static_assert(sizeof(vsa_audible_voice) == 48 && offsetof(vsa_audible_voice, voice) == 8 &&
+              offsetof(vsa_audible_voice, heard_db) == 24);
 static_assert(sizeof(vsa_thread_stats) == 72 && offsetof(vsa_thread_stats, cpu_ms) == 16 && offsetof(vsa_thread_stats, name) == 24);
 static_assert(sizeof(vsa_reflection_stats) == 120 && offsetof(vsa_reflection_stats, ticks) == 56 &&
               offsetof(vsa_reflection_stats, listener_reverb_times) == 88 && offsetof(vsa_reflection_stats, listener) == 108);
@@ -667,6 +669,32 @@ VSA_API vsa_result VSA_CALL vsa_scene_save_obj(vsa_engine* engine, const char* p
             throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "path must not be empty");
         }
         engine_of(engine).scene().save_obj(path);
+        return VSA_OK;
+    });
+}
+
+// ---- The sound inspector ----
+
+VSA_API vsa_result VSA_CALL vsa_engine_set_inspect(vsa_engine* engine, uint32_t on) {
+    return guarded([&] {
+        engine_of(engine).set_inspect(on != 0);
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_audible(vsa_engine* engine, vsa_audible_voice* out, uint32_t capacity,
+                                                   uint32_t* out_count) {
+    return guarded([&] {
+        if (out_count == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "out_count must not be null");
+        }
+        *out_count = 0;
+        check_out_array(out, capacity, "vsa_audible_voice");
+        const std::vector<vsa_audible_voice> rows = engine_of(engine).audible();
+        *out_count = static_cast<uint32_t>(rows.size());
+        for (std::size_t i = 0; i < capacity && i < rows.size(); ++i) {
+            out[i] = rows[i];
+        }
         return VSA_OK;
     });
 }

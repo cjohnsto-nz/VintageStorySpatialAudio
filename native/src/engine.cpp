@@ -187,6 +187,41 @@ vsa_event make_event(vsa_event_type type) noexcept {
 
 }  // namespace
 
+std::vector<vsa_audible_voice> Engine::audible() const {
+    std::vector<vsa_audible_voice> rows;
+    if (!mixer_.inspecting()) {
+        return rows;
+    }
+    // Only what the render thread touched in the last handful of blocks: a voice that has
+    // stopped leaves its last reading behind, and it should not linger in the list.
+    const uint64_t newest = mixer_.block_index();
+    for (uint32_t i = 0; i < settings_.max_voices; ++i) {
+        const VoiceSlot& s = slots_[i];
+        if (!s.in_use.load(std::memory_order_acquire)) {
+            continue;
+        }
+        const uint64_t block = s.heard_block.load(std::memory_order_acquire);
+        if (block == 0 || newest - block > 4) {
+            continue;
+        }
+        vsa_audible_voice row{};
+        row.struct_size = sizeof row;
+        row.bus = s.bus;
+        row.voice = s.handle;
+        row.flags = s.heard_flags.load(std::memory_order_relaxed);
+        row.distance = s.heard_distance.load(std::memory_order_relaxed);
+        row.heard_db = s.heard_db.load(std::memory_order_relaxed);
+        row.direct_db = s.direct_db.load(std::memory_order_relaxed);
+        row.path_db = s.path_db.load(std::memory_order_relaxed);
+        row.reflection_db = s.reflection_db.load(std::memory_order_relaxed);
+        rows.push_back(row);
+    }
+    std::sort(rows.begin(), rows.end(), [](const vsa_audible_voice& a, const vsa_audible_voice& b) {
+        return a.heard_db > b.heard_db;
+    });
+    return rows;
+}
+
 vsa_engine_config Engine::default_config() {
     vsa_engine_config config{};
     config.struct_size = sizeof config;

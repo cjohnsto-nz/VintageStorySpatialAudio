@@ -111,6 +111,13 @@ public:
     };
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
+    /// Turns the sound inspector on (the render thread then works out each voice's breakdown).
+    void set_inspect(bool on) noexcept { mixer_.set_inspect(on); }
+    [[nodiscard]] bool inspecting() const noexcept { return mixer_.inspecting(); }
+    /// What each voice sounded like in the latest block and how it reached the listener,
+    /// loudest first. Empty unless the inspector is on.
+    [[nodiscard]] std::vector<vsa_audible_voice> audible() const;
+
     /// A config with every field resolved: what a zeroed config would actually run as, including
     /// the values that depend on the machine (the reflection threads). The settings file is
     /// written from this, so it holds real numbers rather than zeros (ADR 0018).
