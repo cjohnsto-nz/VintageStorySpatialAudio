@@ -124,7 +124,7 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             .BeginSubCommand("perf")
                 .WithDescription("What the mod costs since the last reset: our main-thread time per frame by section, every thread's share of a core, memory; 'reset' starts a new window")
                 .WithArgs(parsers.OptionalWord("action"))
-                .HandleWith(args => WithEngine(() => perf is null ? "The engine is not running." : perf.Command(args[0] as string)))
+                .HandleWith(args => WithEngine(() => PerfCommand(args[0] as string)))
             .EndSubCommand()
             .BeginSubCommand("scene")
                 .WithDescription("The acoustic scene: status, or wire|faces|bounds|sources|rays|paths|off (overlay, Ctrl+F7 cycles), radius N, legend, export (OBJ), reload (materials)")
@@ -297,6 +297,31 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         OutputKind.Spatial => $"'{s.DeviceName}' via Windows Spatial Audio (7.1.4)",
         _ => "none (offline)",
     };
+
+    /// <summary>
+    /// ".steamaudio perf [reset]". The report also goes to client-main.log: chat text cannot be
+    /// copied out of the game, and these numbers are read afterwards, not in the moment.
+    /// </summary>
+    private string PerfCommand(string? action)
+    {
+        if (perf is null)
+        {
+            return "The engine is not running.";
+        }
+
+        string text = perf.Command(action);
+        if (action is not null)
+        {
+            return text;
+        }
+
+        foreach (string line in text.Split('\n'))
+        {
+            Mod.Logger.Notification("[perf] {0}", line);
+        }
+
+        return text + "\n(also written to client-main.log)";
+    }
 
     private string RenderStats()
     {
