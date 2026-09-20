@@ -15,6 +15,11 @@ public:
 
     explicit SteamContext(const Options& options);
 
+    /// Whether Embree can be used in this process (Steam Audio has none for Apple Silicon).
+    /// Asked once, quietly, and remembered: defaults that depend on the ray tracer are resolved
+    /// before any engine, and so before any context, exists.
+    [[nodiscard]] static bool embree_on_this_machine() noexcept;
+
     SteamContext(const SteamContext&) = delete;
     SteamContext& operator=(const SteamContext&) = delete;
 

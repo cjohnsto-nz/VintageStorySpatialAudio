@@ -72,6 +72,23 @@ SteamContext::SteamContext(const Options& options) {
                 STEAMAUDIO_VERSION_MINOR, STEAMAUDIO_VERSION_PATCH, embree_ ? "Embree" : "Steam Audio built-in");
 }
 
+bool SteamContext::embree_on_this_machine() noexcept {
+    static const bool available = [] {
+        IPLContextSettings settings{};
+        settings.version = STEAMAUDIO_VERSION;
+        settings.simdLevel = max_simd_level();
+        settings.logCallback = [](IPLLogLevel, const char*) {};  // quietly: the engine's own context reports
+        Context context;
+        if (iplContextCreate(&settings, context.out()) != IPL_STATUS_SUCCESS) {
+            return false;
+        }
+        IPLEmbreeDeviceSettings embree_settings{};
+        EmbreeDevice device;  // declared after the context: released before it
+        return iplEmbreeDeviceCreate(context.get(), &embree_settings, device.out()) == IPL_STATUS_SUCCESS && device;
+    }();
+    return available;
+}
+
 vsa_ray_tracer SteamContext::active_ray_tracer() const noexcept {
     return scene_type_ == IPL_SCENETYPE_EMBREE ? VSA_RAY_TRACER_EMBREE : VSA_RAY_TRACER_STEAM;
 }

@@ -266,7 +266,12 @@ TEST_CASE("pathing: the probe budget bounds the bake, whatever the terrain holds
     // Unbudgeted (a budget nothing reaches) against the shipping budget, same box.
     uint32_t loose_probes = 0;
     double loose_ms = 0.0;
-    for (const uint32_t budget : {65536u, 1200u, 300u}) {
+    // Where there is no Embree (Apple Silicon) the 794-probe bakes take seven minutes each, which
+    // is why the engine's budget there is 300: only that one is baked.
+    const bool fast = vsa::steam::SteamContext::embree_on_this_machine();
+    const std::vector<uint32_t> budgets = fast ? std::vector<uint32_t>{65536u, 1200u, 300u}
+                                               : std::vector<uint32_t>{PathBakeSettings::kMaxProbesWithoutEmbree};
+    for (const uint32_t budget : budgets) {
         PathBakeSettings settings;
         settings.range = 64;
         settings.height = 64;
@@ -315,6 +320,9 @@ TEST_CASE("pathing: a listener that keeps moving abandons bakes without corrupti
     PathBakeSettings settings;
     settings.range = 64;
     settings.height = 64;
+    if (!vsa::steam::SteamContext::embree_on_this_machine()) {
+        settings.max_probes = PathBakeSettings::kMaxProbesWithoutEmbree;  // as the engine would
+    }
     PathBaker baker(steam, scene, settings);
     vsa::ListenerPose pose{};
     pose.position[1] = kRegion / 2.0f;
@@ -355,6 +363,10 @@ TEST_CASE("pathing: a listener that keeps moving abandons bakes without corrupti
 }
 
 TEST_CASE("pathing bake spike: a 64 x 64 x 64 region of terrain, buildings and a cave on one thread") {
+    if (!vsa::steam::SteamContext::embree_on_this_machine()) {
+        MESSAGE("no Embree on this machine (Apple Silicon): two 794-probe bakes are a quarter of an hour; skipped");
+        return;
+    }
     vsa::steam::SteamContext steam({VSA_RAY_TRACER_STEAM, false});
     WorldScene scene(steam);
     scene.set_materials(materials());

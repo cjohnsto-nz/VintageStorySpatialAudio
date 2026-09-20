@@ -60,3 +60,19 @@ precisely while moving, which is when sound sources change most.
   world is not the worst case, and a cost that grows superlinearly needs a ceiling, not an
   average. Any future measurement of this kind should be taken at the shipping settings while
   moving, which is how this was found.
+
+## Amendment, 21 Sep 2026: the budget is 300 where there is no Embree
+
+CI's macOS job took 32 minutes against 1.5 on the others, and the whole difference was four
+bakes. The same 794-probe bake with the same ray tracer (Steam Audio's built-in one, one thread)
+takes 0.5 s on the x64 runners and 430–480 s on the arm64 macOS one; 266 probes take 1.1 s there.
+On an Apple Silicon Mac no bake at the usual budget would ever finish before the listener had
+walked out of it (the moving-listener test reported "0 bakes"), and a core would be busy for the
+whole session. Why Steam Audio's bake is a thousand times slower there is not known; everything
+else in the suite, reflections included, runs at the other platforms' speed.
+
+So on a machine with no Embree, which today is exactly Apple Silicon, `pathing_max_probes`
+defaults to 300 (`SteamContext::embree_on_this_machine`, asked before any engine exists so that
+`vsa_get_default_config`, and with it the settings file, says 300 too). Probes come out about 4 m
+apart rather than 2.5: coarser in tight places, but it works. An explicit value still stands. The
+bake tests use that budget there, and the two that exist only to time 794-probe bakes are skipped.

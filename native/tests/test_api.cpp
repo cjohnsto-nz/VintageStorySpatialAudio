@@ -93,6 +93,21 @@ TEST_CASE("only one engine may exist at a time, and it can be recreated") {
     CHECK(log.contains("vsaudio"));
 }
 
+TEST_CASE("the pathing probe budget defaults to what this machine can bake in about a second") {
+    // Steam Audio has no Embree for Apple Silicon, and its bake is about 1000x slower there: the
+    // default budget is one such a machine finishes in a second, and the settings file (which
+    // is written from these defaults, ADR 0018) says so.
+    ScopedEngine scoped(make_config(VSA_RAY_TRACER_AUTO));
+    REQUIRE(scoped.result == VSA_OK);
+    vsa_engine_info info{};
+    info.struct_size = sizeof info;
+    REQUIRE(vsa_engine_get_info(scoped.engine, &info) == VSA_OK);
+    vsa_engine_config config{};
+    config.struct_size = sizeof config;
+    REQUIRE(vsa_get_default_config(&config) == VSA_OK);
+    CHECK(config.pathing_max_probes == (info.embree_available != 0 ? 1200u : 300u));
+}
+
 TEST_CASE("engine info reports a concrete ray tracer") {
     ScopedEngine scoped(make_config(VSA_RAY_TRACER_AUTO));
     REQUIRE(scoped.result == VSA_OK);
