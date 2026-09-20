@@ -130,6 +130,7 @@ Engine::Settings validate(const vsa_engine_config& config) {
     range(config.pathing_vis_samples, 1, 8, "pathing_vis_samples", b.vis_samples);
     range(config.pathing_rate_hz, 1, 60, "pathing_rate_hz", settings.path_sim.rate_hz);
     range(config.pathing_sources, 1, 256, "pathing_sources", settings.path_sim.max_sources);
+    range(config.pathing_max_probes, 64, 65536, "pathing_max_probes", b.max_probes);
     settings.path_sim.max_sources = std::min(settings.path_sim.max_sources, settings.max_real_voices);
     b.vis_range = static_cast<float>(b.range) / 3.0f;
     b.path_range = static_cast<float>(b.range);

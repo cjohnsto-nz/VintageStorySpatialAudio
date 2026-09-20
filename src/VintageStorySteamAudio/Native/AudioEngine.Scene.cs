@@ -236,6 +236,8 @@ public sealed record ReflectionSourceInfo(
 /// <param name="Ticks">Simulations so far.</param>
 /// <param name="LastTickMs">The latest simulation's duration.</param>
 /// <param name="MaxTickMs">The longest so far.</param>
+/// <param name="CancelledBakes">Bakes abandoned because the listener left the box first.</param>
+/// <param name="ProbeSpacing">Metres between the current batch's probes (wider than configured when the budget bit).</param>
 /// <param name="Wanted">Sounds that asked for a path in the latest run.</param>
 /// <param name="Simulated">Of those, run.</param>
 /// <param name="Found">Of those, with a path.</param>
@@ -246,9 +248,11 @@ public sealed record PathingStats(
     bool Baking,
     bool BakeDue,
     long Bakes,
+    long CancelledBakes,
     double LastBakeMs,
     double MaxBakeMs,
     int Probes,
+    float ProbeSpacing,
     (double X, double Y, double Z) BoxCentre,
     long Ticks,
     double LastTickMs,
@@ -634,7 +638,8 @@ public sealed partial class AudioEngine
         var s = new VsaPathingStats { StructSize = (uint)sizeof(VsaPathingStats) };
         NativeException.ThrowIfFailed(VsaNative.EngineGetPathingStats(lease.Engine, ref s), "vsa_engine_get_pathing_stats");
         return new PathingStats(
-            s.Enabled != 0, s.Baking != 0, s.BakeDue != 0, (long)s.Bakes, s.LastBakeMs, s.MaxBakeMs, (int)s.Probes,
+            s.Enabled != 0, s.Baking != 0, s.BakeDue != 0, (long)s.Bakes, s.CancelledBakes, s.LastBakeMs, s.MaxBakeMs,
+            (int)s.Probes, s.ProbeSpacing,
             (s.BoxCentre[0], s.BoxCentre[1], s.BoxCentre[2]), (long)s.Ticks, s.LastTickMs, s.MaxTickMs,
             (int)s.Wanted, (int)s.Simulated, (int)s.Found, (int)s.RateHz, (s.Listener[0], s.Listener[1], s.Listener[2]));
     }

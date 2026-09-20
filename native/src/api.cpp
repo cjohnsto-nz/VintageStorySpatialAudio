@@ -27,11 +27,12 @@
 static_assert(sizeof(vsa_result) == 4 && sizeof(vsa_log_level) == 4, "vsaudio enums must be 32-bit");
 static_assert(std::is_standard_layout_v<vsa_engine_config> && std::is_standard_layout_v<vsa_self_test_report>);
 // Layouts the managed bindings mirror (tests/.../NativeLayoutTests.cs). 64-bit targets only.
-static_assert(sizeof(vsa_engine_config) == 136 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
+static_assert(sizeof(vsa_engine_config) == 144 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
               offsetof(vsa_engine_config, hrtf_sofa_path) == 64 && offsetof(vsa_engine_config, direct_rate_hz) == 76 &&
               offsetof(vsa_engine_config, reflection_sources) == 80 &&
               offsetof(vsa_engine_config, reflection_transition) == 108 &&
-              offsetof(vsa_engine_config, pathing_range) == 112 && offsetof(vsa_engine_config, pathing_sources) == 132);
+              offsetof(vsa_engine_config, pathing_range) == 112 && offsetof(vsa_engine_config, pathing_sources) == 132 &&
+              offsetof(vsa_engine_config, pathing_max_probes) == 136);
 static_assert(sizeof(vsa_pathing_stats) == 128 && offsetof(vsa_pathing_stats, bakes) == 16 &&
               offsetof(vsa_pathing_stats, box_centre) == 48 && offsetof(vsa_pathing_stats, ticks) == 72 &&
               offsetof(vsa_pathing_stats, listener) == 112);
@@ -805,6 +806,8 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_pathing_stats(vsa_engine* engine, vsa
             stats.last_bake_ms = b.last_bake_ms;
             stats.max_bake_ms = b.max_bake_ms;
             stats.probes = b.probes;
+            stats.cancelled_bakes = static_cast<uint32_t>(b.cancelled);
+            stats.probe_spacing = b.spacing;
             std::copy_n(b.centre, 3, stats.box_centre);
             stats.ticks = s.ticks;
             stats.last_tick_ms = s.last_tick_ms;

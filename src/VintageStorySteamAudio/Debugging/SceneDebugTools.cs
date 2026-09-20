@@ -285,7 +285,8 @@ internal sealed class SceneDebugTools : IDisposable
         string bake = p.Baking ? "baking now" : p.BakeDue ? "bake due" : "baked";
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"Pathing: {p.Probes} probes round {p.BoxCentre.X:0},{p.BoxCentre.Y:0},{p.BoxCentre.Z:0} ({bake}; {p.Bakes} bakes, last {p.LastBakeMs:0} ms, max {p.MaxBakeMs:0} ms); " +
+            $"Pathing: {p.Probes} probes {p.ProbeSpacing:0.0} m apart round {p.BoxCentre.X:0},{p.BoxCentre.Y:0},{p.BoxCentre.Z:0} " +
+            $"({bake}; {p.Bakes} bakes, {p.CancelledBakes} abandoned, last {p.LastBakeMs:0} ms, max {p.MaxBakeMs:0} ms); " +
             $"{p.Found} of {p.Wanted} blocked sounds have a path ({p.Simulated} simulated), tick {p.LastTickMs:0.0} ms, {p.RateHz} Hz");
     }
 

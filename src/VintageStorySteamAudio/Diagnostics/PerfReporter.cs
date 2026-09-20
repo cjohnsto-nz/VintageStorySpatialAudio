@@ -33,6 +33,7 @@ public sealed class PerfReporter
     private ulong startOverloads;
     private ulong startUnderruns;
     private long startBakes;
+    private long startCancelled;
     private long startChunksBuilt;
 
     public PerfReporter(PerfMonitor monitor, AudioEngine engine, Func<AudioSession?> session)
@@ -57,6 +58,7 @@ public sealed class PerfReporter
         startOverloads = stats.Overloads;
         startUnderruns = stats.StreamUnderruns;
         startBakes = TryGet(engine.GetPathingStats)?.Bakes ?? 0;
+        startCancelled = TryGet(engine.GetPathingStats)?.CancelledBakes ?? 0;
         startChunksBuilt = TryGet(engine.GetSceneStats)?.ChunksBuilt ?? 0;
     }
 
@@ -170,7 +172,7 @@ public sealed class PerfReporter
             {
                 long bakes = pathing.Bakes - startBakes;
                 double bakeShare = wallMs > 0.0 ? 100.0 * bakes * pathing.LastBakeMs / wallMs : 0.0;
-                text.Append(F($" pathing {pathing.LastTickMs:0.00} ms/tick, {bakes} bakes this window ({bakeShare:0} % of it baking), {pathing.LastBakeMs:0} ms each (worst {pathing.MaxBakeMs:0}), {pathing.Probes} probes;"));
+                text.Append(F($" pathing {pathing.LastTickMs:0.00} ms/tick, {bakes} bakes this window ({bakeShare:0} % of it baking, {pathing.CancelledBakes - startCancelled} abandoned), {pathing.LastBakeMs:0} ms each (worst {pathing.MaxBakeMs:0}), {pathing.Probes} probes {pathing.ProbeSpacing:0.0} m apart;"));
             }
 
             text.Length--;

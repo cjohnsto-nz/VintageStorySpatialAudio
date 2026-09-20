@@ -5,6 +5,7 @@
 
 #include "steam/ipl_handle.hpp"
 #include "steam/steam_context.hpp"
+#include "world/path_baker.hpp"
 #include "world/world_scene.hpp"
 
 #include <doctest/doctest.h>
@@ -236,6 +237,58 @@ TEST_CASE("pathing: bakes on a plain static-mesh box") {
     MESSAGE("box pathing data " << static_cast<double>(iplProbeBatchGetDataSize(batch.get(), &identifier)) / 1024.0 << " KB");
     iplStaticMeshRemove(static_mesh.get(), scene.get());
     iplSceneCommit(scene.get());
+}
+
+TEST_CASE("pathing: the probe budget bounds the bake, whatever the terrain holds (ADR 0015)") {
+    // The baker widens the spacing until the box holds no more than the budget, because a bake
+    // costs about probes^2.2: open ground held 3859 probes at 2.5 m and took 16.7 s in game.
+    vsa::steam::SteamContext steam({VSA_RAY_TRACER_STEAM, false});
+    WorldScene scene(steam);
+    scene.set_materials(materials());
+    const Region region;
+    for (int cy = 0; cy < 2; ++cy) {
+        for (int cz = 0; cz < 2; ++cz) {
+            for (int cx = 0; cx < 2; ++cx) {
+                scene.set_chunk({cx, cy, cz}, region.chunk(cx, cy, cz), 0);
+            }
+        }
+    }
+    REQUIRE(scene.wait_idle(30s));
+
+    vsa::ListenerPose pose{};
+    pose.position[0] = kRegion / 2.0f;
+    pose.position[1] = kRegion / 2.0f;
+    pose.position[2] = kRegion / 2.0f;
+
+    // Unbudgeted (a budget nothing reaches) against the shipping budget, same box.
+    uint32_t loose_probes = 0;
+    double loose_ms = 0.0;
+    for (const uint32_t budget : {65536u, 1200u, 300u}) {
+        PathBakeSettings settings;
+        settings.range = 64;
+        settings.height = 64;
+        settings.max_probes = budget;
+        PathBaker baker(steam, scene, settings);
+        baker.set_listener(pose);
+        baker.offline_tick(0.0);
+        const PathBakeStats stats = baker.stats();
+        REQUIRE(stats.bakes == 1);
+        MESSAGE("budget " << budget << ": " << stats.probes << " probes " << stats.spacing << " m apart in "
+                << stats.last_bake_ms << " ms");
+        CHECK(stats.probes > 100);          // the region really is baked
+        CHECK(stats.probes <= budget);      // and within its budget
+        CHECK(stats.cancelled == 0);
+        if (budget == 65536u) {
+            loose_probes = stats.probes;
+            loose_ms = stats.last_bake_ms;
+            CHECK(stats.spacing == doctest::Approx(settings.spacing));  // untouched when it fits
+        } else if (loose_probes > budget) {
+            // The budget bit: wider probes, and a bake that is faster by more than the ratio of
+            // probes, since the cost is superlinear.
+            CHECK(stats.spacing > settings.spacing);
+            CHECK(stats.last_bake_ms < loose_ms);
+        }
+    }
 }
 
 TEST_CASE("pathing bake spike: a 64 x 64 x 64 region of terrain, buildings and a cave on one thread") {

@@ -182,6 +182,7 @@ internal unsafe struct VsaEngineConfig
     public uint PathingVisSamples;
     public uint PathingRateHz;
     public uint PathingSources;
+    public uint PathingMaxProbes;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -195,7 +196,7 @@ internal unsafe struct VsaPathingStats
     public double LastBakeMs;
     public double MaxBakeMs;
     public uint Probes;
-    public uint Reserved;
+    public uint CancelledBakes;
     public fixed double BoxCentre[3];
     public ulong Ticks;
     public double LastTickMs;
@@ -205,7 +206,7 @@ internal unsafe struct VsaPathingStats
     public uint Found;
     public uint RateHz;
     public fixed float Listener[3];
-    public uint Reserved2;
+    public float ProbeSpacing;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -584,7 +585,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 12;
+    public const uint AbiVersion = 13;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;

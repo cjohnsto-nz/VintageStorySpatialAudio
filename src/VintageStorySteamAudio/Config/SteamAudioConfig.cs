@@ -181,6 +181,13 @@ public sealed class SteamAudioConfig
     public int PathingSources { get; set; }
 
     /// <summary>
+    /// Probes baked at most (0 = 1200). A bake costs about probes^2.2 and how many a box holds
+    /// is up to the terrain, so the spacing widens to stay within this. Raising it buys finer
+    /// paths in complex ground at a bake cost that climbs steeply.
+    /// </summary>
+    public int PathingMaxProbes { get; set; }
+
+    /// <summary>
     /// Scales all reverb (0..4; also .steamaudio reverb gain). 1 is the level Steam Audio
     /// simulates; the default is tuned by ear on a 7.1.4 system, where the simulated level is
     /// far too much on top of the game's own sound mix.
@@ -230,6 +237,7 @@ public sealed class SteamAudioConfig
             VisibilitySamples = Math.Clamp(PathingVisibilitySamples, 0, 8),
             RateHz = Math.Clamp(PathingRateHz, 0, 60),
             Sources = Math.Clamp(PathingSources, 0, 256),
+            MaxProbes = Math.Clamp(PathingMaxProbes, 0, 65536),
         },
         HrtfSofaPath = string.IsNullOrWhiteSpace(HrtfSofaFile) ? null
             : modConfigDirectory is null ? HrtfSofaFile.Trim()
