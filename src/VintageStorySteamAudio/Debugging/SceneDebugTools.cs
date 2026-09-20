@@ -33,6 +33,10 @@ internal sealed class SceneDebugTools : IDisposable
     ];
 
     // Sound paths drawn by the reflections overlay.
+    private const long LegsHeldMs = 20000;
+    private IReadOnlyList<PathSegment> legs = [];
+    private (int X, int Y, int Z) legsOrigin;
+    private long legsAt;
     private bool inspecting;
     private IReadOnlyList<AudibleVoice> audible = [];
     private int soundPage = 1;
@@ -116,6 +120,8 @@ internal sealed class SceneDebugTools : IDisposable
             case "reflections":
                 SetOverlay(renderer.Overlay ^ SceneOverlay.Reflections);
                 return $"Overlay: {Describe(renderer.Overlay)}";
+            case "report":
+                return Report();
             case "paths":
                 SetOverlay(renderer.Overlay ^ SceneOverlay.Paths);
                 return $"Overlay: {Describe(renderer.Overlay)}";
@@ -411,7 +417,107 @@ internal sealed class SceneDebugTools : IDisposable
             return;
         }
 
-        renderer.SetPaths(engine.GetPathSegments(), world.Status().Origin, player.CameraPos);
+        // The legs are held a while after the pathing stops asking (close to a sound, where it
+        // is heard direct, there are none): long enough to walk up to where they ran.
+        IReadOnlyList<PathSegment> now = engine.GetPathSegments();
+        if (now.Count > 0)
+        {
+            legs = now;
+            legsOrigin = world.Status().Origin;
+            legsAt = Environment.TickCount64;
+        }
+        else if (Environment.TickCount64 - legsAt > LegsHeldMs)
+        {
+            legs = [];
+        }
+
+        renderer.SetPaths(legs, legsOrigin, player.CameraPos);
+    }
+
+    /// <summary>
+    /// ".steamaudio scene report": everything about how the listed sounds are reaching the
+    /// listener, written to the log -- each leg of the ways round with every block it passes
+    /// through and what the acoustic scene makes of that block.
+    /// </summary>
+    private string Report()
+    {
+        if (capi.World.Player?.Entity is not { } player)
+        {
+            return "No player.";
+        }
+
+        var lines = new List<string>();
+        (int X, int Y, int Z) o = world.Status().Origin;
+        Vec3d eyes = player.CameraPos;
+        SimulationStats sim = engine.GetSimulationStats();
+        PathingStats paths = engine.GetPathingStats();
+        lines.Add(string.Create(CultureInfo.InvariantCulture, $"listener eyes {eyes.X:0.00},{eyes.Y:0.00},{eyes.Z:0.00}; simulated from {sim.Listener.X + sim.Origin.X:0.00},{sim.Listener.Y + sim.Origin.Y:0.00},{sim.Listener.Z + sim.Origin.Z:0.00}; state: {DebugState?.Invoke() ?? "everything heard"}"));
+        lines.Add(string.Create(CultureInfo.InvariantCulture, $"pathing: {paths}"));
+
+        IReadOnlyList<SourceDebugInfo> simulated = engine.GetSimulatedSources();
+        foreach (AudibleVoice v in engine.GetAudible().Take(8))
+        {
+            var at = new Vec3d(v.Position.X + o.X, v.Position.Y + o.Y, v.Position.Z + o.Z);
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"sound {describeVoice(v.Voice) ?? "?"} at {at.X:0.00},{at.Y:0.00},{at.Z:0.00} ({v.Distance:0.0} m): heard {v.HeardDb:0.0} dB, direct {v.DirectDb:0.0}, round {v.PathDb:0.0}, reflections {v.ReflectionDb:0.0}; {v.Route}"));
+            SourceDebugInfo? s = simulated.FirstOrDefault(x => x.Voice == v.Voice);
+            if (s is null)
+            {
+                lines.Add("  not among the simulated sources");
+                continue;
+            }
+
+            var from = new Vec3d(s.SimulatedPosition.X + o.X, s.SimulatedPosition.Y + o.Y, s.SimulatedPosition.Z + o.Z);
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"  simulated from {from.X:0.00},{from.Y:0.00},{from.Z:0.00}{(s.Escaped ? " (moved out of its block)" : string.Empty)}: visible {s.Occlusion:0.00}, {s.SolidMetres:0.00} m of material in {s.Crossings} crossings on the line to the listener"));
+            lines.Add("  the straight line to the listener passes through:");
+            AddCrossed(lines, from, eyes);
+        }
+
+        lines.Add(string.Create(CultureInfo.InvariantCulture, $"{legs.Count} legs of ways round ({(Environment.TickCount64 - legsAt) / 1000.0:0.0} s old):"));
+        int n = 0;
+        foreach (PathSegment leg in legs.Take(40))
+        {
+            var a = new Vec3d(leg.From.X + legsOrigin.X, leg.From.Y + legsOrigin.Y, leg.From.Z + legsOrigin.Z);
+            var b = new Vec3d(leg.To.X + legsOrigin.X, leg.To.Y + legsOrigin.Y, leg.To.Z + legsOrigin.Z);
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"leg {++n}: {a.X:0.00},{a.Y:0.00},{a.Z:0.00} -> {b.X:0.00},{b.Y:0.00},{b.Z:0.00} ({a.DistanceTo(b):0.0} m){(leg.Occluded ? " REJECTED (blocked in the live scene)" : " accepted")}"));
+            AddCrossed(lines, a, b);
+        }
+
+        foreach (string line in lines)
+        {
+            capi.Logger.Notification("[vssteamaudio report] {0}", line);
+        }
+
+        return $"Report written to client-main.log ({lines.Count} lines, {legs.Count} legs).";
+    }
+
+    /// <summary>Every block the straight line from a to b passes through that is not air.</summary>
+    private void AddCrossed(List<string> lines, Vec3d a, Vec3d b)
+    {
+        double length = a.DistanceTo(b);
+        int steps = Math.Max(1, (int)(length / 0.05));
+        (int, int, int) last = (int.MinValue, 0, 0);
+        int found = 0;
+        for (int i = 0; i <= steps && found < 24; i++)
+        {
+            double t = (double)i / steps;
+            (int X, int Y, int Z) cell = ((int)Math.Floor(a.X + ((b.X - a.X) * t)), (int)Math.Floor(a.Y + ((b.Y - a.Y) * t)), (int)Math.Floor(a.Z + ((b.Z - a.Z) * t)));
+            if (cell == last)
+            {
+                continue;
+            }
+
+            last = cell;
+            if (world.DescribeCell(cell.X, cell.Y, cell.Z) is { } what)
+            {
+                found++;
+                lines.Add(string.Create(CultureInfo.InvariantCulture, $"    {cell.X},{cell.Y},{cell.Z} ({length * t:0.0} m along): {what}"));
+            }
+        }
+
+        if (found == 0)
+        {
+            lines.Add("    nothing but air");
+        }
     }
 
     private string PathingText()
