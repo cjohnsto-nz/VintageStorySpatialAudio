@@ -212,6 +212,39 @@ it was (0.76 cores against 1.42) — which makes this pair comparable only with 
 - The tick's slow calls are not individual chunk reads (2 over 2 ms) but whole ticks (108),
   which is the per-tick time budget working as designed.
 
+### Walking, back to back, after ADR 0016 and ADR 0017
+
+The cleanest pair: two runs three minutes apart on a warm world, both instruments agreeing
+(sampler 0.81 and 2.21 cores against the report's 0.79 and 2.07).
+
+| | baseline | mod | difference |
+|---|---|---|---|
+| fps | 77.9 | 69.4 | **−11 %** |
+| frame median | 13.1 ms | 14.1 ms | +1.0 ms |
+| frame p99 | 16.9 ms | 20.6 ms | **+3.7 ms** |
+| frame worst | 46.8 ms | 51.9 ms | +5.1 ms |
+| our main thread | 0.000 | 0.167 ms/frame | |
+| our threads | 0.1 % | 119 % of a core | |
+| process | 0.79 cores | 2.07 cores | +1.28 |
+| stream underruns | 0 | 0 | |
+| bakes | – | 10, 463 ms each, 1 abandoned, 1082 probes 2.8 m apart | |
+
+- **This is the honest cost of the mod while walking: about 11 % of the frame rate and 1.3
+  cores.** Only 0.167 ms of the 1.0 ms of frame time is our own main-thread work; the rest is
+  what a busy machine does to the game's own threads. The game's share even rises slightly
+  (75.6 % → 78.3 %) while producing fewer frames, which is contention, not the game doing more.
+- **p99 is 3.7 ms worse**, the clearest sign yet that the background threads are not free on this
+  machine.
+- **ADR 0016 works, but it was not a CPU win.** Places live went 10 → 3, and the reflection tick
+  went 24.2 → 21.2 ms: almost nothing, because the simulator does the listener's slot plus a
+  quarter of the places, so the source count per run barely moved (3 → 2). Fitting the runs
+  gives roughly **6 ms of fixed cost per tick plus 7–8 ms per source** at Medium's 4096 rays ×
+  16 bounces. Fewer places still means each is refreshed more often, which is a fidelity win.
+- **The reflections are therefore rate-bound, not count-bound.** 21.2 ms per tick on three
+  threads at 10 Hz is 0.64 of a core, which is most of Steam Audio's 82 %. Halving the rate
+  should halve it, and the renderer smooths over 0.7–1 s, so 5 Hz updates ought to be
+  imperceptible — `ReflectionRateHz` in the config tries it without a rebuild.
+
 ### Still to measure
 
 The cave and forest spots, and a second run of each configuration. The process-level CPU and
