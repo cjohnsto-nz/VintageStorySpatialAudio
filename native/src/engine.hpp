@@ -116,7 +116,12 @@ public:
     [[nodiscard]] const Settings& settings() const noexcept { return settings_; }
 
     /// Turns the sound inspector on (the render thread then works out each voice's breakdown).
-    void set_inspect(bool on) noexcept { mixer_.set_inspect(on); }
+    void set_inspect(bool on) noexcept {
+        mixer_.set_inspect(on);
+        if (path_sim_) {
+            path_sim_->set_baked_only(on);  // so that the legs drawn are the legs heard
+        }
+    }
     [[nodiscard]] bool inspecting() const noexcept { return mixer_.inspecting(); }
     /// What each voice sounded like in the latest block and how it reached the listener,
     /// loudest first. Empty unless the inspector is on.

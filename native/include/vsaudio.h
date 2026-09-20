@@ -899,7 +899,11 @@ VSA_API vsa_result VSA_CALL vsa_voice_set_muted(vsa_engine* engine, vsa_voice vo
  */
 VSA_API vsa_result VSA_CALL vsa_engine_set_route_gains(vsa_engine* engine, float direct, float path);
 
-/** Turns the sound inspector on or off. Off by default. */
+/**
+ * Turns the sound inspector on or off. Off by default. While it is on the pathing uses baked
+ * paths only (no alternates found at run time, whose legs Steam Audio does not report), so that
+ * the legs vsa_engine_get_path_segments returns are the legs heard.
+ */
 VSA_API vsa_result VSA_CALL vsa_engine_set_inspect(vsa_engine* engine, uint32_t on);
 
 typedef struct vsa_source_debug {

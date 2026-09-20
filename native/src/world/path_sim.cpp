@@ -244,7 +244,10 @@ void PathSimulator::tick() {
         inputs.visRange = bake_.vis_range;
         inputs.pathingOrder = 1;
         inputs.enableValidation = IPL_TRUE;
-        inputs.findAlternatePaths = IPL_TRUE;
+        // Steam Audio reports the legs of the baked paths it checks, not of the alternates it
+        // finds when one is blocked. While the sound inspector is on, only baked paths are used:
+        // every leg heard is then a leg drawn.
+        inputs.findAlternatePaths = baked_only_.load(std::memory_order_relaxed) ? IPL_FALSE : IPL_TRUE;
         iplSourceSetInputs(source.handle.get(), IPL_SIMULATIONFLAGS_PATHING, &inputs);
     }
 
