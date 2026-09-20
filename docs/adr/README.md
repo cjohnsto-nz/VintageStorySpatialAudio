@@ -18,4 +18,8 @@ Each ADR records one decision: the context, the choice and its consequences. ADR
 | [0012](0012-every-sound-simulated-from-its-place.md) | Every sound is simulated from its place; no other path (supersedes 0010 and 0011) | Accepted |
 | [0013](0013-baked-pathing.md) | Pathing is baked: the ADR 0005 gate, measured (0.5 s per 64³ region) | Accepted |
 | [0014](0014-one-rolling-probe-batch.md) | Pathing runs in one probe batch that rolls with the listener (amends PLAN §5.5 and 0013) | Accepted |
+| [0015](0015-the-pathing-bake-is-budgeted.md) | The pathing bake is bounded by a probe budget, and abandoned when the listener moves on (amends 0013 and 0014) | Accepted |
+| [0016](0016-places-are-let-go-when-you-walk-away.md) | A place is let go when the listener walks away from it (amends 0012) | Accepted |
+| [0017](0017-a-stale-bake-is-discarded-not-cancelled.md) | A stale bake is discarded, not cancelled: Steam Audio's cancel is unusable (corrects 0015) | Accepted |
+| [0018](0018-the-settings-file-holds-real-values.md) | The settings file holds real values, not zeros standing for defaults | Accepted |
 | [0015](0015-multichannel-beds.md) | Multichannel beds (5.1 weather) play from their speakers; binaurally through a head-locked bus | Accepted |

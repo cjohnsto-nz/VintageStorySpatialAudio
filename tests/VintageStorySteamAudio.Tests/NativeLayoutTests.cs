@@ -21,9 +21,10 @@ public sealed class NativeLayoutTests
     [Fact]
     public unsafe void EngineConfig_matches_header()
     {
-        Assert.Equal(136, sizeof(VsaEngineConfig));
+        Assert.Equal(144, sizeof(VsaEngineConfig));
         Assert.Equal(112, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.PathingRange)));
         Assert.Equal(132, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.PathingSources)));
+        Assert.Equal(136, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.PathingMaxProbes)));
         Assert.Equal(76, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.DirectRateHz)));
         Assert.Equal(80, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.ReflectionSources)));
         Assert.Equal(92, (int)Marshal.OffsetOf<VsaEngineConfig>(nameof(VsaEngineConfig.ReflectionDuration)));
@@ -190,7 +191,12 @@ public sealed class NativeLayoutTests
         Assert.Equal(48, (int)Marshal.OffsetOf<VsaPathingStats>("BoxCentre"));
         Assert.Equal(72, (int)Marshal.OffsetOf<VsaPathingStats>(nameof(VsaPathingStats.Ticks)));
         Assert.Equal(112, (int)Marshal.OffsetOf<VsaPathingStats>("Listener"));
+        Assert.Equal(44, (int)Marshal.OffsetOf<VsaPathingStats>(nameof(VsaPathingStats.CancelledBakes)));
+        Assert.Equal(124, (int)Marshal.OffsetOf<VsaPathingStats>(nameof(VsaPathingStats.ProbeSpacing)));
         Assert.Equal(32, sizeof(VsaPathSegment));
+        Assert.Equal(72, sizeof(VsaThreadStats));
+        Assert.Equal(16, (int)Marshal.OffsetOf<VsaThreadStats>(nameof(VsaThreadStats.CpuMs)));
+        Assert.Equal(24, (int)Marshal.OffsetOf<VsaThreadStats>("Name"));
         Assert.Equal(20, (int)Marshal.OffsetOf<VsaPathSegment>("To"));
     }
 }

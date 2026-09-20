@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "steam/steam_context.hpp"
 #include "world/direct_sim.hpp"
 #include "world/transmission.hpp"
@@ -104,6 +105,7 @@ void PathSimulator::set_threaded(bool threaded) {
 }
 
 void PathSimulator::thread_main() {
+    ThreadScope scope("pathing simulation");
     const auto period = std::chrono::microseconds(1'000'000 / std::max(1u, settings_.rate_hz));
     auto next = std::chrono::steady_clock::now();
     std::unique_lock lock(thread_mutex_);

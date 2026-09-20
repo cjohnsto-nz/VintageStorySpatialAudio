@@ -340,8 +340,8 @@ TEST_CASE("pathing: walking in through an open door, nothing drops") {
                 }
             }
             previous_db = db;
-            CHECK(ps.listener[0] == doctest::Approx(7.5f));
-            CHECK(ps.listener[2] == doctest::Approx(z));
+            CHECK(static_cast<double>(ps.listener[0]) == doctest::Approx(7.5));
+            CHECK(static_cast<double>(ps.listener[2]) == doctest::Approx(static_cast<double>(z)));
         }
         REQUIRE(vsa_voice_stop(e.engine, v) == VSA_OK);
         render12(e, kRate / 4);

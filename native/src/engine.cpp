@@ -4,6 +4,7 @@
 #include "audio/stream.hpp"
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "steam/self_test.hpp"
 
 #include <algorithm>
@@ -129,6 +130,7 @@ Engine::Settings validate(const vsa_engine_config& config) {
     range(config.pathing_vis_samples, 1, 8, "pathing_vis_samples", b.vis_samples);
     range(config.pathing_rate_hz, 1, 60, "pathing_rate_hz", settings.path_sim.rate_hz);
     range(config.pathing_sources, 1, 256, "pathing_sources", settings.path_sim.max_sources);
+    range(config.pathing_max_probes, 64, 65536, "pathing_max_probes", b.max_probes);
     settings.path_sim.max_sources = std::min(settings.path_sim.max_sources, settings.max_real_voices);
     b.vis_range = static_cast<float>(b.range) / 3.0f;
     b.path_range = static_cast<float>(b.range);
@@ -184,6 +186,38 @@ vsa_event make_event(vsa_event_type type) noexcept {
 }
 
 }  // namespace
+
+vsa_engine_config Engine::default_config() {
+    vsa_engine_config config{};
+    config.struct_size = sizeof config;
+    config.abi_version = VSA_ABI_VERSION;
+    const Settings s = validate(config);
+    config.sample_rate = s.sample_rate;
+    config.block_frames = s.block_frames;
+    config.max_voices = s.max_voices;
+    config.resampler_quality = static_cast<uint32_t>(s.resampler_quality);
+    config.stream_threshold_ms = s.stream_threshold_ms;
+    config.max_real_voices = s.max_real_voices;
+    config.max_binaural_voices = s.max_binaural_voices;
+    config.occlusion_samples = s.occlusion_samples;
+    config.direct_rate_hz = s.direct_rate_hz;
+    config.reflection_sources = s.reflection.sources;
+    config.reflection_rays = s.reflection.rays;
+    config.reflection_bounces = s.reflection.bounces;
+    config.reflection_duration = s.reflection.duration;
+    config.reflection_order = s.reflection.order;
+    config.reflection_rate_hz = s.reflection.rate_hz;
+    config.reflection_threads = s.reflection.threads;
+    config.reflection_transition = s.reflection.transition;
+    config.pathing_range = s.path_bake.range;
+    config.pathing_height = s.path_bake.height;
+    config.pathing_probe_spacing = s.path_bake.spacing;
+    config.pathing_vis_samples = s.path_bake.vis_samples;
+    config.pathing_max_probes = s.path_bake.max_probes;
+    config.pathing_rate_hz = s.path_sim.rate_hz;
+    config.pathing_sources = s.path_sim.max_sources;
+    return config;
+}
 
 Engine::Engine(const vsa_engine_config& config)
     : settings_(validate(config)),
@@ -813,6 +847,7 @@ void Engine::render_offline(float* out, uint32_t frames) {
 // Worker
 
 void Engine::worker_main() {
+    ThreadScope scope("engine worker");
     while (running_.load(std::memory_order_acquire)) {
         try {
             service_streams();
@@ -882,6 +917,9 @@ void Engine::check_device() {
         return;
     }
     const bool spatial = output_kind_ == VSA_OUTPUT_SPATIAL;
+    if (!spatial) {
+        ThreadRegistry::instance().announce(device_.render_thread_id(), "render (device callback)");
+    }
     const auto now = std::chrono::steady_clock::now();
     if (spatial ? spatial_output_.take_rerouted() : device_.take_rerouted()) {
         // miniaudio follows the new default by itself; a spatial stream is tied to its endpoint

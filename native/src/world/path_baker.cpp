@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "steam/steam_context.hpp"
 #include "world/transmission.hpp"
 #include "world/world_scene.hpp"
@@ -19,12 +20,13 @@ void check(IPLerror error, const char* what) {
     }
 }
 
+// Steam Audio 4.8.1's path baker calls its progress callback unconditionally: it must not be
+// null. It is a no-op: cancelling a bake through it is not safe (ADR 0017).
+void IPLCALL no_progress(IPLfloat32, void*) {}
+
 double since_ms(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
-
-// Steam Audio 4.8.1's path baker calls its progress callback unconditionally: it must not be null.
-void IPLCALL no_progress(IPLfloat32, void*) {}
 
 constexpr auto kPoll = std::chrono::milliseconds(100);
 
@@ -33,15 +35,34 @@ constexpr auto kPoll = std::chrono::milliseconds(100);
 PathBaker::PathBaker(const steam::SteamContext& steam, WorldScene& scene, const PathBakeSettings& settings)
     : steam_(steam), scene_(scene), settings_(settings) {}
 
+void PathBaker::set_listener(const ListenerPose& pose) noexcept {
+    listener_.publish(pose);
+    // A bake whose box the listener has left is worth nothing: its paths are for where they
+    // were. Walking, a bake that is not abandoned is stale before it lands and the next one
+    // starts that much later (ADR 0015). The same third of the box as `due` uses.
+    if (!baking_.load(std::memory_order_acquire) || abandoned_.load(std::memory_order_relaxed)) {
+        return;
+    }
+    const float size[3] = {static_cast<float>(settings_.range), static_cast<float>(settings_.height),
+                           static_cast<float>(settings_.range)};
+    for (int k = 0; k < 3; ++k) {
+        const float centre = baking_centre_[k].load(std::memory_order_relaxed);
+        if (std::abs(pose.position[k] - centre) > size[k] / 3.0f) {
+            abandoned_.store(true, std::memory_order_release);  // the result will be thrown away
+            return;
+        }
+    }
+}
+
 PathBaker::~PathBaker() {
     if (thread_.joinable()) {
         {
             std::lock_guard lock(thread_mutex_);
             stop_ = true;
         }
-        iplPathBakerCancelBake(steam_.context());
+        abandoned_.store(true, std::memory_order_release);  // its result will be thrown away
         wake_.notify_all();
-        thread_.join();
+        thread_.join();  // a bake in flight runs to the end: about a second (ADR 0015)
     }
 }
 
@@ -60,13 +81,14 @@ void PathBaker::set_threaded(bool threaded) {
             std::lock_guard lock(thread_mutex_);
             stop_ = true;
         }
-        iplPathBakerCancelBake(steam_.context());
+        abandoned_.store(true, std::memory_order_release);  // its result will be thrown away
         wake_.notify_all();
-        thread_.join();
+        thread_.join();  // a bake in flight runs to the end: about a second (ADR 0015)
     }
 }
 
 void PathBaker::thread_main() {
+    ThreadScope scope("path baker");
     const auto started = std::chrono::steady_clock::now();
     std::unique_lock lock(thread_mutex_);
     while (!stop_) {
@@ -167,11 +189,40 @@ bool PathBaker::due(double now, Box& box) {
     return false;
 }
 
-void PathBaker::bake(const Box& box) {
-    {
-        std::lock_guard lock(mutex_);
-        stats_.baking = true;
+steam::ProbeArray PathBaker::generate(const Box& box, const IPLScene scene, const int32_t origin[3],
+                                      uint32_t& probes, float& spacing) const {
+    // Probes on every floor in the box. Steam Audio centres its "unit cube" on the transform's
+    // translation (it spans -0.5..0.5), whatever the header says.
+    IPLProbeGenerationParams generation{};
+    generation.type = IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR;
+    generation.height = settings_.probe_height;
+    for (int k = 0; k < 3; ++k) {
+        generation.transform.elements[k][k] = static_cast<float>(box.max[k] - box.min[k]);
+        generation.transform.elements[k][3] = static_cast<float>((box.min[k] + box.max[k]) / 2.0 - origin[k]);
     }
+    generation.transform.elements[3][3] = 1.0f;
+
+    // Probes go as 1 / spacing^2, so a spacing scaled by sqrt(probes / budget) lands near the
+    // budget; a little over, and at most a few tries, because the terrain decides the rest.
+    const auto budget = static_cast<float>(std::max(1u, settings_.max_probes));
+    spacing = settings_.spacing;
+    steam::ProbeArray array;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        steam::ProbeArray candidate;
+        check(iplProbeArrayCreate(steam_.context(), candidate.out()), "iplProbeArrayCreate");
+        generation.spacing = spacing;
+        iplProbeArrayGenerateProbes(candidate.get(), scene, &generation);
+        probes = static_cast<uint32_t>(std::max(0, iplProbeArrayGetNumProbes(candidate.get())));
+        array = std::move(candidate);
+        if (probes <= settings_.max_probes) {
+            break;
+        }
+        spacing *= 1.05f * std::sqrt(static_cast<float>(probes) / budget);
+    }
+    return array;
+}
+
+void PathBaker::bake(const Box& box) {
     const auto started = std::chrono::steady_clock::now();
     const std::vector<ChunkKey> keys = keys_in(box);
     std::vector<uint64_t> versions = scene_.chunk_versions(keys);
@@ -184,21 +235,18 @@ void PathBaker::bake(const Box& box) {
     std::copy_n(box.min, 3, batch->min);
     std::copy_n(box.max, 3, batch->max);
 
-    // Probes on every floor in the box. Steam Audio centres its "unit cube" on the transform's
-    // translation (it spans -0.5..0.5), whatever the header says.
-    IPLProbeGenerationParams generation{};
-    generation.type = IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR;
-    generation.spacing = settings_.spacing;
-    generation.height = settings_.probe_height;
+    // set_listener watches this box while the bake runs, and abandons it if the listener leaves.
     for (int k = 0; k < 3; ++k) {
-        generation.transform.elements[k][k] = static_cast<float>(box.max[k] - box.min[k]);
-        generation.transform.elements[k][3] = static_cast<float>((box.min[k] + box.max[k]) / 2.0 - origin[k]);
+        baking_centre_[k].store(static_cast<float>((box.min[k] + box.max[k]) / 2.0 - origin[k]), std::memory_order_relaxed);
     }
-    generation.transform.elements[3][3] = 1.0f;
-    steam::ProbeArray array;
-    check(iplProbeArrayCreate(steam_.context(), array.out()), "iplProbeArrayCreate");
-    iplProbeArrayGenerateProbes(array.get(), snapshot->scene(), &generation);
-    batch->probes = static_cast<uint32_t>(std::max(0, iplProbeArrayGetNumProbes(array.get())));
+    abandoned_.store(false, std::memory_order_relaxed);
+    baking_.store(true, std::memory_order_release);
+    {
+        std::lock_guard lock(mutex_);
+        stats_.baking = true;
+    }
+    float spacing = settings_.spacing;
+    const steam::ProbeArray array = generate(box, snapshot->scene(), origin, batch->probes, spacing);
     check(iplProbeBatchCreate(steam_.context(), batch->batch.out()), "iplProbeBatchCreate");
     iplProbeBatchAddProbeArray(batch->batch.get(), array.get());
     iplProbeBatchCommit(batch->batch.get());
@@ -215,31 +263,41 @@ void PathBaker::bake(const Box& box) {
         bake.visRange = settings_.vis_range;
         bake.pathRange = settings_.path_range;
         bake.numThreads = static_cast<IPLint32>(settings_.threads);
+        // The callback is not optional: Steam Audio 4.8.1 calls it unconditionally (ADR 0013).
         iplPathBakerBake(steam_.context(), &bake, &no_progress, nullptr);
     }
     batch->bake_ms = since_ms(started);
+    baking_.store(false, std::memory_order_release);
 
     std::lock_guard lock(mutex_);
-    if (stop_) {
-        stats_.baking = false;
-        return;  // cancelled: the data is incomplete
+    stats_.baking = false;
+    if (stop_ || abandoned_.load(std::memory_order_acquire)) {
+        // Cancelled: the data is incomplete, and where it is for is behind us. The next pass
+        // starts a bake on the box the listener is in now.
+        if (!stop_) {
+            ++stats_.cancelled;
+            Log::writef(VSA_LOG_DEBUG, "pathing: bake of %u probes abandoned after %.0f ms; the listener moved on",
+                        batch->probes, batch->bake_ms);
+        }
+        return;
     }
     batch->id = next_id_++;
     current_ = batch;
     keys_ = keys;
     versions_ = std::move(versions);
     changed_at_ = -1.0;
-    stats_.baking = false;
     stats_.dirty = false;
     ++stats_.bakes;
     stats_.last_bake_ms = batch->bake_ms;
     stats_.max_bake_ms = std::max(stats_.max_bake_ms, batch->bake_ms);
     stats_.probes = batch->probes;
+    stats_.spacing = spacing;
     for (int k = 0; k < 3; ++k) {
         stats_.centre[k] = (box.min[k] + box.max[k]) / 2.0;
     }
-    Log::writef(VSA_LOG_INFO, "pathing: baked %u probes over %u x %u x %u blocks from %zu chunks in %.0f ms", batch->probes,
-                settings_.range, settings_.height, settings_.range, snapshot->chunk_count(), batch->bake_ms);
+    Log::writef(VSA_LOG_INFO, "pathing: baked %u probes %.1f m apart over %u x %u x %u blocks from %zu chunks in %.0f ms",
+                batch->probes, static_cast<double>(spacing), settings_.range, settings_.height, settings_.range,
+                snapshot->chunk_count(), batch->bake_ms);
 }
 
 std::shared_ptr<const PathBatch> PathBaker::current() const {

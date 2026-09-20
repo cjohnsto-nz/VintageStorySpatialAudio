@@ -9,6 +9,7 @@
 #include "audio/asset.hpp"
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "engine.hpp"
 #include "world/world_scene.hpp"
 #include "vsaudio_build_info.h"
@@ -26,15 +27,17 @@
 static_assert(sizeof(vsa_result) == 4 && sizeof(vsa_log_level) == 4, "vsaudio enums must be 32-bit");
 static_assert(std::is_standard_layout_v<vsa_engine_config> && std::is_standard_layout_v<vsa_self_test_report>);
 // Layouts the managed bindings mirror (tests/.../NativeLayoutTests.cs). 64-bit targets only.
-static_assert(sizeof(vsa_engine_config) == 136 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
+static_assert(sizeof(vsa_engine_config) == 144 && offsetof(vsa_engine_config, max_binaural_voices) == 56 &&
               offsetof(vsa_engine_config, hrtf_sofa_path) == 64 && offsetof(vsa_engine_config, direct_rate_hz) == 76 &&
               offsetof(vsa_engine_config, reflection_sources) == 80 &&
               offsetof(vsa_engine_config, reflection_transition) == 108 &&
-              offsetof(vsa_engine_config, pathing_range) == 112 && offsetof(vsa_engine_config, pathing_sources) == 132);
+              offsetof(vsa_engine_config, pathing_range) == 112 && offsetof(vsa_engine_config, pathing_sources) == 132 &&
+              offsetof(vsa_engine_config, pathing_max_probes) == 136);
 static_assert(sizeof(vsa_pathing_stats) == 128 && offsetof(vsa_pathing_stats, bakes) == 16 &&
               offsetof(vsa_pathing_stats, box_centre) == 48 && offsetof(vsa_pathing_stats, ticks) == 72 &&
               offsetof(vsa_pathing_stats, listener) == 112);
 static_assert(sizeof(vsa_path_segment) == 32 && offsetof(vsa_path_segment, to) == 20);
+static_assert(sizeof(vsa_thread_stats) == 72 && offsetof(vsa_thread_stats, cpu_ms) == 16 && offsetof(vsa_thread_stats, name) == 24);
 static_assert(sizeof(vsa_reflection_stats) == 120 && offsetof(vsa_reflection_stats, ticks) == 56 &&
               offsetof(vsa_reflection_stats, listener_reverb_times) == 88 && offsetof(vsa_reflection_stats, listener) == 108);
 static_assert(sizeof(vsa_reflection_source) == 56 && offsetof(vsa_reflection_source, voice) == 8 &&
@@ -130,6 +133,16 @@ vsa::Engine& engine_of(vsa_engine* engine) {
 }  // namespace
 
 extern "C" {
+
+VSA_API vsa_result VSA_CALL vsa_get_default_config(vsa_engine_config* out) {
+    return guarded([&] {
+        check_out_struct(out, "vsa_engine_config");
+        const uint32_t size = out->struct_size;
+        *out = vsa::Engine::default_config();
+        out->struct_size = size;  // the caller's, which may be an older (smaller) layout
+        return VSA_OK;
+    });
+}
 
 VSA_API vsa_result VSA_CALL vsa_get_version(vsa_version_info* out) {
     return guarded([&] {
@@ -803,6 +816,8 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_pathing_stats(vsa_engine* engine, vsa
             stats.last_bake_ms = b.last_bake_ms;
             stats.max_bake_ms = b.max_bake_ms;
             stats.probes = b.probes;
+            stats.cancelled_bakes = static_cast<uint32_t>(b.cancelled);
+            stats.probe_spacing = b.spacing;
             std::copy_n(b.centre, 3, stats.box_centre);
             stats.ticks = s.ticks;
             stats.last_tick_ms = s.last_tick_ms;
@@ -837,6 +852,33 @@ VSA_API vsa_result VSA_CALL vsa_engine_get_path_segments(vsa_engine* engine, vsa
             std::copy_n(s.from, 3, d.from);
             std::copy_n(s.to, 3, d.to);
             out[i] = d;
+        }
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_engine_get_thread_stats(vsa_engine* engine, vsa_thread_stats* out, uint32_t capacity,
+                                                        uint32_t* out_count) {
+    return guarded([&] {
+        if (out_count == nullptr) {
+            throw vsa::Error(VSA_ERROR_INVALID_ARGUMENT, "out_count must not be null");
+        }
+        *out_count = 0;
+        check_out_array(out, capacity, "vsa_thread_stats");
+        (void)engine_of(engine);  // process-wide, but behind the engine like everything else
+        const std::vector<vsa::ThreadSample> threads = vsa::ThreadRegistry::instance().sample();
+        *out_count = static_cast<uint32_t>(threads.size());
+        for (std::size_t i = 0; i < capacity && i < threads.size(); ++i) {
+            const vsa::ThreadSample& t = threads[i];
+            vsa_thread_stats s{};
+            s.struct_size = sizeof s;
+            s.kind = static_cast<uint32_t>(t.kind);
+            s.thread_id = t.id;
+            s.cpu_ms = t.cpu_ms;
+            const std::size_t length = std::min(t.name.size(), sizeof s.name - 1);
+            std::copy_n(t.name.data(), length, s.name);
+            s.name[length] = '\0';
+            out[i] = s;
         }
         return VSA_OK;
     });

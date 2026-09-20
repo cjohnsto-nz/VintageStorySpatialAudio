@@ -411,6 +411,38 @@ TEST_CASE("reflections: places are kept for repeated sounds, taken over by loude
     CHECK(s.draining_slots == 0);
     CHECK(sources(e).size() == 1);
 }
+TEST_CASE("reflections: a place the listener has walked away from is let go at once (ADR 0016)") {
+    // Walking leaves a trail of places behind. Held for the idle spell (30 s), they go on being
+    // simulated from ground already left; beyond hearing they are let go straight away.
+    const Room room{80, 6, 12};
+    OfflineEngine e(reflection_config(8));
+    set_materials(e);
+    build(e, &room);
+    e.listener(6.0f, room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+    const AssetPtr tone = e.pcm(burst(1.0), 1, kRate);
+    const vsa_voice sound = e.positioned(tone, VSA_SPATIAL_WORLD, 6.0f, room.cy(), room.cz());
+    REQUIRE(vsa_voice_start(e.engine, sound) == VSA_OK);
+    e.render(kRate / 2);
+    REQUIRE(stats(e).live_slots == 1);
+    // The sound is over, as a footstep or a creaking door would be: its place is held for a
+    // while, so the next sound at the same spot has its converged simulation (ADR 0012).
+    REQUIRE(vsa_voice_stop(e.engine, sound) == VSA_OK);
+    e.render(kRate / 4);
+
+    // A few steps on, well within earshot: still held.
+    e.listener(20.0f, room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+    e.render(kRate / 4);
+    CHECK(stats(e).live_slots == 1);
+
+    // Far enough that its reflections could not be heard: let go without waiting out the idle
+    // spell, so the simulation is spent on where the listener is now.
+    e.listener(70.0f, room.cy(), room.cz(), 0.0f, 0.0f, -1.0f);
+    e.render(kRate / 2);
+    const vsa_reflection_stats s = stats(e);
+    CHECK(s.live_slots == 0);
+    CHECK(sources(e).size() == 1);  // the listener's own, always
+}
+
 TEST_CASE("reflections: the gain scales them") {
     const Room room{4, 3, 4};
     OfflineEngine e(reflection_config());

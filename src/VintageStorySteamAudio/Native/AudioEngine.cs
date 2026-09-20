@@ -79,8 +79,11 @@ public sealed record PathingSettings
     /// <summary>The box's height, blocks (16..128).</summary>
     public int HeightBlocks { get; init; }
 
-    /// <summary>Metres between probes (1..8).</summary>
+    /// <summary>Metres between probes (1..8). Widened when the box would hold more than <see cref="MaxProbes"/>.</summary>
     public float ProbeSpacing { get; init; }
+
+    /// <summary>Probes baked at most; the spacing widens to keep within it (64..65536).</summary>
+    public int MaxProbes { get; init; }
 
     /// <summary>Point samples per probe when testing whether two probes see each other (1..8).</summary>
     public int VisibilitySamples { get; init; }
@@ -252,6 +255,7 @@ public sealed partial class AudioEngine : IDisposable
                     PathingVisSamples = checked((uint)options.PathingSettings.VisibilitySamples),
                     PathingRateHz = checked((uint)options.PathingSettings.RateHz),
                     PathingSources = checked((uint)options.PathingSettings.Sources),
+                    PathingMaxProbes = checked((uint)options.PathingSettings.MaxProbes),
                 };
 
                 NativeException.ThrowIfFailed(VsaNative.EngineCreate(in config, out engine), "vsa_engine_create");

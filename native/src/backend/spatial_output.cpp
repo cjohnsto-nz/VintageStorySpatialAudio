@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 
 #include <condition_variable>
 #include <cstring>
@@ -183,6 +184,7 @@ private:
 }  // namespace
 
 void SpatialOutput::Impl::run(DeviceOutput::RenderFn render, DeviceOutput::PrepareFn prepare, void* user) noexcept {
+    ThreadScope scope("render (spatial audio)");
     const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(co)) {
         fail(VSA_ERROR_DEVICE, "COM initialisation failed: " + hresult(co));

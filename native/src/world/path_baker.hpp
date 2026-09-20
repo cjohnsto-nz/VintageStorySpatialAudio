@@ -5,6 +5,7 @@
 #include "steam/ipl_handle.hpp"
 #include "world/voxel.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -24,11 +25,15 @@ class WorldScene;
 /// How pathing data is baked (ADR 0014); validated by the engine.
 struct PathBakeSettings {
     /// The box baked round the listener: blocks across (x and z) and high (y).
-    uint32_t range = 96;
+    uint32_t range = 64;
     uint32_t height = 64;
-    /// Probes this far apart, this high above every floor.
+    /// Probes this far apart, this high above every floor. The spacing is widened when the
+    /// terrain would otherwise put more than `max_probes` in the box.
     float spacing = 2.5f;
     float probe_height = 1.6f;
+    /// Probes to bake at most (ADR 0015). A bake costs about probes^2.2, and how many probes a
+    /// box holds is up to the terrain: without a budget, open ground takes tens of seconds.
+    uint32_t max_probes = 1200;
     /// Point samples per probe when testing whether two probes see each other (1: fast; more:
     /// robust to thin gaps).
     uint32_t vis_samples = 1;
@@ -58,9 +63,12 @@ struct PathBatch {
 struct PathBakeStats {
     bool baking = false;
     uint64_t bakes = 0;
+    /// Bakes abandoned because the listener had moved on before they finished.
+    uint64_t cancelled = 0;
     double last_bake_ms = 0.0;
     double max_bake_ms = 0.0;
     uint32_t probes = 0;   // of the current batch
+    float spacing = 0.0f;  // it was baked with (wider than settings when the budget bit)
     double centre[3] = {};  // of the current batch's box (world)
     bool dirty = false;    // a bake is due (chunks changed, the listener left the middle)
 };
@@ -81,8 +89,9 @@ public:
     PathBaker& operator=(const PathBaker&) = delete;
 
     [[nodiscard]] const PathBakeSettings& settings() const noexcept { return settings_; }
-    /// The listener, in scene coordinates.
-    void set_listener(const ListenerPose& pose) noexcept { listener_.publish(pose); }
+    /// The listener, in scene coordinates. Called every frame: it also abandons a bake whose
+    /// box the listener has already left, which would otherwise finish and be thrown away.
+    void set_listener(const ListenerPose& pose) noexcept;
 
     void set_threaded(bool threaded);
     [[nodiscard]] bool threaded() const noexcept { return thread_.joinable(); }
@@ -102,6 +111,9 @@ private:
     /// Whether a bake is due at `now` (seconds on the caller's clock), and the box it would be.
     [[nodiscard]] bool due(double now, Box& box);
     void bake(const Box& box);
+    /// Probes for `box`, widening the spacing until there are at most `max_probes` of them.
+    [[nodiscard]] steam::ProbeArray generate(const Box& box, const IPLScene scene, const int32_t origin[3],
+                                             uint32_t& probes, float& spacing) const;
     [[nodiscard]] std::vector<ChunkKey> keys_in(const Box& box) const;
 
     const steam::SteamContext& steam_;
@@ -116,6 +128,17 @@ private:
     double changed_at_ = -1.0;           // when a change was first seen (caller's clock); -1 none
     PathBakeStats stats_;
     uint64_t next_id_ = 1;
+
+    // Read by set_listener on the game's thread while a bake runs on ours.
+    std::atomic<bool> baking_{false};
+    /// Set when the listener leaves the box being baked: the result is thrown away when the
+    /// bake finishes. The bake itself is never cut short -- see ADR 0017. Steam Audio 4.8.1's
+    /// `iplPathBakerCancelBake` cannot be used at all: its thread pool's cancel flag is never
+    /// cleared, so once set the workers stop waiting and spin calling `processNextJob` on a
+    /// `JobGraph` the bake has already destroyed. The game then dies seconds later, somewhere
+    /// else, with no managed exception to show for it.
+    std::atomic<bool> abandoned_{false};
+    std::atomic<float> baking_centre_[3] = {};
 
     std::mutex thread_mutex_;
     std::condition_variable wake_;

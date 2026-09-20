@@ -104,12 +104,47 @@ public sealed class WorldSceneTests
         Assert.Equal(1f, fence.Boxes![0].MaxY);
 
         Assert.Equal(CellShape.Dynamic, BlockClassifier.Classify(new BlockInfo("game:door-oak", "Wood", [new VsaBox(0, 0, 0.875f, 1, 1, 1)], true), table).Shape);
+        // A chiselled block declares the default full cube and is anything but: its shape is its
+        // block entity's, so it must be read per snapshot rather than taken for a solid cube.
+        Assert.Equal(CellShape.Dynamic, BlockClassifier.Classify(new BlockInfo("game:chiseledblock", "Stone", [unit], true), table).Shape);
+        Assert.Equal(CellShape.Dynamic, BlockClassifier.Classify(new BlockInfo("game:microblock", "Stone", [unit], true), table).Shape);
+        // Without an entity the declared cube is the whole truth, as before.
+        Assert.Equal(CellShape.Full, BlockClassifier.Classify(new BlockInfo("game:rock-granite", "Stone", [unit], false), table).Shape);
         // A door's filler block (upper half): its static box is a full cube, but its real shape is the door's.
         BlockAcoustics filler = BlockClassifier.Classify(new BlockInfo("game:multiblock-monolithic-0-p1-0", "Wood", [unit], false, DelegatesShape: true), table);
         Assert.Equal(CellShape.Dynamic, filler.Shape);
 
-        // A full cube with a block entity (a chest-sized crate) is simply full.
-        Assert.Equal(CellShape.Full, BlockClassifier.Classify(new BlockInfo("game:crate", "Wood", [unit], true), table).Shape);
+        // Anything with a block entity is read per snapshot, even where the declared shape is a
+        // plain cube: a crate's entity gives that cube back and it ends up full, while a
+        // chiselled block's gives its real cuboids. The type cannot tell the two apart.
+        Assert.Equal(CellShape.Dynamic, BlockClassifier.Classify(new BlockInfo("game:crate", "Wood", [unit], true), table).Shape);
+    }
+
+    [Fact]
+    public void A_finely_chiselled_block_keeps_its_largest_boxes_and_no_more()
+    {
+        // The chisel can leave more cuboids than are worth meshing: each is twelve triangles and
+        // a test in every ray through the cell, and the small ones are below a wavelength anyway.
+        MaterialTable table = MaterialTable.Build(ShippedConfig());
+        var boxes = new List<VsaBox>();
+        for (int i = 0; i < BlockClassifier.MaxBoxes + 20; i++)
+        {
+            float size = 0.01f + 0.005f * i;  // increasing, so the last ones are the largest
+            boxes.Add(new VsaBox(0f, 0f, 0f, size, size, size));
+        }
+
+        BlockAcoustics chiselled = BlockClassifier.Classify(
+            new BlockInfo("game:chiseledblock", "Stone", boxes, false), table);
+        Assert.Equal(CellShape.Partial, chiselled.Shape);
+        Assert.Equal(BlockClassifier.MaxBoxes, chiselled.Boxes!.Length);
+        // The largest survived, the slivers did not.
+        Assert.Contains(chiselled.Boxes, b => b.MaxX > 0.25f);
+        Assert.DoesNotContain(chiselled.Boxes, b => b.MaxX < 0.1f);
+
+        // Under the cap nothing is dropped.
+        BlockAcoustics few = BlockClassifier.Classify(
+            new BlockInfo("game:chiseledblock", "Stone", boxes.Take(4).ToList(), false), table);
+        Assert.Equal(4, few.Boxes!.Length);
     }
 
     [Fact]

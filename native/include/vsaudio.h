@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 11u
+#define VSA_ABI_VERSION 14u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -205,7 +205,8 @@ typedef struct vsa_engine_config {
      * baked probe paths. A box round the listener is baked in the background and baked again
      * when the listener leaves its middle or blocks in it change. 0 = the default for each.
      */
-    /** The box: blocks across (x and z), 0 = 96; 32..256; and high, 0 = 64; 16..128. */
+    /** The box baked round the listener: blocks across (x and z), 0 = 64; 32..256; and high,
+     *  0 = 64; 16..128. */
     uint32_t pathing_range;
     uint32_t pathing_height;
     /** Metres between probes, 0 = 2.5; 1..8. */
@@ -216,6 +217,9 @@ typedef struct vsa_engine_config {
     uint32_t pathing_rate_hz;
     /** Sounds given paths per simulation at most (the loudest blocked ones), 0 = 16; 1..256. */
     uint32_t pathing_sources;
+    /** Probes baked at most: the spacing widens to keep within it, since a bake costs about
+     *  probes^2.2 and the terrain decides how many a box holds (ADR 0015). 0 = 1200; 64..65536. */
+    uint32_t pathing_max_probes;
 } vsa_engine_config;
 
 typedef struct vsa_engine_info {
@@ -980,7 +984,8 @@ typedef struct vsa_pathing_stats {
     double last_bake_ms;
     double max_bake_ms;
     uint32_t probes;
-    uint32_t reserved;
+    /** Bakes abandoned because the listener left the box before they finished. */
+    uint32_t cancelled_bakes;
     double box_centre[3];
     /** The simulation: runs, timings, and in the latest run how many sounds wanted a path, how
      *  many were simulated and how many have one. */
@@ -993,7 +998,8 @@ typedef struct vsa_pathing_stats {
     uint32_t rate_hz;
     /** Where the latest run listened from (scene coordinates). */
     float listener[3];
-    uint32_t reserved2;
+    /** Metres between the current batch's probes: wider than configured when the budget bit. */
+    float probe_spacing;
 } vsa_pathing_stats;
 
 VSA_API vsa_result VSA_CALL vsa_engine_get_pathing_stats(vsa_engine* engine, vsa_pathing_stats* out);
@@ -1013,6 +1019,48 @@ typedef struct vsa_path_segment {
  */
 VSA_API vsa_result VSA_CALL vsa_engine_get_path_segments(vsa_engine* engine, vsa_path_segment* out, uint32_t capacity,
                                                          uint32_t* out_count);
+
+/* ---- Profiling (Phase 8) ------------------------------------------------------------------- */
+
+/** Whose a thread is. */
+typedef enum vsa_thread_kind {
+    /** One of the engine's, named. */
+    VSA_THREAD_ENGINE = 0,
+    /** Steam Audio's own workers (its ray tracing runs on threads it creates). */
+    VSA_THREAD_STEAM_AUDIO = 1,
+    /** The rest of the process: the game, the runtime, drivers; named by module. */
+    VSA_THREAD_OTHER = 2
+} vsa_thread_kind;
+
+typedef struct vsa_thread_stats {
+    uint32_t struct_size;
+    /** A vsa_thread_kind value. */
+    uint32_t kind;
+    uint32_t thread_id;
+    uint32_t reserved;
+    /** User + kernel CPU time since the thread started, in milliseconds. */
+    double cpu_ms;
+    /** The engine's name for it, or (Windows) the module its start address lies in. */
+    char name[48];
+} vsa_thread_stats;
+
+/**
+ * The process's threads and their CPU time: the engine's by name; on Windows every other thread
+ * too, classified by module, so the game's and Steam Audio's own can be told from ours. Two
+ * readings some seconds apart give each thread's share of a core. Fills up to `capacity` entries
+ * (out[0].struct_size set) and sets *out_count to the total.
+ */
+VSA_API vsa_result VSA_CALL vsa_engine_get_thread_stats(vsa_engine* engine, vsa_thread_stats* out, uint32_t capacity,
+                                                        uint32_t* out_count);
+
+/**
+ * Fills `out` with every setting resolved: what a zeroed config would actually run as, the
+ * values that depend on the machine included (the reflection threads). `out->struct_size` must
+ * be set. No engine is needed. A settings file written from this holds real numbers rather than
+ * zeros, which is what a reader of it needs (ADR 0018); a zero in a config still means "the
+ * default", so an older file keeps working.
+ */
+VSA_API vsa_result VSA_CALL vsa_get_default_config(vsa_engine_config* out);
 
 /** One leg of a traced sound path (vsa_scene_trace_rays). */
 typedef struct vsa_ray_segment {

@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "steam/steam_context.hpp"
 
 #include <algorithm>
@@ -293,6 +294,7 @@ IPLMatrix4x4 WorldScene::transform_locked(ChunkKey key) const {
 }
 
 void WorldScene::worker_main() {
+    ThreadScope scope("scene builder");
     struct Job {
         ChunkKey key;
         uint64_t version = 0;

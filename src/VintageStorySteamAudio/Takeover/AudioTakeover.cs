@@ -9,6 +9,7 @@ using Vintagestory.Client.NoObf;
 using VintageStorySteamAudio.Config;
 using VintageStorySteamAudio.Native;
 using VintageStorySteamAudio.Platform;
+using VintageStorySteamAudio.Diagnostics;
 
 namespace VintageStorySteamAudio.Takeover;
 
@@ -175,6 +176,7 @@ internal sealed class AudioTakeover : IDisposable
     /// <summary>ClientPlatformWindows.CreateAudio (both overloads).</summary>
     public ILoadedSound? CreateSound(SoundParams sound, AudioData data)
     {
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.SoundCreate);
         if (data is not AudioMetaData meta || meta.Asset is null)
         {
             return null;  // as vanilla
@@ -240,20 +242,30 @@ internal sealed class AudioTakeover : IDisposable
     /// <summary>ClientPlatformWindows.UpdateAudioListener: once per frame on the main thread.</summary>
     public void OnFrame(float posX, float posY, float posZ, float orientX, float orientY, float orientZ)
     {
-        // Vanilla passes a flattened view (y = 0); use the player's full view direction when we can.
-        Vec3f? view = api.World?.Player?.Entity?.Pos?.GetViewVector();
-        if (view is null)
+        using (PerfMonitor.Instance.Measure(PerfSection.Listener))
         {
-            session.SetListener(posX, posY, posZ, orientX, orientY, orientZ);
-        }
-        else
-        {
-            session.SetListener(posX, posY, posZ, view.X, view.Y, view.Z);
+            // Vanilla passes a flattened view (y = 0); use the player's full view direction when we can.
+            Vec3f? view = api.World?.Player?.Entity?.Pos?.GetViewVector();
+            if (view is null)
+            {
+                session.SetListener(posX, posY, posZ, orientX, orientY, orientZ);
+            }
+            else
+            {
+                session.SetListener(posX, posY, posZ, view.X, view.Y, view.Z);
+            }
         }
 
-        entitySounds?.Update(Environment.TickCount64);
-        session.Pump();
-        PollSettings(force: false);
+        using (PerfMonitor.Instance.Measure(PerfSection.EntityTracking))
+        {
+            entitySounds?.Update(Environment.TickCount64);
+        }
+
+        using (PerfMonitor.Instance.Measure(PerfSection.Pump))
+        {
+            session.Pump();
+            PollSettings(force: false);
+        }
     }
 
     public IList<string> DeviceNames()

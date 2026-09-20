@@ -35,6 +35,10 @@ constexpr double kDirectMaxHoldSeconds = 0.08;
 constexpr float kPlaceRadius = 3.0f;
 constexpr float kPlaceSteal = 2.0f;
 constexpr double kPlaceIdleSeconds = 30.0;
+/// An idle place this far from the listener is let go at once rather than held for
+/// kPlaceIdleSeconds: its reflections are inaudible from here, and walking leaves a trail of
+/// places behind that would otherwise go on being simulated (ADR 0016).
+constexpr float kPlaceFarRelease = 48.0f;
 // A voice asks for a path round what blocks it when less than this much of it is visible.
 constexpr float kPathWanted = 0.9f;
 // Path coefficients below this (amplitude) count as no path.
@@ -1022,9 +1026,18 @@ void Mixer::update_places() noexcept {
         Place& p = places_[i];
         p.ranked = p.level;
         p.level = 0.0f;
-        if (p.used && p.users == 0 && block_index_ - p.last_used > place_idle_blocks_) {
-            reflections_->release(static_cast<int>(i));
-            p.used = false;
+        if (p.used && p.users == 0) {
+            // Held for a while, so a sound repeated at one spot keeps its converged simulation
+            // (ADR 0012) -- but only while it is near enough to be heard from.
+            float d2 = 0.0f;
+            for (int k = 0; k < 3; ++k) {
+                const float d = p.position[k] - pose_.position[k];
+                d2 += d * d;
+            }
+            if (d2 > kPlaceFarRelease * kPlaceFarRelease || block_index_ - p.last_used > place_idle_blocks_) {
+                reflections_->release(static_cast<int>(i));
+                p.used = false;
+            }
         }
     }
 }

@@ -2,6 +2,7 @@
 
 #include "core/error.hpp"
 #include "core/log.hpp"
+#include "core/thread_stats.hpp"
 #include "steam/steam_context.hpp"
 #include "world/world_scene.hpp"
 
@@ -109,6 +110,7 @@ void DirectSimulator::set_threaded(bool threaded) {
 }
 
 void DirectSimulator::thread_main() {
+    ThreadScope scope("direct simulation");
     const auto period = std::chrono::microseconds(1'000'000 / rate_hz_);
     auto next = std::chrono::steady_clock::now();
     std::unique_lock lock(thread_mutex_);
