@@ -4,7 +4,8 @@ using System.Runtime.InteropServices;
 namespace VintageStorySpatialAudio.Native;
 
 /// <summary>
-/// Resolves the engine's native libraries from the mod's own <c>native/&lt;rid&gt;/</c> folder.
+/// Resolves the engine's native libraries from the mod's own <c>native/&lt;rid&gt;/</c> folder, or
+/// from the native pack's (<see cref="NativePackModId"/>: Linux and macOS, a second download).
 /// </summary>
 /// <remarks>
 /// Vintage Story extracts zip mods to <c>Cache/unpack/&lt;mod&gt;_&lt;hash&gt;/</c> and loads the
@@ -54,6 +55,64 @@ internal static class NativeLibraryResolver
         }
 
         return Path.Combine(modDirectory, "native", RuntimeFolderName);
+    }
+
+    /// <summary>The mod that carries the Linux and macOS libraries (the main download has Windows').</summary>
+    public const string NativePackModId = "spatialaudiounix";
+
+    /// <summary>That mod's assembly, beside which its <c>native/</c> folder is unpacked.</summary>
+    public const string NativePackAssemblyName = "SpatialAudioUnixNatives";
+
+    /// <summary>
+    /// The folder holding this platform's libraries: the mod's own, or else the native pack's.
+    /// The pack must be the version this mod is: a library from another release is not loaded.
+    /// </summary>
+    /// <param name="assemblyLocation">Where the mod's assembly is.</param>
+    /// <param name="packAssemblyLocation">Where the native pack's assembly is; null: not installed.</param>
+    /// <param name="version">The mod's version.</param>
+    /// <param name="packVersion">The native pack's version.</param>
+    public static string FindNativeDirectory(string assemblyLocation, string? packAssemblyLocation, string? version, string? packVersion)
+    {
+        string own = DefaultNativeDirectory(assemblyLocation);
+        string library = PlatformFileName(VsaNative.LibraryName);
+        if (File.Exists(Path.Combine(own, library)))
+        {
+            return own;
+        }
+
+        if (!string.IsNullOrEmpty(packAssemblyLocation))
+        {
+            string pack = DefaultNativeDirectory(packAssemblyLocation);
+            if (File.Exists(Path.Combine(pack, library)))
+            {
+                if (!string.Equals(version, packVersion, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"The '{NativePackModId}' mod is version {packVersion ?? "?"} and Spatial Audio is {version ?? "?"}. Update both to the same version.");
+                }
+
+                return pack;
+            }
+        }
+
+        throw new DllNotFoundException(OperatingSystem.IsWindows()
+            ? $"The mod's libraries for this platform ({RuntimeFolderName}) are missing from '{own}'. Download the mod again."
+            : $"The libraries for {RuntimeFolderName} come in a second mod, because of the mod database's size limit: install "
+              + $"'Spatial Audio: Linux and macOS natives' ({NativePackModId}), the same version as this one.");
+    }
+
+    /// <summary>The native pack's assembly location if the pack is loaded in this process; else null.</summary>
+    public static string? LoadedNativePackLocation()
+    {
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (string.Equals(assembly.GetName().Name, NativePackAssemblyName, StringComparison.Ordinal) && !string.IsNullOrEmpty(assembly.Location))
+            {
+                return assembly.Location;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

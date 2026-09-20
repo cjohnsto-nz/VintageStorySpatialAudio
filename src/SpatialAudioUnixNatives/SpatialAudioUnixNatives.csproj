@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    "Spatial Audio: Linux and macOS natives" (mod id spatialaudiounix). The mod database takes
+    files up to 40 MB and Steam Audio's library is 15-19 MB compressed per platform, so the main
+    mod ships the Windows libraries and this one the rest (scripts/build.ps1 -Split). The game
+    unpacks a zip to disk only for a code mod, and libraries can only be loaded from disk: hence
+    an assembly, with one mod system that does nothing. The main mod finds this assembly among
+    those loaded and takes native/<rid>/ from beside it (NativeLibraryResolver.FindNativeDirectory).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SpatialAudioUnixNatives</AssemblyName>
+    <RootNamespace>SpatialAudioUnixNatives</RootNamespace>
+    <RequiresVintageStory>true</RequiresVintageStory>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="VintagestoryAPI">
+      <HintPath>$(VintageStoryPath)/VintagestoryAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="modinfo.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../VintageStorySpatialAudio/modicon.png" Link="modicon.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -14,6 +14,15 @@ the ADRs' discussion of it. The native library is still `vsaudio`. The checkout 
 GitHub repository are still named VintageStorySteamAudio until Chris renames them; the README and
 CI links already use the new repository name (GitHub redirects once it is renamed).
 
+## Release packaging (21 Sep 2026, ADR 0019)
+
+The mod database takes 40 MB and all three platforms are 54 MB, nearly all of it `phonon`. A
+release is two zips from the CI artifact `spatialaudio-mod`: `spatialaudio_<v>.zip` (the mod, with
+the Windows libraries) and `spatialaudiounix_<v>.zip` (`src/SpatialAudioUnixNatives`: the Linux and
+macOS libraries, a code mod that does nothing). Bump the version in **both** `modinfo.json` files
+and the pack's dependency (`NativePackTests` checks). Not yet tried in a game on Linux or macOS:
+that the game unpacks the pack and the mod finds it is tested only as far as the folder logic.
+
 ## Where things stand
 
 ### Phase 0 (foundations): complete and verified on Windows
