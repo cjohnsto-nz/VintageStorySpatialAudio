@@ -236,13 +236,21 @@ public static class ScenarioRunner
             failures.Add($"RMS {rms:0.00} dBFS < {expect.MinRmsDbfs:0.00}");
         }
 
-        if (m.Render.P99Load > expect.MaxP99Load)
+        // The load expectation is a CPU budget, and it means what it says only on the hardware the
+        // number was written for. VSA_NO_PERF_BUDGETS=1 -- which CI sets, because a shared runner
+        // renders this scene at about four times the cost -- still measures and reports it, and
+        // leaves the level and underrun expectations gating as they are.
+        if (PerfBudgetsEnforced && m.Render.P99Load > expect.MaxP99Load)
         {
             failures.Add($"p99 block load {m.Render.P99Load:P1} > {expect.MaxP99Load:P1}");
         }
 
         return failures;
     }
+
+    /// <summary>Whether the scenarios' CPU budgets are asserted rather than only measured.</summary>
+    private static bool PerfBudgetsEnforced { get; } =
+        Environment.GetEnvironmentVariable("VSA_NO_PERF_BUDGETS") is not { } off || off.Length == 0 || off == "0";
 
     private static void Apply(Voice voice, VoiceAction action, SpatialMode mode)
     {
