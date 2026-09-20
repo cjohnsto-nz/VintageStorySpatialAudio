@@ -3,6 +3,7 @@
 #include "audio/asset.hpp"
 #include "core/alloc_counter.hpp"
 #include "engine.hpp"
+#include "support/budgets.hpp"
 #include "support/signals.hpp"
 
 #include <doctest/doctest.h>
@@ -245,7 +246,9 @@ TEST_CASE("256 voices render faster than real time") {
     CHECK(engine.stats().active_voices == kVoices);
 #if defined(NDEBUG)
     // Optimised builds only; Debug (and the Debug-only sanitizer build) is far slower by design.
-    CHECK(r.p99 < r.period_us);
+    if (vsa_test::perf_budgets_enforced()) {
+        CHECK(r.p99 < r.period_us);
+    }
 #endif
 }
 
@@ -269,7 +272,9 @@ TEST_CASE("256 positional voices render faster than real time, binaural and pann
                 << 100.0 * r.p50 / r.period_us << " %), p99 " << r.p99 << " us (" << 100.0 * r.p99 / r.period_us << " %)");
         CHECK(engine.stats().real_voices == kVoices);
 #if defined(NDEBUG)
-        CHECK(r.p99 < r.period_us);
+        if (vsa_test::perf_budgets_enforced()) {
+            CHECK(r.p99 < r.period_us);
+        }
 #endif
     }
 }
@@ -459,8 +464,10 @@ TEST_CASE("reflections render within budget at the Medium quality, every place i
                 << " %); simulation " << report.stats.last_tick_ms << " ms (worst " << report.stats.max_tick_ms << " ms)");
         CHECK(report.live == 10);
 #if defined(NDEBUG)
-        CHECK(p99 < 0.25 * period);
-        CHECK(report.stats.last_tick_ms < 100.0);
+        if (vsa_test::perf_budgets_enforced()) {
+            CHECK(p99 < 0.25 * period);
+            CHECK(report.stats.last_tick_ms < 100.0);
+        }
 #endif
     }
 }
@@ -622,8 +629,10 @@ TEST_CASE("pathing renders within budget at the default quality, every path slot
         CHECK(stats.wanted > 16);  // the rest see the listener through the doorway
         CHECK(stats.found == 16);
 #if defined(NDEBUG)
-        CHECK(p99 < 0.25 * period);
-        CHECK(stats.last_tick_ms < 100.0);
+        if (vsa_test::perf_budgets_enforced()) {
+            CHECK(p99 < 0.25 * period);
+            CHECK(stats.last_tick_ms < 100.0);
+        }
 #endif
     }
 }

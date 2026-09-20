@@ -25,7 +25,7 @@ std::array<float, 12> gains(const BedPanner& panner, const SourceChannel& channe
 double power(const std::array<float, 12>& g) {
     double sum = 0.0;
     for (const float x : g) {
-        sum += static_cast<double>(x) * x;
+        sum += static_cast<double>(x) * static_cast<double>(x);
     }
     return sum;
 }

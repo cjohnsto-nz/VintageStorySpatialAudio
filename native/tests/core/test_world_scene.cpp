@@ -5,6 +5,8 @@
 #include "steam/steam_context.hpp"
 #include "world/world_scene.hpp"
 
+#include "support/budgets.hpp"
+
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -231,7 +233,9 @@ TEST_CASE("world scene: rebuilding the top-level scene stays cheap with a realis
     const SceneStats after = scene.stats();
     MESSAGE("in-place edits of a " << after.meshed_chunks << "-chunk scene: median " << times[50] << " ms, worst " << worst << " ms");
     CHECK(after.meshed_chunks == 405);
-    CHECK(worst < 20.0);
+    if (vsa_test::perf_budgets_enforced()) {
+        CHECK(worst < 20.0);  // a CPU budget: measured everywhere, asserted on hardware we chose
+    }
 }
 
 TEST_CASE("world scene: snapshots taken while the scene is edited and compacted share its chunks safely") {

@@ -97,7 +97,7 @@ Bands drop(uint16_t material, int thickness) {
         OfflineEngine e;
         REQUIRE(vsa_engine_set_render_mode(e.engine, VSA_RENDER_SPEAKERS) == VSA_OK);
         set_materials(e);
-        set_wall(e, wall ? material : Air, thickness);
+        set_wall(e, wall ? material : static_cast<uint16_t>(Air), thickness);
         e.listener(4.0f, 16.5f, 16.5f, 1.0f, 0.0f, 0.0f);  // facing +x, towards the source
         const AssetPtr asset = band_tones(e);
         const vsa_voice v = e.positioned(asset, VSA_SPATIAL_WORLD, 22.0f, 16.5f, 16.5f, 1.0f);

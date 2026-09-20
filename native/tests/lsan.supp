@@ -1,0 +1,16 @@
+# LeakSanitizer suppressions: third-party allocations we cannot give back.
+#
+# Third-party code is built with the sanitizers on purpose (see vsa_disable_warnings in
+# cmake/VsaWarnings.cmake) so ASan sees its allocations. The cost is that its own leaks fail the
+# job, and none of them are ours to fix. Everything listed here was read off a CI run and matched
+# to a frame in a vendored library; our own Steam Audio lifetimes -- every Add matched by a Remove
+# and a Commit before Release -- are exactly what this job is still here to check.
+
+# libvorbis's encoder holds its residue setup for the life of the process; vorbis_info_clear does
+# not reach it. Test-only: vorbisenc is never linked into the shipped library.
+leak:vorbis_encode_residue_setup
+
+# Steam Audio does not return everything it takes at iplContextRelease. These frames are inside
+# libphonon, below our own; a leak on our side of the boundary still has our frames and still
+# fails.
+leak:libphonon
