@@ -139,6 +139,14 @@ internal sealed class ChunkReader(ICoreClientAPI capi)
         {
             Block block = capi.World.Blocks[blockId];
             BlockAcoustics type = table[blockId];
+            // What it is made of can be the entity's business too: a chiselled block reports the
+            // majority material of its voxels, not the microblock type's own.
+            EnumBlockMaterial live = block.GetBlockMaterial(capi.World.BlockAccessor, pos);
+            if (live != block.BlockMaterial)
+            {
+                type = type with { Material = table.Materials.Resolve(block.Code?.ToString() ?? string.Empty, live.ToString()) };
+            }
+
             pos.Set((key.X * VsaNative.ChunkSize) + (cell % 32), (key.Y * VsaNative.ChunkSize) + (cell / 1024), (key.Z * VsaNative.ChunkSize) + ((cell / 32) % 32));
             Cuboidf[]? boxes = block.GetCollisionBoxes(capi.World.BlockAccessor, pos);
             if (block is IMultiblockOffset filler)

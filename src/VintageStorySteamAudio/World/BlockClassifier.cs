@@ -43,6 +43,13 @@ public readonly record struct BlockAcoustics(ushort Material, CellShape Shape, V
 /// </summary>
 public static class BlockClassifier
 {
+    /// <summary>
+    /// Boxes kept for one block. A chiselled block is any number of cuboids, and every one of
+    /// them is twelve triangles in the scene and a test in every ray that crosses the cell. The
+    /// largest are what a sound can hear; the rest are detail below a wavelength.
+    /// </summary>
+    public const int MaxBoxes = 32;
+
     public static BlockAcoustics Classify(BlockInfo block, MaterialTable materials)
     {
         ArgumentNullException.ThrowIfNull(materials);
@@ -58,8 +65,11 @@ public static class BlockClassifier
                 break;
         }
 
-        if (block.DelegatesShape)
+        if (block.DelegatesShape || block.HasBlockEntity)
         {
+            // Its shape is the block entity's, whatever the block type declares. A chiselled
+            // block declares the default full cube and is anything but; a door declares its
+            // closed slab. Read per snapshot, from the entity.
             return new BlockAcoustics(material, CellShape.Dynamic, null);
         }
 
@@ -80,8 +90,15 @@ public static class BlockClassifier
             return BlockAcoustics.Air;
         }
 
-        return new BlockAcoustics(material, block.HasBlockEntity ? CellShape.Dynamic : CellShape.Partial, clamped);
+        if (clamped.Length > MaxBoxes)
+        {
+            clamped = [.. clamped.OrderByDescending(Volume).Take(MaxBoxes)];
+        }
+
+        return new BlockAcoustics(material, CellShape.Partial, clamped);
     }
+
+    private static float Volume(VsaBox b) => (b.MaxX - b.MinX) * (b.MaxY - b.MinY) * (b.MaxZ - b.MinZ);
 
     public static bool IsUnitCube(VsaBox b) =>
         b.MinX <= 0f && b.MinY <= 0f && b.MinZ <= 0f && b.MaxX >= 1f && b.MaxY >= 1f && b.MaxZ >= 1f;
