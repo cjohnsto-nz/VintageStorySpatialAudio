@@ -352,7 +352,7 @@ internal sealed class SceneDebugTools : IDisposable
         }
 
         WorldStatus w = world.Status();
-        Vintagestory.API.MathTools.Vec3d camera = player.CameraPos;
+        Vintagestory.API.MathTools.Vec3d camera = Eyes(player);
         Vintagestory.API.MathTools.Vec3f view = player.Pos.GetViewVector();
         probe = engine.RaycastScene(
             ((float)(camera.X - w.Origin.X), (float)(camera.Y - w.Origin.Y), (float)(camera.Z - w.Origin.Z)),
@@ -372,7 +372,7 @@ internal sealed class SceneDebugTools : IDisposable
         }
 
         // From just in front of and below the eyes, so the lines are visible rather than end-on.
-        Vec3d camera = player.CameraPos;
+        Vec3d camera = Eyes(player);
         Vec3f view = player.Pos.GetViewVector();
         var from = new Vec3d(camera.X + (view.X * 0.6), camera.Y + (view.Y * 0.6) - 0.35, camera.Z + (view.Z * 0.6));
         renderer.SetSounds(audible, world.Status().Origin, from);
@@ -388,7 +388,7 @@ internal sealed class SceneDebugTools : IDisposable
 
         sources = engine.GetSimulatedSources();
         // From just in front of and below the eyes, so the lines are visible rather than end-on.
-        Vec3d camera = player.CameraPos;
+        Vec3d camera = Eyes(player);
         Vec3f view = player.Pos.GetViewVector();
         var from = new Vec3d(camera.X + (view.X * 0.6), camera.Y + (view.Y * 0.6) - 0.35, camera.Z + (view.Z * 0.6));
         renderer.SetSources(sources, world.Status().Origin, from);
@@ -402,7 +402,7 @@ internal sealed class SceneDebugTools : IDisposable
         }
 
         (int X, int Y, int Z) o = world.Status().Origin;
-        Vec3d camera = player.CameraPos;
+        Vec3d camera = Eyes(player);
         IReadOnlyList<RaySegment> rays = engine.TraceRays(
             ((float)(camera.X - o.X), (float)(camera.Y - o.Y), (float)(camera.Z - o.Z)), OverlayRays, OverlayBounces, OverlayRayMetres);
         Vec3f view = player.Pos.GetViewVector();
@@ -448,7 +448,7 @@ internal sealed class SceneDebugTools : IDisposable
 
         var lines = new List<string>();
         (int X, int Y, int Z) o = world.Status().Origin;
-        Vec3d eyes = player.CameraPos;
+        Vec3d eyes = Eyes(player);
         SimulationStats sim = engine.GetSimulationStats();
         PathingStats paths = engine.GetPathingStats();
         lines.Add(string.Create(CultureInfo.InvariantCulture, $"listener eyes {eyes.X:0.00},{eyes.Y:0.00},{eyes.Z:0.00}; simulated from {sim.Listener.X + sim.Origin.X:0.00},{sim.Listener.Y + sim.Origin.Y:0.00},{sim.Listener.Z + sim.Origin.Z:0.00}; state: {DebugState?.Invoke() ?? "everything heard"}"));
@@ -582,7 +582,7 @@ internal sealed class SceneDebugTools : IDisposable
         if (capi.World.Player?.Entity is { } me)
         {
             // Frame check: where the simulation listens (world) against the eyes, and both origins.
-            Vec3d eyes = me.Pos.XYZ.Add(me.LocalEyePos);
+            Vec3d eyes = Eyes(me);
             (int X, int Y, int Z) wo = world.Status().Origin;
             text.Append(CultureInfo.InvariantCulture, $"\n  listens at {sim.Listener.X + sim.Origin.X:0.0},{sim.Listener.Y + sim.Origin.Y:0.0},{sim.Listener.Z + sim.Origin.Z:0.0} (eyes {eyes.X:0.0},{eyes.Y:0.0},{eyes.Z:0.0}); origin {sim.Origin.X},{sim.Origin.Y},{sim.Origin.Z}")
                 .Append(sim.Origin == wo ? string.Empty : string.Create(CultureInfo.InvariantCulture, $" MISMATCH: scene streamer has {wo.X},{wo.Y},{wo.Z}"));
@@ -593,7 +593,7 @@ internal sealed class SceneDebugTools : IDisposable
         }
 
         (int X, int Y, int Z) o = world.Status().Origin;
-        Vec3d eye = player.CameraPos;
+        Vec3d eye = Eyes(player);
         foreach ((SourceDebugInfo s, double distance) in sources
             .Select(s => (s, Distance(s, o, eye)))
             .OrderBy(p => p.Item2)
@@ -619,6 +619,12 @@ internal sealed class SceneDebugTools : IDisposable
         double dz = s.Position.Z + o.Z - eye.Z;
         return Math.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
     }
+
+    /// <summary>
+    /// Where the player hears from: the head. (EntityPlayer.CameraPos is the origin the game
+    /// renders relative to, at the feet; lines drawn "from the camera" with it ended there.)
+    /// </summary>
+    private static Vec3d Eyes(EntityPlayer player) => player.Pos.XYZ.Add(player.LocalEyePos);
 
     private static double Db(float gain) => 20.0 * Math.Log10(Math.Max(gain, 1e-6f));
 
