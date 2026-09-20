@@ -602,7 +602,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 16;
+    public const uint AbiVersion = 17;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;
@@ -694,6 +694,14 @@ internal static unsafe partial class VsaNative
     [LibraryImport(LibraryName, EntryPoint = "vsa_voice_set_position")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial VsaResult VoiceSetPosition(nint engine, ulong voice, uint spatial, float x, float y, float z);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_voice_set_muted")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult VoiceSetMuted(nint engine, ulong voice, uint muted);
+
+    [LibraryImport(LibraryName, EntryPoint = "vsa_engine_set_route_gains")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial VsaResult EngineSetRouteGains(nint engine, float direct, float path);
 
     [LibraryImport(LibraryName, EntryPoint = "vsa_voice_set_lowpass")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

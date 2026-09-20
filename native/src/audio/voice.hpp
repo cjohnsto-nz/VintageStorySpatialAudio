@@ -32,6 +32,8 @@ enum class Op : uint32_t {
     SetMasterGain,
     SetRenderMode,
     SetReflectionGain,
+    SetMuted,       // debugging: this voice is silenced whatever its gain and fades say
+    SetRouteGains,  // debugging: vec[0] the direct sound's gain, vec[1] the paths' 
     SetReflectionMix,  // value: early reflections' gain, seconds: the tail's
 };
 
@@ -86,6 +88,7 @@ struct RenderVoice {
     int effect_set = -1;
     /// Inaudible: position advances, nothing is rendered.
     bool is_virtual = false;
+    bool muted = false;  // debugging (vsa_voice_set_muted): silent, and asks for no simulation
     /// Estimated output level from the last block (gain x bus x master x distance), times what
     /// walls let through.
     float level = 0.0f;

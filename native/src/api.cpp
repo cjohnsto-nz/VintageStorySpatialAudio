@@ -674,6 +674,22 @@ VSA_API vsa_result VSA_CALL vsa_scene_save_obj(vsa_engine* engine, const char* p
     });
 }
 
+// ---- Debugging: one sound, one way at a time ----
+
+VSA_API vsa_result VSA_CALL vsa_voice_set_muted(vsa_engine* engine, vsa_voice voice, uint32_t muted) {
+    return guarded([&] {
+        engine_of(engine).set_voice_muted(voice, muted != 0);
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_engine_set_route_gains(vsa_engine* engine, float direct, float path) {
+    return guarded([&] {
+        engine_of(engine).set_route_gains(direct, path);
+        return VSA_OK;
+    });
+}
+
 // ---- The sound inspector ----
 
 VSA_API vsa_result VSA_CALL vsa_engine_set_inspect(vsa_engine* engine, uint32_t on) {

@@ -746,6 +746,16 @@ public sealed partial class AudioEngine
     }
 
     /// <summary>Scales every reflection (smoothly): 1 = as simulated; 0..4.</summary>
+    /// <summary>
+    /// Debugging: gains (0..4, 1 = as simulated) on the direct sound and on the sound arriving
+    /// round corners, to hear one way at a time. The reflections have <see cref="SetReflectionGain"/>.
+    /// </summary>
+    public void SetRouteGains(float direct, float path)
+    {
+        using Lease lease = new(handle);
+        NativeException.ThrowIfFailed(VsaNative.EngineSetRouteGains(lease.Engine, direct, path), "vsa_engine_set_route_gains");
+    }
+
     public void SetReflectionGain(float gain)
     {
         using Lease lease = new(handle);

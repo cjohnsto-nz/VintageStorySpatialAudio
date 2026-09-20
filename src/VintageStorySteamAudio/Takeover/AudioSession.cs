@@ -25,6 +25,7 @@ public sealed class AudioSession : IDisposable
     private readonly IReadOnlyDictionary<AudioBus, float> trimDb;
     private readonly Lock gate = new();
     private readonly Dictionary<ulong, SteamAudioSound> byVoice = [];
+    private volatile string? solo;
     private readonly List<SteamAudioSound> pending = [];
     private readonly EngineEvent[] events = new EngineEvent[256];
     private readonly ListenerBasis basis = new();
@@ -236,6 +237,33 @@ public sealed class AudioSession : IDisposable
     }
 
     /// <summary>The asset a voice plays (for debug views), or null if it is not one of the session's.</summary>
+    /// <summary>
+    /// Debugging: only sounds whose asset name contains this are heard; the rest are silenced in
+    /// the engine (they go on playing as far as the game knows). Null or empty: everything.
+    /// </summary>
+    public string? Solo
+    {
+        get => solo;
+        set
+        {
+            solo = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            SteamAudioSound[] sounds;
+            lock (gate)
+            {
+                sounds = [.. byVoice.Values];
+            }
+
+            foreach (SteamAudioSound sound in sounds)
+            {
+                sound.ApplySolo();
+            }
+        }
+    }
+
+    /// <summary>Whether a sound is heard under the current <see cref="Solo"/>.</summary>
+    public bool Passes(string? location) =>
+        solo is null || (location?.Contains(solo, StringComparison.OrdinalIgnoreCase) ?? false);
+
     public string? DescribeVoice(ulong voice)
     {
         lock (gate)

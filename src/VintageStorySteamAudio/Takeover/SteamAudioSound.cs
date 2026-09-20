@@ -386,6 +386,11 @@ public sealed class SteamAudioSound : ILoadedSound
             Voice v = voice;
             session.Guard(() =>
             {
+                if (!session.Passes(Params.Location?.ToShortString()))
+                {
+                    v.SetMuted(true);  // debugging: another sound is soloed
+                }
+
                 if (Params.LowPassFilter < 1f)
                 {
                     v.SetLowpass(Math.Clamp(Params.LowPassFilter, 0f, 1f));
@@ -506,6 +511,22 @@ public sealed class SteamAudioSound : ILoadedSound
             Voice v = voice;
             float pitch = EffectivePitch;
             session.Guard(() => v.SetPitch(pitch));
+        }
+    }
+
+    /// <summary>Debugging: silences or restores this sound under the session's solo.</summary>
+    internal void ApplySolo()
+    {
+        lock (gate)
+        {
+            if (voice is null || disposed)
+            {
+                return;
+            }
+
+            Voice v = voice;
+            bool muted = !session.Passes(Params.Location?.ToShortString());
+            session.Guard(() => v.SetMuted(muted));
         }
     }
 

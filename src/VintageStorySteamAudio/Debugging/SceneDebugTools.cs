@@ -220,11 +220,24 @@ internal sealed class SceneDebugTools : IDisposable
     /// way it is reaching the listener. A page at a time, because the HUD cuts off what it cannot
     /// fit. The engine only works the numbers out while this is on.
     /// </summary>
+    /// <summary>What the debugging commands (solo, mute) have changed, for the panel's heading; null: nothing.</summary>
+    public Func<string?>? DebugState { get; init; }
+
+    /// <summary>A sound was soloed: the inspector on, with the sounds and the legs of their way round drawn.</summary>
+    public void ShowSolo()
+    {
+        inspecting = true;
+        soundPage = 1;
+        engine.SetInspect(true);
+        SetOverlay(renderer.Overlay | SceneOverlay.Sounds | SceneOverlay.Paths);
+    }
+
     private string SoundsText()
     {
+        string? state = DebugState?.Invoke();
         if (audible.Count == 0)
         {
-            return "No sound is playing (or the inspector has only just been switched on).";
+            return "No sound is playing" + (state is null ? string.Empty : $" [{state}]") + ".";
         }
 
         // What the direct simulation knows about each of them, by voice.
@@ -241,6 +254,11 @@ internal sealed class SceneDebugTools : IDisposable
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture, $"Sounds: {audible.Count} playing, loudest first (page {shown} of {pages}");
         text.Append(pages > 1 ? ", .steamaudio scene sounds <page>)" : ")");
+        if (state is not null)
+        {
+            text.Append(" [").Append(state).Append(']');
+        }
+
         text.Append("\n     green in the clear, orange through walls, blue round a corner (arrow: where it comes in), magenta reflections only");
         foreach ((AudibleVoice v, int index) in audible
             .Select((v, i) => (v, i))
@@ -302,6 +320,7 @@ internal sealed class SceneDebugTools : IDisposable
                 // The inspector's own panel: what is sounding and how it reaches the listener,
                 // and nothing else, so that the lines it needs are not pushed off the bottom.
                 UpdateSounds();
+                UpdatePaths();  // the legs of the ways round: with one sound soloed, all its own
                 hud.SetText(SoundsText());
                 return;
             }

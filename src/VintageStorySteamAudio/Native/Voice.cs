@@ -66,6 +66,16 @@ public sealed class Voice : IDisposable
     }
 
     /// <summary>High-frequency damping (0..1 gain above ~5 kHz, as OpenAL's EFX low-pass); 1 = off.</summary>
+    /// <summary>
+    /// Debugging: silences the voice whatever its gain and fades say. A silenced voice asks for
+    /// no simulation, so with every other voice silenced the overlays draw this one's alone.
+    /// </summary>
+    public void SetMuted(bool muted)
+    {
+        using AudioEngine.Lease lease = engine.Acquire();
+        NativeException.ThrowIfFailed(VsaNative.VoiceSetMuted(lease.Engine, Handle, muted ? 1u : 0u), "vsa_voice_set_muted");
+    }
+
     public void SetLowpass(float gainHf)
     {
         using AudioEngine.Lease lease = engine.Acquire();

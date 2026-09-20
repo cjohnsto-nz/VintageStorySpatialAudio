@@ -249,6 +249,9 @@ private:
     std::vector<float> spatial_storage_;
     /// Whether the render thread works out each voice's breakdown (off: it costs nothing).
     std::atomic<bool> inspect_{false};
+    // Debugging (vsa_engine_set_route_gains): the render thread's own copies.
+    float direct_route_gain_ = 1.0f;
+    float path_route_gain_ = 1.0f;
 
     std::array<float*, kMaxOutputChannels> spatial_out_{};
     std::vector<float> gain_buf_;

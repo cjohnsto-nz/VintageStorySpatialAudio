@@ -26,6 +26,9 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
     private TestPlayback? playback;
     private PerfReporter? perf;
     private SteamAudioConfig? config;
+    private bool muteDirect;
+    private bool mutePaths;
+    private bool muteReflections;
     private FrameProbe? frameProbe;
     private WorldAcoustics? world;
     private SceneDebugTools? sceneTools;
@@ -123,6 +126,16 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
                 .WithArgs(parsers.OptionalWord("stop"))
                 .HandleWith(args => WithEngine(() => SpeakerTestCommand(api, args[0] as string)))
             .EndSubCommand()
+            .BeginSubCommand("solo")
+                .WithDescription("Debugging: hear only the sounds whose name contains this (e.g. '.steamaudio solo anvil'), listed and drawn with the legs of their way round; '.steamaudio solo off' ends it")
+                .WithArgs(parsers.OptionalWord("name"))
+                .HandleWith(args => WithEngine(() => SoloCommand(args[0] as string)))
+            .EndSubCommand()
+            .BeginSubCommand("mute")
+                .WithDescription("Debugging: silence one way a sound reaches you -- direct, paths or reflections (each toggles) -- to hear which one a leak comes by; '.steamaudio mute off' restores all")
+                .WithArgs(parsers.OptionalWord("way"))
+                .HandleWith(args => WithEngine(() => MuteCommand(args[0] as string)))
+            .EndSubCommand()
             .BeginSubCommand("config")
                 .WithDescription("The settings file: where it is, and 'reset' to put every setting back to its default (the new defaults of a new version included)")
                 .WithArgs(parsers.OptionalWord("action"))
@@ -202,7 +215,10 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
             config.SceneLodRadiusChunks,
             config.SceneVerticalRadiusChunks,
             config.SceneBudgetMs);
-        sceneTools = new SceneDebugTools(api, audio, world, voice => takeover?.Session.DescribeVoice(voice));
+        sceneTools = new SceneDebugTools(api, audio, world, voice => takeover?.Session.DescribeVoice(voice))
+        {
+            DebugState = DebugStateText,
+        };
         api.Event.LevelFinalize += () =>
         {
             try
@@ -304,6 +320,96 @@ public sealed class SteamAudioModSystem : ModSystem, IDisposable
         OutputKind.Spatial => $"'{s.DeviceName}' via Windows Spatial Audio (7.1.4)",
         _ => "none (offline)",
     };
+
+    /// <summary>".steamaudio solo [name|off]".</summary>
+    private string SoloCommand(string? name)
+    {
+        if (takeover is null)
+        {
+            return "The mod is not playing the game's audio.";
+        }
+
+        AudioSession session = takeover.Session;
+        if (name is null)
+        {
+            return session.Solo is null ? "Nothing is soloed. Usage: .steamaudio solo <part of a sound's name>|off" : $"Soloed: '{session.Solo}'.";
+        }
+
+        if (string.Equals(name, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            session.Solo = null;
+            return "Solo off: every sound is heard again.";
+        }
+
+        session.Solo = name;
+        sceneTools?.ShowSolo();
+        return $"Only sounds with '{name}' in their name are heard. The panel lists them, and they alone are drawn: "
+            + "the line to the sound, the arrow to where it comes in, and the legs of its way round. "
+            + "'.steamaudio mute direct|paths|reflections' silences one way at a time; '.steamaudio solo off' ends this.";
+    }
+
+    /// <summary>".steamaudio mute [direct|paths|reflections|off]".</summary>
+    private string MuteCommand(string? way)
+    {
+        switch ((way ?? string.Empty).ToLowerInvariant())
+        {
+            case "direct":
+                muteDirect = !muteDirect;
+                break;
+            case "paths":
+            case "path":
+                mutePaths = !mutePaths;
+                break;
+            case "reflections":
+            case "reverb":
+                muteReflections = !muteReflections;
+                break;
+            case "off":
+                muteDirect = mutePaths = muteReflections = false;
+                break;
+            case "":
+                return "Muted: " + MutedText() + ". Usage: .steamaudio mute direct|paths|reflections|off";
+            default:
+                return "Usage: .steamaudio mute direct|paths|reflections|off";
+        }
+
+        engine!.SetRouteGains(muteDirect ? 0f : 1f, mutePaths ? 0f : 1f);
+        engine.SetReflectionGain(muteReflections ? 0f : (config?.ReflectionGainClamped() ?? 0.1f));
+        return "Muted: " + MutedText() + ".";
+    }
+
+    private string MutedText()
+    {
+        var muted = new List<string>();
+        if (muteDirect)
+        {
+            muted.Add("the direct sound");
+        }
+
+        if (mutePaths)
+        {
+            muted.Add("the ways round");
+        }
+
+        if (muteReflections)
+        {
+            muted.Add("the reflections");
+        }
+
+        return muted.Count == 0 ? "nothing" : string.Join(", ", muted);
+    }
+
+    /// <summary>What the debugging commands have changed, for the inspector's heading.</summary>
+    private string? DebugStateText()
+    {
+        string? solo = takeover?.Session.Solo;
+        if (solo is null && !muteDirect && !mutePaths && !muteReflections)
+        {
+            return null;
+        }
+
+        return (solo is null ? "every sound" : $"only '{solo}'") + "; muted: " + MutedText();
+    }
 
     /// <summary>".steamaudio config [reset]".</summary>
     private string ConfigCommand(ICoreClientAPI api, string? action)

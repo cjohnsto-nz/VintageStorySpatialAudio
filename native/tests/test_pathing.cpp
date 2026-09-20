@@ -231,6 +231,53 @@ TEST_CASE("pathing: the inspector says a blocked sound arrives from the doorway,
     CHECK(std::abs(v.arrival[0]) < 0.4f);
 }
 
+TEST_CASE("debugging: the way round can be muted, and a muted voice asks for no path") {
+    // To find which way a leaking sound arrives by: mute one way at a time; and with every other
+    // voice muted, every leg the pathing draws belongs to the one still sounding.
+    OfflineEngine e(pathing_config());
+    REQUIRE(vsa_engine_set_render_mode(e.engine, VSA_RENDER_SPEAKERS) == VSA_OK);
+    vsa_output_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.kind = VSA_OUTPUT_NONE;
+    desc.channels = 12;
+    REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+    set_materials(e);
+    set_chunk(e, room(true));
+    e.listener(8.0f, 3.6f, 16.0f, 0.0f, 0.0f, -1.0f);
+    render12(e, kRate / 2);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+    const vsa_voice goat = e.positioned(tone, VSA_SPATIAL_WORLD, 5.0f, 3.0f, 6.0f);
+    REQUIRE(vsa_voice_start(e.engine, goat) == VSA_OK);
+    render12(e, kRate / 2);
+    const double with_path = lean(render12(e, kRate / 2)).energy;
+    REQUIRE(stats(e).found == 1);
+
+    // The way round muted: what is left is what comes through the wall, far quieter.
+    REQUIRE(vsa_engine_set_route_gains(e.engine, 1.0f, 0.0f) == VSA_OK);
+    render12(e, kRate / 4);
+    const double without_path = lean(render12(e, kRate / 2)).energy;
+    CHECK(without_path < 1e-4 * with_path);
+    REQUIRE(vsa_engine_set_route_gains(e.engine, 1.0f, 1.0f) == VSA_OK);
+    CHECK(vsa_engine_set_route_gains(e.engine, -1.0f, 1.0f) == VSA_ERROR_INVALID_ARGUMENT);
+
+    // The voice muted: silence, and the pathing is no longer asked about it.
+    REQUIRE(vsa_voice_set_muted(e.engine, goat, 1) == VSA_OK);
+    render12(e, kRate / 2);
+    CHECK(lean(render12(e, kRate / 4)).energy < 1e-9 * with_path);
+    CHECK(stats(e).wanted == 0);
+    std::vector<vsa_path_segment> legs(8);
+    legs[0].struct_size = sizeof(vsa_path_segment);
+    uint32_t count = 0;
+    REQUIRE(vsa_engine_get_path_segments(e.engine, legs.data(), 8, &count) == VSA_OK);
+    CHECK(count == 0);
+
+    // And back.
+    REQUIRE(vsa_voice_set_muted(e.engine, goat, 0) == VSA_OK);
+    render12(e, kRate);
+    CHECK(stats(e).found == 1);
+    CHECK(lean(render12(e, kRate / 2)).energy > 0.5 * with_path);
+}
+
 TEST_CASE("pathing: a sealed room has no path, and a sound in the open needs none") {
     OfflineEngine e(pathing_config());
     set_materials(e);

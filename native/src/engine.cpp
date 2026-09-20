@@ -599,6 +599,24 @@ void Engine::set_voice_lowpass(vsa_voice voice, float gain_hf) {
     post_voice_command(voice, command, StateChange::None);
 }
 
+void Engine::set_voice_muted(vsa_voice voice, bool muted) {
+    Command command{};
+    command.op = Op::SetMuted;
+    command.flags = muted ? 1u : 0u;
+    post_voice_command(voice, command, StateChange::None);
+}
+
+void Engine::set_route_gains(float direct, float path) {
+    if (!std::isfinite(direct) || direct < 0.0f || direct > 4.0f || !std::isfinite(path) || path < 0.0f || path > 4.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "route gains must be finite values in 0..4");
+    }
+    Command command{};
+    command.op = Op::SetRouteGains;
+    command.vec[0] = direct;
+    command.vec[1] = path;
+    post_global_command(command);
+}
+
 vsa_voice_status Engine::voice_status(vsa_voice voice) const {
     const VoiceSlot& slot = checked_slot(voice);
     vsa_voice_status status{};

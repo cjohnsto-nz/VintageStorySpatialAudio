@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 16u
+#define VSA_ABI_VERSION 17u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -886,6 +886,18 @@ typedef struct vsa_audible_voice {
  */
 VSA_API vsa_result VSA_CALL vsa_engine_get_audible(vsa_engine* engine, vsa_audible_voice* out, uint32_t capacity,
                                                    uint32_t* out_count);
+
+/**
+ * Debugging: silences a voice whatever its gain and fades say. A silenced voice asks for no
+ * simulation, so with every voice but one silenced, everything the overlays draw is that one's.
+ */
+VSA_API vsa_result VSA_CALL vsa_voice_set_muted(vsa_engine* engine, vsa_voice voice, uint32_t muted);
+
+/**
+ * Debugging: gains (0..4, 1 = as simulated) on the direct sound and on the sound arriving round
+ * corners, to hear one way at a time. The reflections have vsa_engine_set_reflection_gain.
+ */
+VSA_API vsa_result VSA_CALL vsa_engine_set_route_gains(vsa_engine* engine, float direct, float path);
 
 /** Turns the sound inspector on or off. Off by default. */
 VSA_API vsa_result VSA_CALL vsa_engine_set_inspect(vsa_engine* engine, uint32_t on);
