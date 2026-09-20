@@ -8,6 +8,8 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -230,4 +232,43 @@ TEST_CASE("world scene: rebuilding the top-level scene stays cheap with a realis
     MESSAGE("in-place edits of a " << after.meshed_chunks << "-chunk scene: median " << times[50] << " ms, worst " << worst << " ms");
     CHECK(after.meshed_chunks == 405);
     CHECK(worst < 20.0);
+}
+
+TEST_CASE("world scene: snapshots taken while the scene is edited and compacted share its chunks safely") {
+    // Instancing a chunk's sub-scene commits that sub-scene inside Steam Audio. The path baker's
+    // snapshots (its own thread) and the scene worker instancing the same chunks at the same
+    // time crashed the game in phonon.dll; all of it is serialised now.
+    vsa::steam::SteamContext steam({VSA_RAY_TRACER_AUTO, false});
+    WorldScene scene(steam);
+    scene.set_materials(materials());
+    std::vector<ChunkKey> keys;
+    for (int x = 0; x < 4; ++x) {
+        for (int z = 0; z < 4; ++z) {
+            keys.push_back({x, 0, z});
+            scene.set_chunk({x, 0, z}, wall_chunk(), 0);
+        }
+    }
+    REQUIRE(scene.wait_idle(60s));
+    std::atomic<int> taken{0};
+    std::vector<std::thread> bakers;
+    for (int t = 0; t < 3; ++t) {
+        bakers.emplace_back([&] {
+            for (int i = 0; i < 150; ++i) {
+                const auto snapshot = scene.snapshot(keys);
+                taken.fetch_add(snapshot != nullptr ? 1 : 0);
+            }
+        });
+    }
+    for (int i = 0; i < 200; ++i) {  // edits, and compactions of the top-level scene among them
+        scene.set_chunk({i % 4, 0, (i / 4) % 4}, wall_chunk(), 0);
+        if (i % 8 == 0) {
+            REQUIRE(scene.wait_idle(10s));
+        }
+    }
+    for (std::thread& baker : bakers) {
+        baker.join();
+    }
+    REQUIRE(scene.wait_idle(10s));
+    CHECK(taken.load() == 450);
+    CHECK(scene.stats().meshed_chunks == 16);
 }
