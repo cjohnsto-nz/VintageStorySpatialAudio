@@ -76,7 +76,10 @@ DirectSimulator::~DirectSimulator() {
     bool any = false;
     for (Source& s : sources_) {
         if (s.added) {
-            iplSourceRemove(s.handle.get(), simulator_.get());
+            {
+                std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                iplSourceRemove(s.handle.get(), simulator_.get());
+            }
             s.added = false;
             any = true;
         }
@@ -163,7 +166,10 @@ void DirectSimulator::tick() {
         const uint32_t generation = in.generation.load(std::memory_order_acquire);
         if (generation == 0) {
             if (source.added) {
-                iplSourceRemove(source.handle.get(), simulator_.get());
+                {
+                    std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                    iplSourceRemove(source.handle.get(), simulator_.get());
+                }
                 source.added = false;
                 membership_changed = true;
             }
@@ -175,7 +181,10 @@ void DirectSimulator::tick() {
             check(iplSourceCreate(simulator_.get(), &settings, source.handle.out()), "iplSourceCreate");
         }
         if (!source.added) {
-            iplSourceAdd(source.handle.get(), simulator_.get());
+            {
+                std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                iplSourceAdd(source.handle.get(), simulator_.get());
+            }
             source.added = true;
             membership_changed = true;
         }

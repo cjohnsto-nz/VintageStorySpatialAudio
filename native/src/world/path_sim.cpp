@@ -66,13 +66,19 @@ PathSimulator::~PathSimulator() {
     bool any = false;
     for (Source& s : sources_) {
         if (s.added) {
-            iplSourceRemove(s.handle.get(), simulator_.get());
+            {
+                std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                iplSourceRemove(s.handle.get(), simulator_.get());
+            }
             s.added = false;
             any = true;
         }
     }
     if (batch_) {
-        iplSimulatorRemoveProbeBatch(simulator_.get(), batch_->batch.get());
+        {
+            std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+            iplSimulatorRemoveProbeBatch(simulator_.get(), batch_->batch.get());
+        }
         any = true;
     }
     if (any) {
@@ -168,11 +174,17 @@ void PathSimulator::tick() {
     const std::shared_ptr<const PathBatch> latest = baker_.current();
     if (latest != batch_) {
         if (batch_) {
-            iplSimulatorRemoveProbeBatch(simulator_.get(), batch_->batch.get());
+            {
+                std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                iplSimulatorRemoveProbeBatch(simulator_.get(), batch_->batch.get());
+            }
             old_batch = std::move(batch_);
         }
         if (latest) {
-            iplSimulatorAddProbeBatch(simulator_.get(), latest->batch.get());
+            {
+                std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                iplSimulatorAddProbeBatch(simulator_.get(), latest->batch.get());
+            }
         }
         batch_ = latest;
         membership_changed = true;
@@ -206,7 +218,10 @@ void PathSimulator::tick() {
     for (uint32_t i = 0; i < channel_.size(); ++i) {
         Source& source = sources_[i];
         if (source.added) {
-            iplSourceRemove(source.handle.get(), simulator_.get());
+            {
+                std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+                iplSourceRemove(source.handle.get(), simulator_.get());
+            }
             source.added = false;
             retired_.push_back(std::move(source.handle));  // released once the removal is committed
             membership_changed = true;
@@ -222,7 +237,10 @@ void PathSimulator::tick() {
         IPLSourceSettings settings{};
         settings.flags = IPL_SIMULATIONFLAGS_PATHING;
         check(iplSourceCreate(simulator_.get(), &settings, source.handle.out()), "iplSourceCreate (pathing)");
-        iplSourceAdd(source.handle.get(), simulator_.get());
+        {
+            std::shared_lock membership(scene_.scene_lock());  // the scene worker commits this simulator
+            iplSourceAdd(source.handle.get(), simulator_.get());
+        }
         source.added = true;
         membership_changed = true;
         source.generation = in.generation.load(std::memory_order_acquire);

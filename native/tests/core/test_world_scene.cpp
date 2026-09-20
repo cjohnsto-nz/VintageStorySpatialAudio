@@ -241,11 +241,17 @@ TEST_CASE("world scene: snapshots taken while the scene is edited and compacted 
     vsa::steam::SteamContext steam({VSA_RAY_TRACER_AUTO, false});
     WorldScene scene(steam);
     scene.set_materials(materials());
+    // As many chunks as the game streams: Embree lays out the top-level tree differently past
+    // 200 instances, and that is where it crashed.
     std::vector<ChunkKey> keys;
-    for (int x = 0; x < 4; ++x) {
-        for (int z = 0; z < 4; ++z) {
-            keys.push_back({x, 0, z});
-            scene.set_chunk({x, 0, z}, wall_chunk(), 0);
+    for (int x = 0; x < 9; ++x) {
+        for (int z = 0; z < 9; ++z) {
+            for (int y = 0; y < 4; ++y) {
+                scene.set_chunk({x, y, z}, wall_chunk(), 0);
+                if (x < 3 && z < 3) {
+                    keys.push_back({x, y, z});
+                }
+            }
         }
     }
     REQUIRE(scene.wait_idle(60s));
@@ -260,7 +266,7 @@ TEST_CASE("world scene: snapshots taken while the scene is edited and compacted 
         });
     }
     for (int i = 0; i < 200; ++i) {  // edits, and compactions of the top-level scene among them
-        scene.set_chunk({i % 4, 0, (i / 4) % 4}, wall_chunk(), 0);
+        scene.set_chunk({i % 4, i % 3, (i / 4) % 4}, wall_chunk(), 0);
         if (i % 8 == 0) {
             REQUIRE(scene.wait_idle(10s));
         }
@@ -270,5 +276,5 @@ TEST_CASE("world scene: snapshots taken while the scene is edited and compacted 
     }
     REQUIRE(scene.wait_idle(10s));
     CHECK(taken.load() == 450);
-    CHECK(scene.stats().meshed_chunks == 16);
+    CHECK(scene.stats().meshed_chunks == 324);
 }

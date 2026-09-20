@@ -337,6 +337,33 @@ TEST_CASE("pathing: an anvil against the wall of a sealed room is not heard from
     }
 }
 
+TEST_CASE("pathing: sources come and go while the scene worker commits the simulators") {
+    // The scene worker commits every simulator when a chunk changes; the pathing gives each
+    // wanted sound a fresh source every run. Adding one during the worker's commit (a list copied
+    // while it grows) crashed the game walking towards an occluded sound.
+    OfflineEngine e(pathing_config());
+    set_materials(e);
+    const std::vector<uint16_t> cells = room(true);
+    set_chunk(e, cells);
+    e.listener(8.0f, 3.6f, 16.0f, 0.0f, 0.0f, -1.0f);
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000 * 4, 0.3f), 1, kRate);
+    for (const float x : {5.0f, 6.0f, 9.0f, 10.0f}) {
+        REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, x, 3.0f, 6.0f)) == VSA_OK);
+    }
+    e.render(kRate / 2);
+    CHECK(stats(e).wanted >= 1);
+    vsa_chunk_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.materials = cells.data();
+    for (int i = 0; i < 400; ++i) {
+        desc.x = 1 + i % 3;  // neighbours, re-sent: the worker commits the scene and the simulators
+        REQUIRE(vsa_scene_set_chunk(e.engine, &desc) == VSA_OK);
+        e.render(kRate / 10);  // a pathing run: every source removed, fresh ones added
+    }
+    REQUIRE(vsa_scene_wait_idle(e.engine, 10000) == VSA_OK);
+    CHECK(stats(e).wanted >= 1);
+}
+
 TEST_CASE("pathing: a sound with no path inherits none from the sound before it") {
     // Steam Audio keeps a source's last path when it finds none (no probe in reach of the source
     // or the listener): a run that finds nothing writes nothing. A sound far outside the box,

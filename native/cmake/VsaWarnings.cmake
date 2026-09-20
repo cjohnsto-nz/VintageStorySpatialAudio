@@ -30,6 +30,12 @@ function(vsa_disable_warnings target)
 endfunction()
 
 function(vsa_enable_sanitizers target)
+    if(MSVC)
+        # Release builds keep a PDB (not shipped): a crash dump from a player's machine can be
+        # read. /OPT:REF,ICF restores what /DEBUG would otherwise switch off.
+        target_compile_options(${target} PRIVATE $<$<CONFIG:Release>:/Zi>)
+        target_link_options(${target} PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OPT:ICF>)
+    endif()
     if(VSA_SANITIZE AND NOT MSVC)
         target_compile_options(${target} PRIVATE
             $<$<CONFIG:Debug>:-fsanitize=address,undefined -fno-omit-frame-pointer>)
