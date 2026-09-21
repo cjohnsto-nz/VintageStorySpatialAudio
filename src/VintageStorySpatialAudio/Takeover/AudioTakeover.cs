@@ -101,6 +101,7 @@ internal sealed class AudioTakeover : IDisposable
         SpatialAudioSound.ReferenceDistanceScale = float.IsFinite(config.ReferenceDistanceMultiplier)
             ? Math.Clamp(config.ReferenceDistanceMultiplier, 0.25f, 8f)
             : 1f;
+        SpatialAudioSound.HighPassFilters = HighPassFilters.Build(config.HighPassHzBySound, logger.Warning);
         SpatialAudioSound.OcclusionFloors = OcclusionFloors.Build(config.OcclusionFloorBySound, logger.Warning);
         var takeover = new AudioTakeover(api, logger, session, members, config);
         try

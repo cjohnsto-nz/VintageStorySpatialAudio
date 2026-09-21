@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 18u
+#define VSA_ABI_VERSION 19u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -406,6 +406,12 @@ typedef struct vsa_voice_desc {
      * paths, and those reach no further than the probe box. 0..1.
      */
     float occlusion_floor;
+    /**
+     * The corner (Hz) of a 12 dB/octave high-pass on the voice, before everything else it goes
+     * through (the reverb and the paths get the filtered sound too). 0 = none; 20..2000. For
+     * recordings with more weight than the thing recorded: a creature's footsteps that boom.
+     */
+    float high_pass_hz;
 } vsa_voice_desc;
 
 typedef struct vsa_voice_status {
@@ -450,6 +456,9 @@ VSA_API vsa_result VSA_CALL vsa_voice_set_position(vsa_engine* engine, vsa_voice
  * 5 kHz; 1 turns it off. The game uses it underwater.
  */
 VSA_API vsa_result VSA_CALL vsa_voice_set_lowpass(vsa_engine* engine, vsa_voice voice, float gain_hf);
+
+/** Sets the voice's high-pass corner (see vsa_voice_desc::high_pass_hz). 0 = none; 20..2000 Hz. */
+VSA_API vsa_result VSA_CALL vsa_voice_set_high_pass(vsa_engine* engine, vsa_voice voice, float hz);
 
 /** Sets the voice's occlusion floor (see vsa_voice_desc::occlusion_floor). 0..1. */
 VSA_API vsa_result VSA_CALL vsa_voice_set_occlusion_floor(vsa_engine* engine, vsa_voice voice, float floor);

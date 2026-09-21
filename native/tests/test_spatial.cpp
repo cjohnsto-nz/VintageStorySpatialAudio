@@ -228,6 +228,60 @@ TEST_CASE("the low-pass damps high frequencies like OpenAL's EFX filter") {
     CHECK(std::abs(tone_level_db(restored, 0, 12000.0) - tone_level_db(open, 0, 12000.0)) < 0.1);
 }
 
+TEST_CASE("the high-pass takes the weight out of a voice at 12 dB an octave, and leaves the rest") {
+    OfflineEngine e;
+    std::vector<float> tones = tone(80.0, 0.3f);  // whole cycles in the looped 0.1 s
+    const auto mid = tone(1200.0, 0.3f);
+    for (std::size_t i = 0; i < tones.size(); ++i) {
+        tones[i] += mid[i];
+    }
+    const AssetPtr asset = e.pcm(tones, 1, 48000);
+    const vsa_voice v = e.voice(asset, 1.0f, true);
+    REQUIRE(vsa_voice_start(e.engine, v) == VSA_OK);
+    e.render(4800);
+    const auto open = e.render(24000);
+    REQUIRE(vsa_voice_set_high_pass(e.engine, v, 160.0f) == VSA_OK);
+    e.render(4800);
+    const auto filtered = e.render(24000);
+    // An octave below the corner: a Butterworth's -12.3 dB. Three octaves above it: nothing.
+    CHECK(tone_level_db(filtered, 0, 80.0) - tone_level_db(open, 0, 80.0) == doctest::Approx(-12.3).epsilon(0.05));
+    CHECK(std::abs(tone_level_db(filtered, 0, 1200.0) - tone_level_db(open, 0, 1200.0)) < 0.1);
+
+    REQUIRE(vsa_voice_set_high_pass(e.engine, v, 0.0f) == VSA_OK);
+    e.render(4800);
+    const auto restored = e.render(24000);
+    CHECK(std::abs(tone_level_db(restored, 0, 80.0) - tone_level_db(open, 0, 80.0)) < 0.1);
+    CHECK(vsa_voice_set_high_pass(e.engine, v, 5.0f) == VSA_ERROR_INVALID_ARGUMENT);
+    CHECK(vsa_voice_set_high_pass(e.engine, v, 5000.0f) == VSA_ERROR_INVALID_ARGUMENT);
+
+    // From the start, through the description: a positioned voice, as a creature's footstep is.
+    vsa_voice_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.bus = VSA_BUS_ENTITY;
+    desc.asset = asset.get();
+    desc.gain = 1.0f;
+    desc.pitch = 1.0f;
+    desc.looping = 1;
+    desc.spatial = VSA_SPATIAL_WORLD;
+    desc.position[2] = -1.0f;
+    REQUIRE(vsa_voice_stop(e.engine, v) == VSA_OK);
+    double level[2] = {};
+    for (int filtered_voice = 0; filtered_voice < 2; ++filtered_voice) {
+        desc.high_pass_hz = filtered_voice != 0 ? 160.0f : 0.0f;
+        vsa_voice stepped = 0;
+        REQUIRE(vsa_voice_create(e.engine, &desc, &stepped) == VSA_OK);
+        REQUIRE(vsa_voice_start(e.engine, stepped) == VSA_OK);
+        e.render(4800);
+        level[filtered_voice] = tone_level_db(e.render(24000), 0, 80.0);
+        REQUIRE(vsa_voice_stop(e.engine, stepped) == VSA_OK);
+        e.render(4800);
+    }
+    CHECK(level[1] - level[0] == doctest::Approx(-12.3).epsilon(0.05));
+    vsa_voice stepped = 0;
+    desc.high_pass_hz = 7.0f;
+    CHECK(vsa_voice_create(e.engine, &desc, &stepped) == VSA_ERROR_INVALID_ARGUMENT);
+}
+
 TEST_CASE("sources that jump in distance every block do not zipper") {
     OfflineEngine e;
     set_mode(e, VSA_RENDER_SPEAKERS);  // straight ahead: equal panning, isolates the distance gain

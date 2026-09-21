@@ -35,6 +35,17 @@ stays at 0.1.0 (ADR 0021). **Still to do by hand:** the pack's mod database desc
 install the same version of both and that Spatial Audio will not load libraries from another
 version, which ADR 0021 made untrue.
 
+## Footsteps are high-passed (ADR 0024, ABI 19): version 0.2.1
+
+Creature footsteps (the game's wolf, and everything the Creature Footsteps mod adds) boom: recorded
+close, and the low end is what passes walls and what the reverb holds. `HighPassHzBySound` maps
+asset paths to a high-pass corner with the rules of `OcclusionFloorBySound`; the default is
+`"*step*": 80`, chosen by ear in the game (150, 100 and 75 were tried). `vsa_voice_desc::high_pass_hz`
+and `vsa_voice_set_high_pass`, a 12 dB/octave Butterworth per voice (`dsp/high_pass.hpp`), before
+the sends so the reverb and the paths get the filtered sound too. **ABI 18 -> 19, so the native
+pack is re-released as 0.2.1 as well** (ADR 0021), with its floor on the mod moved to 0.2.1.
+There is no live command for the corner yet: it is read at start-up.
+
 ## Calls can be given a floor under occlusion (ADR 0022, ABI 18)
 
 A wolf's howl is started out to 660 m and then killed by the near ground. The cause is that

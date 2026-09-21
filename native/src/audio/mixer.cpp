@@ -12,6 +12,7 @@
 
 namespace vsa {
 
+static_assert(dsp::HighPass::kMaxChannels >= decode::kMaxChannels, "every channel of a bed needs its own filter state");
 static_assert(dsp::HighShelf::kMaxChannels >= decode::kMaxChannels, "every channel of a bed needs its own filter state");
 
 namespace {
@@ -368,6 +369,12 @@ void Mixer::apply(const Command& c) noexcept {
             break;
         case Op::SetMuted: v.muted = c.flags != 0; break;
         case Op::SetOcclusionFloor: v.occlusion_floor = c.value; break;
+        case Op::SetHighPass:
+            if (!v.high_pass.active() && c.value > 0.0f) {
+                v.high_pass.reset();
+            }
+            v.high_pass.set(c.value, sample_rate_);
+            break;
         case Op::SetLowpass:
             if (!v.shelf.active() && c.value < 1.0f) {
                 v.shelf.reset();
@@ -402,6 +409,7 @@ void Mixer::activate(uint32_t slot) noexcept {
     v.min_distance = s.initial_min_distance;
     v.occlusion_floor = s.initial_occlusion_floor;
     v.shelf.set(1.0f, sample_rate_);
+    v.high_pass.set(s.initial_high_pass_hz, sample_rate_);
     if (s.stream != nullptr) {
         s.stream->set_looping(v.looping);
     }
@@ -703,6 +711,9 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
     if (v.shelf.active() && v.shelf.rate() != sample_rate_) {
         v.shelf.set(v.shelf.gain(), sample_rate_);  // the output rate changed
     }
+    if (v.high_pass.active() && v.high_pass.rate() != sample_rate_) {
+        v.high_pass.set(v.high_pass.hz(), sample_rate_);
+    }
 
     const std::size_t b = s.bus;
     float* const* bus = &bus_[b * kMaxOutputChannels];
@@ -723,6 +734,9 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         }
         if (v.shelf.active()) {
             v.shelf.process(left, frames, 0);
+        }
+        if (v.high_pass.active()) {
+            v.high_pass.process(left, frames, 0);  // before the sends: the reverb gets no boom either
         }
         send_reflections(s, params, left);
         send_path(s, params, left);
@@ -770,6 +784,9 @@ void Mixer::mix(VoiceSlot& s, const SpatialParams& params, const float* gain, bo
         }
         if (v.shelf.active()) {
             v.shelf.process(x, frames, c);
+        }
+        if (v.high_pass.active()) {
+            v.high_pass.process(x, frames, c);
         }
     }
     inspect(s, params, voice_out_[0], false);  // head-locked, a bed, or waiting for an effect set

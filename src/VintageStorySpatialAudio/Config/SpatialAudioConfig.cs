@@ -164,6 +164,21 @@ public sealed class SpatialAudioConfig
         ["creature/animal/mammal/hooved/deer/elk-bellow*"] = 0.25f,
     };
 
+    /// <summary>
+    /// A high-pass filter for chosen sounds: the corner in Hz (20..2000, 12 dB per octave below
+    /// it) by asset path, <c>*</c> for anything, the first match wins. For recordings that boom:
+    /// by default every sound with "step" in its name, which is the game's creature footsteps
+    /// and those mods add. A corner of 0 exempts what it matches from the rules after it.
+    /// </summary>
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public Dictionary<string, float> HighPassHzBySound { get; set; } = DefaultHighPassFilters();
+
+    /// <summary>Footsteps, whoever recorded them: 80 Hz takes the thump and leaves the step.</summary>
+    public static Dictionary<string, float> DefaultHighPassFilters() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["*step*"] = 80f,
+    };
+
     /// <summary>Rays per sound for occlusion (more: smoother edges, more CPU). 0 = 16.</summary>
     public int OcclusionSamples { get; set; }
 

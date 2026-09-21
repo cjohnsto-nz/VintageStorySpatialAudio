@@ -258,6 +258,7 @@ internal struct VsaVoiceDesc
     public float PositionZ;
     public float MinDistance;
     public float OcclusionFloor;
+    public float HighPassHz;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -603,7 +604,7 @@ internal static unsafe partial class VsaNative
     public const string LibraryName = "vsaudio";
 
     /// <summary>Must equal VSA_ABI_VERSION in vsaudio.h.</summary>
-    public const uint AbiVersion = 18;
+    public const uint AbiVersion = 19;
 
     public const uint EngineFlagSteamAudioValidation = 1u << 0;
     public const uint EngineFlagNoDirectSimulation = 1u << 1;

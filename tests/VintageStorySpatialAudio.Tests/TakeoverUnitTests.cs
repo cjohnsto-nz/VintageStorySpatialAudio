@@ -250,3 +250,43 @@ public sealed class OcclusionFloorTests
         Assert.Equal(4, complaints.Count);
     }
 }
+
+/// <summary>HighPassHzBySound: which sounds are high-passed, and where.</summary>
+public sealed class HighPassFilterTests
+{
+    [Fact]
+    public void By_default_every_footstep_is_filtered_whoever_recorded_it_and_nothing_else()
+    {
+        HighPassFilters filters = HighPassFilters.Build(new SpatialAudioConfig().HighPassHzBySound);
+        Assert.True(filters.Any);
+        // The game's, and the Creature Footsteps mod's, as the game names them.
+        Assert.Equal(80f, filters.For("game:sounds/creature/wolf/footsteps/dirt/footstep-wolf-dirt3.ogg"));
+        Assert.Equal(80f, filters.For("creaturefootsteps:sounds/drifterstep5"));
+        Assert.Equal(80f, filters.For("creaturefootsteps:sounds/compatibility/feverstonewilds/golem-footstep2"));
+        Assert.Equal(80f, filters.For("creaturefootsteps:sounds/footstep-hooved-dirt1"));
+        Assert.Equal(0f, filters.For("game:sounds/creature/wolf/howl1"));
+        Assert.Equal(0f, filters.For("game:sounds/walk/grass2"));
+        Assert.Equal(0f, filters.For(null));
+    }
+
+    [Fact]
+    public void The_first_match_wins_so_a_zero_exempts_and_bad_corners_are_dropped_with_a_warning()
+    {
+        var warnings = new List<string>();
+        HighPassFilters filters = HighPassFilters.Build(
+            new Dictionary<string, float>
+            {
+                ["*golem-footstep*"] = 0f,     // a golem should boom
+                ["*step*"] = 200f,
+                ["*thunder*"] = 5f,            // below the engine's 20 Hz
+                [" "] = 100f,
+            },
+            warnings.Add);
+        Assert.Equal(0f, filters.For("creaturefootsteps:sounds/compatibility/feverstonewilds/golem-footstep2"));
+        Assert.Equal(200f, filters.For("creaturefootsteps:sounds/shiverstep1"));
+        Assert.Equal(0f, filters.For("game:sounds/weather/thunder1"));
+        Assert.Equal(2, warnings.Count);
+        Assert.False(HighPassFilters.None.Any);
+        Assert.Equal(0f, HighPassFilters.Build(null).For("x/step"));
+    }
+}

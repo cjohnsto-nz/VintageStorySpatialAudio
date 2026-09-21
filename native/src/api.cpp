@@ -53,7 +53,8 @@ static_assert(sizeof(vsa_simulation_stats) == 80 && offsetof(vsa_simulation_stat
 static_assert(sizeof(vsa_asset_desc) == 48 && offsetof(vsa_asset_desc, storage) == 32);
 static_assert(sizeof(vsa_asset_info) == 40);
 static_assert(sizeof(vsa_voice_desc) == 56 && offsetof(vsa_voice_desc, gain) == 16 &&
-              offsetof(vsa_voice_desc, position) == 32 && offsetof(vsa_voice_desc, occlusion_floor) == 48);
+              offsetof(vsa_voice_desc, position) == 32 && offsetof(vsa_voice_desc, occlusion_floor) == 48 &&
+              offsetof(vsa_voice_desc, high_pass_hz) == 52);
 static_assert(sizeof(vsa_voice_status) == 16);
 static_assert(sizeof(vsa_device_info) == 776 && offsetof(vsa_device_info, id) == 264);
 static_assert(sizeof(vsa_output_desc) == 24);
@@ -356,6 +357,13 @@ VSA_API vsa_result VSA_CALL vsa_voice_set_position(vsa_engine* engine, vsa_voice
 VSA_API vsa_result VSA_CALL vsa_voice_set_lowpass(vsa_engine* engine, vsa_voice voice, float gain_hf) {
     return guarded([&] {
         engine_of(engine).set_voice_lowpass(voice, gain_hf);
+        return VSA_OK;
+    });
+}
+
+VSA_API vsa_result VSA_CALL vsa_voice_set_high_pass(vsa_engine* engine, vsa_voice voice, float hz) {
+    return guarded([&] {
+        engine_of(engine).set_voice_high_pass(voice, hz);
         return VSA_OK;
     });
 }

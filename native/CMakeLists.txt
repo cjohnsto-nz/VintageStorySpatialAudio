@@ -74,6 +74,7 @@ add_library(vsaudio_core STATIC
     src/decode/decoders.cpp
     src/decode/decoders.hpp
     src/dsp/gain_ramp.hpp
+    src/dsp/high_pass.hpp
     src/dsp/high_shelf.hpp
     src/dsp/late_reverb.cpp
     src/dsp/late_reverb.hpp

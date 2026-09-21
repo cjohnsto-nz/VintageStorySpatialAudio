@@ -37,6 +37,12 @@ public sealed class SpatialAudioSound : ILoadedSound
     /// </summary>
     public static OcclusionFloors OcclusionFloors { get; set; } = OcclusionFloors.None;
 
+    /// <summary>
+    /// The sounds that are high-passed, and where (<c>HighPassHzBySound</c>). Set from the config
+    /// at takeover; <see cref="HighPassFilters.None"/> by default.
+    /// </summary>
+    public static HighPassFilters HighPassFilters { get; set; } = HighPassFilters.None;
+
     private readonly AudioSession session;
     private readonly Func<AudioAsset?> resolveAsset;
     private readonly Lock gate = new();
@@ -464,7 +470,7 @@ public sealed class SpatialAudioSound : ILoadedSound
         Vec3f? position = soundParams.Position;
         if (position is null)
         {
-            return default;
+            return new VoicePlacement(SpatialMode.None, HighPassHz: HighPassFilters.For(soundParams.Location?.ToString()));
         }
 
         // Vanilla's reference distance: an explicit one, else sqrt(range) - 2 but at least 3 m.
@@ -474,13 +480,14 @@ public sealed class SpatialAudioSound : ILoadedSound
         minDistance *= ReferenceDistanceScale;
         // Head-locked sounds are the player's own and never occluded; only world sounds take one.
         float floor = OcclusionFloors.For(soundParams.Location?.ToString());
+        float highPass = HighPassFilters.For(soundParams.Location?.ToString());  // wherever it plays from
 
         if (soundParams.RelativePosition)
         {
             // Head-locked. At the origin (the usual case: UI, player sounds) it is simply unpositioned.
             return position.X == 0f && position.Y == 0f && position.Z == 0f
-                ? default
-                : new VoicePlacement(SpatialMode.Listener, position.X, position.Y, position.Z, minDistance);
+                ? new VoicePlacement(SpatialMode.None, HighPassHz: highPass)
+                : new VoicePlacement(SpatialMode.Listener, position.X, position.Y, position.Z, minDistance, HighPassHz: highPass);
         }
 
         return new VoicePlacement(
@@ -489,7 +496,8 @@ public sealed class SpatialAudioSound : ILoadedSound
             (float)((double)position.Y - origin.Y),
             (float)((double)position.Z - origin.Z),
             minDistance,
-            floor);
+            floor,
+            highPass);
     }
 
     private void Transport(VoiceState pending, Action<Voice> command)

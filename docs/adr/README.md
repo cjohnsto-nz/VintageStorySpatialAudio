@@ -28,3 +28,4 @@ Each ADR records one decision: the context, the choice and its consequences. ADR
 | [0021](0021-the-native-pack-is-matched-by-abi-not-by-version.md) | The native pack is matched by ABI, not by version: a C#-only release does not re-release it (amends 0019) | Accepted |
 | [0022](0022-a-sound-can-be-given-a-floor-under-occlusion.md) | A sound can be given a floor under occlusion, for calls that carry past where paths reach | Accepted, amended by 0023 |
 | [0023](0023-calls-carry-by-default.md) | Calls carry by default: wolf, elk and caribou ship with a floor (amends 0022) | Accepted |
+| [0024](0024-a-sound-can-be-high-passed.md) | A sound can be high-passed, and footsteps are by default (ABI 19) | Accepted |

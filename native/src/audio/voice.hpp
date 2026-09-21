@@ -2,6 +2,7 @@
 
 #include "audio/spatial_tier.hpp"
 #include "dsp/gain_ramp.hpp"
+#include "dsp/high_pass.hpp"
 #include "dsp/high_shelf.hpp"
 #include "dsp/resampler.hpp"
 #include "vsaudio.h"
@@ -29,6 +30,7 @@ enum class Op : uint32_t {
     SetPosition,
     SetLowpass,
     SetOcclusionFloor,
+    SetHighPass,  // value: the corner in Hz, 0 = none
     SetBusGain,
     SetMasterGain,
     SetRenderMode,
@@ -111,6 +113,7 @@ struct RenderVoice {
     bool sounded = false;
 
     dsp::HighShelf shelf;
+    dsp::HighPass high_pass;  // vsa_voice_desc::high_pass_hz
 };
 
 /// One voice slot. Handles are (generation << 32 | slot index).
@@ -152,6 +155,7 @@ struct VoiceSlot {
     float initial_position[3] = {0.0f, 0.0f, 0.0f};
     float initial_min_distance = 1.0f;
     float initial_occlusion_floor = 0.0f;
+    float initial_high_pass_hz = 0.0f;
 
     // What this voice sounded like in the latest block, and by which way it reached the
     // listener, for the sound inspector (".spatialaudio scene sounds"). Written by the render
