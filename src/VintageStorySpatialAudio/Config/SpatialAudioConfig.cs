@@ -173,10 +173,10 @@ public sealed class SpatialAudioConfig
     [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public Dictionary<string, float> HighPassHzBySound { get; set; } = DefaultHighPassFilters();
 
-    /// <summary>Footsteps, whoever recorded them: 100 Hz takes the thump and leaves the step.</summary>
+    /// <summary>Footsteps, whoever recorded them: 75 Hz takes the thump and leaves the step.</summary>
     public static Dictionary<string, float> DefaultHighPassFilters() => new(StringComparer.OrdinalIgnoreCase)
     {
-        ["*step*"] = 100f,
+        ["*step*"] = 75f,
     };
 
     /// <summary>Rays per sound for occlusion (more: smoother edges, more CPU). 0 = 16.</summary>

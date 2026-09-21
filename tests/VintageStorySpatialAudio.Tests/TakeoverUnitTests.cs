@@ -260,10 +260,10 @@ public sealed class HighPassFilterTests
         HighPassFilters filters = HighPassFilters.Build(new SpatialAudioConfig().HighPassHzBySound);
         Assert.True(filters.Any);
         // The game's, and the Creature Footsteps mod's, as the game names them.
-        Assert.Equal(100f, filters.For("game:sounds/creature/wolf/footsteps/dirt/footstep-wolf-dirt3.ogg"));
-        Assert.Equal(100f, filters.For("creaturefootsteps:sounds/drifterstep5"));
-        Assert.Equal(100f, filters.For("creaturefootsteps:sounds/compatibility/feverstonewilds/golem-footstep2"));
-        Assert.Equal(100f, filters.For("creaturefootsteps:sounds/footstep-hooved-dirt1"));
+        Assert.Equal(75f, filters.For("game:sounds/creature/wolf/footsteps/dirt/footstep-wolf-dirt3.ogg"));
+        Assert.Equal(75f, filters.For("creaturefootsteps:sounds/drifterstep5"));
+        Assert.Equal(75f, filters.For("creaturefootsteps:sounds/compatibility/feverstonewilds/golem-footstep2"));
+        Assert.Equal(75f, filters.For("creaturefootsteps:sounds/footstep-hooved-dirt1"));
         Assert.Equal(0f, filters.For("game:sounds/creature/wolf/howl1"));
         Assert.Equal(0f, filters.For("game:sounds/walk/grass2"));
         Assert.Equal(0f, filters.For(null));
