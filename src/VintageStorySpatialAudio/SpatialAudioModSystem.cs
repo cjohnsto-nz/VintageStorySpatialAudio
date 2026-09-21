@@ -1,6 +1,7 @@
 using System.Globalization;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.MathTools;
 using VintageStorySpatialAudio.Config;
 using VintageStorySpatialAudio.Debugging;
 using VintageStorySpatialAudio.Diagnostics;
@@ -124,6 +125,20 @@ public sealed class SpatialAudioModSystem : ModSystem, IDisposable
                 .WithDescription("Play a game sound straight through the engine, e.g. .spatialaudio play effect/woodswitch 1 1")
                 .WithArgs(parsers.Word("sound"), parsers.OptionalFloat("volume", 1f), parsers.OptionalFloat("pitch", 1f))
                 .HandleWith(args => WithEngine(() => playback!.Play(api, (string)args[0], (float)args[1], (float)args[2])))
+            .EndSubCommand()
+            .BeginSubCommand("playat")
+                .WithDescription(
+                    "Play a game sound at a place, through the game itself (range check, fall-off, occlusion, reverb): " +
+                    "'.spatialaudio playat creature/wolf/howl1 ~100 ~ ~ 110'. The position takes ~relative, =absolute, " +
+                    "or a selector such as l[] (what you are looking at) or e[type=wolf*]")
+                .WithArgs(
+                    parsers.Word("sound"),
+                    parsers.WorldPosition("pos"),
+                    parsers.OptionalFloat("range", WorldSoundTest.DefaultRange),
+                    parsers.OptionalFloat("volume", 1f),
+                    parsers.OptionalFloat("pitch", 1f))
+                .HandleWith(args => TextCommandResult.Success(
+                    WorldSoundTest.PlayAt(api, (string)args[0], (Vec3d)args[1], (float)args[2], (float)args[3], (float)args[4], RangeScale())))
             .EndSubCommand()
             .BeginSubCommand("stop")
                 .WithDescription("Stop every sound started with .spatialaudio play")
@@ -505,6 +520,9 @@ public sealed class SpatialAudioModSystem : ModSystem, IDisposable
 
         return text;
     }
+
+    /// <summary>What the game's range check is multiplied by right now: the takeover's, or 1 without it.</summary>
+    private float RangeScale() => takeover is null ? 1f : MathF.Sqrt(Takeover.PlatformPatches.RangeScaleSquared);
 
     /// <summary>This platform's libraries: ours, or the native pack's (Linux and macOS).</summary>
     private static string NativeDirectory() => NativeLibraryResolver.FindNativeDirectory(
