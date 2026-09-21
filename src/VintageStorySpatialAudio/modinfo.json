@@ -4,7 +4,7 @@
   "name": "Spatial Audio",
   "authors": [ "chrisunfocused" ],
   "description": "Replaces the game's audio engine. Sounds are blocked by walls, heard through doorways and reverberate in the space you are in. Output for headphones (HRTF), surround speakers or Windows Spatial Audio. Client-side only. Built on Valve's Steam Audio.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "side": "Client",
   "requiredOnClient": false,
   "requiredOnServer": false,
