@@ -128,7 +128,7 @@ struct OfflineEngine : ScopedEngine {
 
     /// A looping positional voice.
     vsa_voice positioned(const AssetPtr& asset, uint32_t spatial, float x, float y, float z, float min_distance = 1.0f,
-                         float gain = 1.0f) {
+                         float gain = 1.0f, float occlusion_floor = 0.0f) {
         vsa_voice_desc desc{};
         desc.struct_size = sizeof desc;
         desc.asset = asset.get();
@@ -141,6 +141,7 @@ struct OfflineEngine : ScopedEngine {
         desc.position[1] = y;
         desc.position[2] = z;
         desc.min_distance = min_distance;
+        desc.occlusion_floor = occlusion_floor;
         vsa_voice v = 0;
         const vsa_result r = vsa_voice_create(engine, &desc, &v);
         INFO(vsa_get_last_error());

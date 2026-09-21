@@ -28,6 +28,7 @@ enum class Op : uint32_t {
     Release,
     SetPosition,
     SetLowpass,
+    SetOcclusionFloor,
     SetBusGain,
     SetMasterGain,
     SetRenderMode,
@@ -84,6 +85,8 @@ struct RenderVoice {
     uint32_t spatial = VSA_SPATIAL_NONE;
     float position[3] = {0.0f, 0.0f, 0.0f};
     float min_distance = 1.0f;
+    /// The least of this sound that reaches the listener directly, whatever is in the way (0 = none).
+    float occlusion_floor = 0.0f;
     /// Spatial effect set held while real, -1 otherwise.
     int effect_set = -1;
     /// Inaudible: position advances, nothing is rendered.
@@ -148,6 +151,7 @@ struct VoiceSlot {
     uint32_t initial_spatial = VSA_SPATIAL_NONE;
     float initial_position[3] = {0.0f, 0.0f, 0.0f};
     float initial_min_distance = 1.0f;
+    float initial_occlusion_floor = 0.0f;
 
     // What this voice sounded like in the latest block, and by which way it reached the
     // listener, for the sound inspector (".spatialaudio scene sounds"). Written by the render

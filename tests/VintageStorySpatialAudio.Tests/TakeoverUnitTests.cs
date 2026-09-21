@@ -179,3 +179,74 @@ public sealed class TakeoverUnitTests
         Assert.Equal(z, az, 4);
     }
 }
+
+/// <summary>
+/// Which sounds carry whatever is in the way (ADR 0022): the pattern table behind
+/// OcclusionFloorBySound.
+/// </summary>
+public sealed class OcclusionFloorTests
+{
+    [Fact]
+    public void A_sound_matching_nothing_has_no_floor()
+    {
+        Assert.Equal(0f, OcclusionFloors.None.For("creature/wolf/howl1"));
+        Assert.False(OcclusionFloors.None.Any);
+        Assert.Equal(0f, OcclusionFloors.Build(null).For("creature/wolf/howl1"));
+
+        OcclusionFloors floors = OcclusionFloors.Build(new Dictionary<string, float> { ["creature/wolf/howl*"] = 0.2f });
+        Assert.True(floors.Any);
+        Assert.Equal(0f, floors.For("creature/wolf/footsteps/dirt/footstep-wolf-dirt1"));
+        Assert.Equal(0f, floors.For(null));
+    }
+
+    [Fact]
+    public void A_sound_is_matched_by_its_name_however_the_engine_spells_it()
+    {
+        // The player writes the name the game's own assets use; the engine sees a full location.
+        OcclusionFloors floors = OcclusionFloors.Build(new Dictionary<string, float> { ["creature/wolf/howl*"] = 0.2f });
+        foreach (string spelling in new[]
+                 {
+                     "creature/wolf/howl1",
+                     "game:creature/wolf/howl1",
+                     "game:sounds/creature/wolf/howl1.ogg",
+                     "sounds/creature/wolf/howl3",
+                     "GAME:SOUNDS/CREATURE/WOLF/HOWL2.OGG",
+                 })
+        {
+            Assert.Equal(0.2f, floors.For(spelling));
+        }
+    }
+
+    [Fact]
+    public void The_first_pattern_that_matches_wins_so_the_file_order_is_the_priority()
+    {
+        OcclusionFloors floors = OcclusionFloors.Build(new Dictionary<string, float>
+        {
+            ["creature/wolf/howl*"] = 0.25f,
+            ["creature/*"] = 0.05f,
+        });
+        Assert.Equal(0.25f, floors.For("creature/wolf/howl1"));
+        Assert.Equal(0.05f, floors.For("creature/bear/attack1"));
+    }
+
+    [Fact]
+    public void A_floor_outside_nought_to_one_is_dropped_and_said_so()
+    {
+        var complaints = new List<string>();
+        OcclusionFloors floors = OcclusionFloors.Build(
+            new Dictionary<string, float>
+            {
+                ["creature/wolf/howl*"] = 1.5f,
+                ["creature/bear/*"] = -0.1f,
+                ["creature/hare/*"] = float.NaN,
+                [" "] = 0.5f,
+                ["creature/fox/*"] = 1f,
+            },
+            complaints.Add);
+
+        Assert.Equal(0f, floors.For("creature/wolf/howl1"));
+        Assert.Equal(0f, floors.For("creature/bear/attack1"));
+        Assert.Equal(1f, floors.For("creature/fox/bark"));
+        Assert.Equal(4, complaints.Count);
+    }
+}

@@ -387,6 +387,9 @@ vsa_voice Engine::create_voice(const vsa_voice_desc& desc) {
     if (!std::isfinite(desc.min_distance) || desc.min_distance < 0.0f) {
         throw Error(VSA_ERROR_INVALID_ARGUMENT, "min_distance must be finite and >= 0");
     }
+    if (!std::isfinite(desc.occlusion_floor) || desc.occlusion_floor < 0.0f || desc.occlusion_floor > 1.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "occlusion_floor must be finite and in 0..1");
+    }
 
     // Streams are opened and pre-filled here, on the caller's thread, so the voice can start
     // without an underrun; they are registered with the worker before the render thread sees them.
@@ -431,6 +434,7 @@ vsa_voice Engine::create_voice(const vsa_voice_desc& desc) {
     slot.initial_position[1] = desc.position[1];
     slot.initial_position[2] = desc.position[2];
     slot.initial_min_distance = desc.min_distance > 0.0f ? desc.min_distance : 1.0f;
+    slot.initial_occlusion_floor = desc.occlusion_floor;
     slot.requested_state.store(VSA_VOICE_STOPPED, std::memory_order_relaxed);
     slot.cmd_seq.store(0, std::memory_order_relaxed);
     slot.render_state.store(VSA_VOICE_STOPPED, std::memory_order_relaxed);
@@ -599,6 +603,16 @@ void Engine::set_voice_lowpass(vsa_voice voice, float gain_hf) {
     Command command{};
     command.op = Op::SetLowpass;
     command.value = gain_hf;
+    post_voice_command(voice, command, StateChange::None);
+}
+
+void Engine::set_voice_occlusion_floor(vsa_voice voice, float floor) {
+    if (!std::isfinite(floor) || floor < 0.0f || floor > 1.0f) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "occlusion floor must be in 0..1");
+    }
+    Command command{};
+    command.op = Op::SetOcclusionFloor;
+    command.value = floor;
     post_voice_command(voice, command, StateChange::None);
 }
 

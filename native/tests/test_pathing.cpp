@@ -308,6 +308,60 @@ TEST_CASE("pathing: a sealed room has no path, and a sound in the open needs non
     CHECK(count == 0);
 }
 
+TEST_CASE("occlusion: a sound given a floor is heard out of a sealed room; one without is not") {
+    // The floor stands in for propagation the scene cannot show. A wolf heard over a ridge is
+    // heard by diffraction, which Steam Audio models only along baked paths, and those reach no
+    // further than the probe box; past it a call is judged fully occluded by the ground in front
+    // of the listener and disappears. A sealed room is the same case, made small enough to test:
+    // no path, no line of sight, nothing through the stone.
+    Lean without{};
+    Lean floored{};
+    for (const float floor : {0.0f, 0.25f}) {
+        OfflineEngine e(pathing_config());
+        REQUIRE(vsa_engine_set_render_mode(e.engine, VSA_RENDER_SPEAKERS) == VSA_OK);
+        vsa_output_desc desc{};
+        desc.struct_size = sizeof desc;
+        desc.kind = VSA_OUTPUT_NONE;
+        desc.channels = 12;
+        REQUIRE(vsa_output_open(e.engine, &desc) == VSA_OK);
+        set_materials(e);
+        set_chunk(e, room(false));  // sealed: the doorway is bricked up
+        e.listener(8.0f, 3.6f, 16.0f, 0.0f, 0.0f, -1.0f);
+        render12(e, kRate / 2);  // baked, simulated
+        const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 48000, 0.3f), 1, kRate);
+        REQUIRE(vsa_voice_start(e.engine, e.positioned(tone, VSA_SPATIAL_WORLD, 5.0f, 3.0f, 6.0f, 1.0f, 1.0f, floor)) ==
+                VSA_OK);
+        render12(e, kRate / 2);  // the direct simulation settles
+        const Lean l = lean(render12(e, kRate));
+        CHECK(stats(e).found == 0);  // sealed either way: the floor is not a path
+        (floor > 0.0f ? floored : without) = l;
+    }
+    MESSAGE("sealed room: " << 10.0 * std::log10(without.energy) << " dB with no floor, "
+            << 10.0 * std::log10(floored.energy) << " dB with 0.25");
+    CHECK(floored.energy > 10.0 * without.energy);
+}
+
+TEST_CASE("occlusion: the floor is a fraction, and is checked") {
+    OfflineEngine e(pathing_config());
+    const AssetPtr tone = e.pcm(sine(500.0, 48000.0, 4800, 0.3f), 1, kRate);
+    const vsa_voice v = e.positioned(tone, VSA_SPATIAL_WORLD, 1.0f, 1.0f, 1.0f);
+    CHECK(vsa_voice_set_occlusion_floor(e.engine, v, 0.0f) == VSA_OK);
+    CHECK(vsa_voice_set_occlusion_floor(e.engine, v, 1.0f) == VSA_OK);
+    CHECK(vsa_voice_set_occlusion_floor(e.engine, v, -0.1f) == VSA_ERROR_INVALID_ARGUMENT);
+    CHECK(vsa_voice_set_occlusion_floor(e.engine, v, 1.5f) == VSA_ERROR_INVALID_ARGUMENT);
+
+    vsa_voice_desc desc{};
+    desc.struct_size = sizeof desc;
+    desc.asset = tone.get();
+    desc.bus = VSA_BUS_SOUND;
+    desc.gain = 1.0f;
+    desc.pitch = 1.0f;
+    desc.spatial = VSA_SPATIAL_WORLD;
+    desc.occlusion_floor = 2.0f;
+    vsa_voice bad = 0;
+    CHECK(vsa_voice_create(e.engine, &desc, &bad) == VSA_ERROR_INVALID_ARGUMENT);
+}
+
 TEST_CASE("pathing: an anvil against the wall of a sealed room is not heard from outside that wall") {
     // A sound is simulated from outside the block it sits in, on the listener's side. With the
     // block against a wall that used to carry on through the wall: the anvil was pathed (and

@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /** Version of the binary interface described by this header. */
-#define VSA_ABI_VERSION 17u
+#define VSA_ABI_VERSION 18u
 
 typedef enum vsa_result {
     VSA_OK = 0,
@@ -395,6 +395,17 @@ typedef struct vsa_voice_desc {
     float position[3];
     /** Distance (m) within which the source does not get louder; beyond it, 1/distance. 0 = 1 m. */
     float min_distance;
+    /**
+     * The least of this sound that still reaches the listener directly, however much is in the
+     * way: a floor under Steam Audio's occlusion (the visible fraction of the source). 0 = none,
+     * the physical result stands. Transmission through what is in the way is added on top, so the
+     * direct sound is never below this fraction of its unoccluded level.
+     *
+     * For sounds that carry further than a model of the terrain in front of them can show: a wolf
+     * howling over a ridge is heard by diffraction, which Steam Audio models only along baked
+     * paths, and those reach no further than the probe box. 0..1.
+     */
+    float occlusion_floor;
 } vsa_voice_desc;
 
 typedef struct vsa_voice_status {
@@ -439,6 +450,9 @@ VSA_API vsa_result VSA_CALL vsa_voice_set_position(vsa_engine* engine, vsa_voice
  * 5 kHz; 1 turns it off. The game uses it underwater.
  */
 VSA_API vsa_result VSA_CALL vsa_voice_set_lowpass(vsa_engine* engine, vsa_voice voice, float gain_hf);
+
+/** Sets the voice's occlusion floor (see vsa_voice_desc::occlusion_floor). 0..1. */
+VSA_API vsa_result VSA_CALL vsa_voice_set_occlusion_floor(vsa_engine* engine, vsa_voice voice, float floor);
 /**
  * Fades the voice gain to target_gain over `seconds`, linearly in decibels (a geometric
  * curve), then posts VSA_EVENT_FADE_DONE carrying `token`. `flags` is VSA_FADE_* values.

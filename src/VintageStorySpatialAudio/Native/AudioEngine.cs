@@ -132,7 +132,12 @@ public sealed record ReflectionQualitySettings
 /// <param name="Y">Position (world or listener space).</param>
 /// <param name="Z">Position (world or listener space).</param>
 /// <param name="MinDistance">Distance within which the source no longer gets louder (0 = 1 m).</param>
-public readonly record struct VoicePlacement(SpatialMode Mode, float X = 0, float Y = 0, float Z = 0, float MinDistance = 0);
+/// <param name="OcclusionFloor">
+/// The least of the sound that still reaches the listener directly, whatever is in the way
+/// (0 = none: the world decides). See vsa_voice_desc::occlusion_floor and ADR 0022.
+/// </param>
+public readonly record struct VoicePlacement(
+    SpatialMode Mode, float X = 0, float Y = 0, float Z = 0, float MinDistance = 0, float OcclusionFloor = 0);
 
 public sealed record EngineVersion(
     Version Engine,
@@ -363,6 +368,7 @@ public sealed partial class AudioEngine : IDisposable
             PositionY = placement.Y,
             PositionZ = placement.Z,
             MinDistance = placement.MinDistance,
+            OcclusionFloor = placement.OcclusionFloor,
         };
         NativeException.ThrowIfFailed(VsaNative.VoiceCreate(lease.Engine, in desc, out ulong voice), "vsa_voice_create");
         return new Voice(this, voice);

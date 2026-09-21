@@ -31,6 +31,12 @@ public sealed class SpatialAudioSound : ILoadedSound
     /// </summary>
     public static float ReferenceDistanceScale { get; set; } = 1f;
 
+    /// <summary>
+    /// How much of a sound still reaches the listener whatever is in the way, by asset path
+    /// (ADR 0022). Set from the config at takeover; <see cref="OcclusionFloors.None"/> by default.
+    /// </summary>
+    public static OcclusionFloors OcclusionFloors { get; set; } = OcclusionFloors.None;
+
     private readonly AudioSession session;
     private readonly Func<AudioAsset?> resolveAsset;
     private readonly Lock gate = new();
@@ -466,6 +472,8 @@ public sealed class SpatialAudioSound : ILoadedSound
             ? soundParams.ReferenceDistance
             : Math.Max(VanillaDefaultReferenceDistance, MathF.Sqrt(soundParams.Range) - 2f);
         minDistance *= ReferenceDistanceScale;
+        // Head-locked sounds are the player's own and never occluded; only world sounds take one.
+        float floor = OcclusionFloors.For(soundParams.Location?.ToString());
 
         if (soundParams.RelativePosition)
         {
@@ -480,7 +488,8 @@ public sealed class SpatialAudioSound : ILoadedSound
             (float)((double)position.X - origin.X),
             (float)((double)position.Y - origin.Y),
             (float)((double)position.Z - origin.Z),
-            minDistance);
+            minDistance,
+            floor);
     }
 
     private void Transport(VoiceState pending, Action<Voice> command)

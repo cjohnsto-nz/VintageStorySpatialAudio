@@ -137,6 +137,19 @@ public sealed class SpatialAudioConfig
     /// <summary>Walls muffle what is behind them (occlusion and transmission by the world scene, Phase 5).</summary>
     public bool Occlusion { get; set; } = true;
 
+    /// <summary>
+    /// Sounds that carry whatever is between them and you, by asset path (<c>*</c> matches
+    /// anything; the first match wins). The value is the least of the sound that still arrives
+    /// directly, 0 to 1: 0.1 is a tenth of its unoccluded level, about -20 dB. Anything in the way
+    /// can only add to that, never take it below.
+    ///
+    /// For calls, which carry much further than the terrain in front of you can be modelled for.
+    /// A wolf heard over a ridge is heard by bending round it, which Steam Audio models only along
+    /// baked paths, and those stop at the edge of the pathing box; past it the howl is judged
+    /// blocked by the near ground and disappears (ADR 0022). Empty by default: nothing is lifted.
+    /// </summary>
+    public Dictionary<string, float> OcclusionFloorBySound { get; set; } = [];
+
     /// <summary>Rays per sound for occlusion (more: smoother edges, more CPU). 0 = 16.</summary>
     public int OcclusionSamples { get; set; }
 

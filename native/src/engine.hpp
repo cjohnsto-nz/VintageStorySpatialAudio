@@ -73,6 +73,7 @@ public:
     void fade_voice(vsa_voice voice, float target, float seconds, uint32_t flags, uint64_t token);
     void set_voice_position(vsa_voice voice, uint32_t spatial, float x, float y, float z);
     void set_voice_lowpass(vsa_voice voice, float gain_hf);
+    void set_voice_occlusion_floor(vsa_voice voice, float floor);
     /// Debugging: silences a voice whatever its gain and fades say; it then asks for no simulation.
     void set_voice_muted(vsa_voice voice, bool muted);
     /// Debugging: gains on the direct sound and on the paths (the reflections have their own).

@@ -35,6 +35,35 @@ stays at 0.1.0 (ADR 0021). **Still to do by hand:** the pack's mod database desc
 install the same version of both and that Spatial Audio will not load libraries from another
 version, which ADR 0021 made untrue.
 
+## Calls can be given a floor under occlusion (ADR 0022, ABI 18)
+
+A wolf's howl is started out to 660 m and then killed by the near ground. The cause is that
+**Steam Audio models diffraction only along baked paths** (`IPLDeviationModel` is "Only used when
+simulating pathing"; both occlusion types are visibility tests), and the probe box is 64 m, so at
+300 m there is no path and nothing bends over the ridge. Extending probes that far extrapolates to
+days per bake.
+
+- **`vsa_voice_desc::occlusion_floor`** (0..1) and `vsa_voice_set_occlusion_floor`: the least of a
+  sound that still reaches the listener directly. A floor under Steam Audio's occlusion, not under
+  the output level, so transmission is added on top.
+- **`OcclusionFloorBySound`** maps asset paths to floors (`*` matches anything, first match wins).
+  Empty by default, so nothing changes until a player asks for it.
+- **It is a fudge and the ADR says so.** A floored sound is audible through a sealed mountain:
+  `test_pathing.cpp` measures -78 dB without a floor and 0 dB with 0.25 out of a sealed room.
+- **ABI 17 -> 18, so the native pack must be re-released** with the next release (ADR 0021, first
+  time that rule has bitten). A 0.1.0 pack now fails the ABI check, whose message names the pack.
+- **Not tried in game.** The numbers above are from the offline tests.
+
+### What was ruled out on the way
+
+- **Setting `IPLSimulationInputs.deviationModel` explicitly**: a no-op. Measured on the
+  goat-and-doorway test, `NULL`, `IPL_DEVIATIONTYPE_DEFAULT` and a callback returning 1.0 all give
+  byte-identical `eqCoeffs` (0.8938 / 0.6995 / 0.5290). The callback is invoked (420 times, bend
+  angles 0, 18.4 and 63.4 degrees), so the hook is live, but its return does not shape that EQ --
+  which comes from material absorption along the path. A flat 0.25 gave 1/1/1, unexplained.
+- **A distance-gated occlusion taper** for every sound: would also lift a distant waterfall behind
+  a ridge, and cannot tell a howl from the same wolf's footsteps, which are both `Entity`.
+
 ## Where things stand
 
 ### Phase 0 (foundations): complete and verified on Windows

@@ -367,6 +367,7 @@ void Mixer::apply(const Command& c) noexcept {
             v.position[2] = c.vec[2];
             break;
         case Op::SetMuted: v.muted = c.flags != 0; break;
+        case Op::SetOcclusionFloor: v.occlusion_floor = c.value; break;
         case Op::SetLowpass:
             if (!v.shelf.active() && c.value < 1.0f) {
                 v.shelf.reset();
@@ -399,6 +400,7 @@ void Mixer::activate(uint32_t slot) noexcept {
     v.position[1] = s.initial_position[1];
     v.position[2] = s.initial_position[2];
     v.min_distance = s.initial_min_distance;
+    v.occlusion_floor = s.initial_occlusion_floor;
     v.shelf.set(1.0f, sample_rate_);
     if (s.stream != nullptr) {
         s.stream->set_looping(v.looping);
@@ -606,7 +608,8 @@ bool Mixer::render_voice(uint32_t slot) noexcept {
     v.open_level = level;
     if (spatial && v.effect_set >= 0 && direct_state_[static_cast<std::size_t>(v.effect_set)].primed) {
         const DirectState& d = direct_state_[static_cast<std::size_t>(v.effect_set)];
-        v.level = level * (d.occlusion + (1.0f - d.occlusion) * d.transmission[1]);
+        const float occlusion = std::max(d.occlusion, v.occlusion_floor);
+        v.level = level * (occlusion + (1.0f - occlusion) * d.transmission[1]);
     }
     // Streams are never virtual (skipping ahead would need a seek on the decoder thread); one
     // that cannot get an effect set plays unpositioned until it can.
@@ -983,7 +986,9 @@ bool Mixer::update_direct(VoiceSlot& s, SpatialParams& params) noexcept {
         ++v.direct_hold;
         return true;
     }
-    params.occlusion = state.occlusion;
+    // The floor is a least visible fraction, not a least level: transmission through whatever
+    // hides the rest is still added on top, and a sound with no floor is untouched.
+    params.occlusion = std::max(state.occlusion, v.occlusion_floor);
     std::copy_n(state.transmission, 3, params.transmission);
     return false;
 }
