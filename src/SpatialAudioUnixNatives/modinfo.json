@@ -4,12 +4,12 @@
   "name": "Spatial Audio: Linux and macOS natives",
   "authors": [ "chrisunfocused" ],
   "description": "The Linux and macOS libraries for the Spatial Audio mod, which is too large for one download. Install both on Linux or macOS. Not needed on Windows.",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "side": "Client",
   "requiredOnClient": false,
   "requiredOnServer": false,
   "dependencies": {
     "game": "1.22.0",
-    "spatialaudio": "0.1.1"
+    "spatialaudio": "0.1.0"
   }
 }

@@ -65,18 +65,28 @@ public sealed class NativePackTests : IDisposable
     [Fact]
     public void The_pack_asks_for_a_mod_new_enough_to_load_it_and_no_newer()
     {
-        // The pack's dependency is a minimum (Vintage Story's ModDependency.Version), so it may lag
-        // the mod: a pack is only rebuilt when the libraries change. Its floor is the first version
-        // that loads a pack of any version, below which the mod would refuse it (ADR 0021).
+        // The pack's dependency is a minimum (Vintage Story's ModDependency.Version), so the pack
+        // may lag the mod: it is only rebuilt when the libraries change (ADR 0021).
         string src = Path.Combine(NativeTestEnvironment.RepoRoot(), "src");
         using JsonDocument main = Read(Path.Combine(src, "VintageStorySpatialAudio", "modinfo.json"));
         using JsonDocument pack = Read(Path.Combine(src, "SpatialAudioUnixNatives", "modinfo.json"));
         Version version = Version.Parse(main.RootElement.GetProperty("version").GetString()!);
         Assert.Equal(NativeLibraryResolver.NativePackModId, pack.RootElement.GetProperty("modid").GetString());
 
-        string floor = pack.RootElement.GetProperty("dependencies").GetProperty(main.RootElement.GetProperty("modid").GetString()!).GetString()!;
-        Assert.InRange(Version.Parse(floor), Version.Parse(NativeLibraryResolver.FirstVersionAcceptingAnyPack), version);
-        Assert.InRange(Version.Parse(pack.RootElement.GetProperty("version").GetString()!), Version.Parse(floor), version);
+        Version packVersion = Version.Parse(pack.RootElement.GetProperty("version").GetString()!);
+        Version floor = Version.Parse(
+            pack.RootElement.GetProperty("dependencies").GetProperty(main.RootElement.GetProperty("modid").GetString()!).GetString()!);
+
+        // Neither may claim to be newer than the mod they are built beside.
+        Assert.True(floor <= version, $"the pack asks for {floor}, newer than the mod's {version}");
+        Assert.True(packVersion <= version, $"the pack is {packVersion}, newer than the mod's {version}");
+
+        // Every mod from the floor upwards must actually load this pack. From
+        // FirstVersionAcceptingAnyPack on, all of them do; before it a mod took only a pack of its
+        // own version, which is satisfied when the floor is the pack's own version.
+        Assert.True(
+            floor >= Version.Parse(NativeLibraryResolver.FirstVersionAcceptingAnyPack) || floor == packVersion,
+            $"a mod at the floor {floor} would refuse a {packVersion} pack");
     }
 
     private static JsonDocument Read(string path) =>

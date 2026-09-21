@@ -14,7 +14,7 @@
     <RootNamespace>SpatialAudioUnixNatives</RootNamespace>
     <RequiresVintageStory>true</RequiresVintageStory>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
-    <Version>0.1.1</Version>
+    <Version>0.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
