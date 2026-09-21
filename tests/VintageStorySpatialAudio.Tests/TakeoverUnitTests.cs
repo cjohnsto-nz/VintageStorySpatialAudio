@@ -29,6 +29,24 @@ public sealed class TakeoverUnitTests
         Assert.Equal(Enum.GetValues<AudioBus>().Order(), SoundCategories.LevelSettings.Keys.Order());
 
     [Fact]
+    public void Only_animations_that_carry_a_sound_are_worth_advancing_unseen()
+    {
+        static AnimationMetaData Anim(params AnimationSound[] sounds) => new() { AnimationSounds = sounds };
+        static AnimationSound Sound(float range, string? location = "creature/wolf/footsteps/dirt/footstep-wolf-dirt1") =>
+            new() { Attributes = new SoundAttributes { Location = location is null ? null : new AssetLocation(location), Range = range } };
+
+        Assert.Equal(0f, AudioTakeover.FurthestAnimationSound([]));
+        Assert.Equal(0f, AudioTakeover.FurthestAnimationSound(new() { ["walk"] = new AnimationMetaData() }));
+        Assert.Equal(0f, AudioTakeover.FurthestAnimationSound(new() { ["walk"] = Anim(Sound(10f, location: null)) }));
+        Assert.Equal(15f, AudioTakeover.FurthestAnimationSound(new()
+        {
+            ["walk"] = Anim(Sound(10f), Sound(10f)),
+            ["run"] = Anim(Sound(15f)),
+            ["idle"] = new AnimationMetaData(),
+        }));
+    }
+
+    [Fact]
     public void Listener_basis_keeps_pitch_and_an_orthogonal_up_vector()
     {
         var basis = new ListenerBasis();

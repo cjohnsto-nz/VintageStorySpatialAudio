@@ -24,3 +24,4 @@ Each ADR records one decision: the context, the choice and its consequences. ADR
 | [0018](0018-the-settings-file-holds-real-values.md) | The settings file holds real values, not zeros standing for defaults | Accepted |
 | [0019](0019-the-linux-and-macos-libraries-are-a-second-mod.md) | The Linux and macOS libraries are a second mod: the mod database takes 40 MB | Accepted |
 | [0015](0015-multichannel-beds.md) | Multichannel beds (5.1 weather) play from their speakers; binaurally through a head-locked bus | Accepted |
+| [0020](0020-a-creature-you-cannot-see-still-makes-footsteps.md) | A creature you cannot see still makes footsteps: its animations are advanced for their sounds | Accepted |

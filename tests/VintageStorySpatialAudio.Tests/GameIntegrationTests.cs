@@ -66,6 +66,27 @@ public sealed class GameIntegrationTests
     }
 
     [Fact]
+    public void The_installed_OnClientFrame_still_skips_the_creatures_that_are_not_drawn()
+    {
+        GameAssemblies? game = GameInstall.Value;
+        if (game is null)
+        {
+            Assert.Skip("VINTAGE_STORY is not set to a game install");
+        }
+
+        // The reason for the patch: vanilla advances a creature's animations, and so triggers the
+        // footsteps its frames carry, only while something is drawing it. If a game update fixes
+        // that, this test fails and SoundsFromUnseenCreatures should go with it.
+        MethodInfo onClientFrame = HarmonyLib.AccessTools.Method(typeof(Vintagestory.API.Common.AnimationManager), "OnClientFrame");
+        Assert.Equal("dt", onClientFrame.GetParameters()[0].Name);  // the prefix binds by name
+        FieldInfo[] read = [.. HarmonyLib.PatchProcessor.GetOriginalInstructions(onClientFrame)
+            .Select(i => i.operand as FieldInfo)
+            .Where(f => f is not null && f.DeclaringType == typeof(Vintagestory.API.Common.Entities.Entity))!];
+        Assert.Contains(read, f => f.Name == "IsRendered");
+        Assert.Contains(read, f => f.Name == "IsShadowRendered");
+    }
+
+    [Fact]
     public void Native_engine_loads_and_passes_its_self_test()
     {
         NativeTestEnvironment.RequireNatives();

@@ -219,4 +219,16 @@ internal static class PlatformPatches
 
     /// <summary>Whether the last <see cref="RemoveSoundCap"/> found and replaced the cap.</summary>
     internal static bool SoundCapRemoved { get; private set; }
+
+    // ---- AnimationManager ----
+
+    /// <summary>
+    /// Prefix on AnimationManager.OnClientFrame: advances the animations of a creature that is not
+    /// being drawn, so the footsteps and other sounds its animation frames trigger still play
+    /// (ADR 0020). Vanilla skips the animator altogether unless the creature is on screen, in the
+    /// shadow pass or dead, so a wolf behind you runs silently. Always falls through to the
+    /// original, which then does its own (skipped) work and its looping-sound housekeeping.
+    /// </summary>
+    public static void AnimationOnClientFrame(AnimationManager __instance, Entity? ___entity, float dt) =>
+        active?.OnUnseenAnimationFrame(__instance, ___entity, dt);
 }

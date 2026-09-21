@@ -127,6 +127,13 @@ public sealed class SpatialAudioConfig
     /// <summary>How far (blocks, 0..4) such a sound may be from a creature's body to be matched to it.</summary>
     public float EntitySoundMatchDistance { get; set; } = 1f;
 
+    /// <summary>
+    /// A creature you cannot see still makes its footsteps. A creature's footsteps come from the
+    /// frames of its walk animation, and vanilla stops advancing the animation the moment the
+    /// creature is off screen, so a wolf behind you or in fog runs silently (ADR 0020).
+    /// </summary>
+    public bool SoundsFromUnseenCreatures { get; set; } = true;
+
     /// <summary>Walls muffle what is behind them (occlusion and transmission by the world scene, Phase 5).</summary>
     public bool Occlusion { get; set; } = true;
 

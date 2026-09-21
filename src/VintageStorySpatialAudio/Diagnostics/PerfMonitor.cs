@@ -11,6 +11,9 @@ public enum PerfSection
     /// <summary>Following entities with their sounds, once per frame.</summary>
     EntityTracking,
 
+    /// <summary>Advancing the animations of creatures that are not being drawn, so their footsteps play.</summary>
+    UnseenAnimation,
+
     /// <summary>Draining the engine's events (fades done, sounds ended) and polling settings, once per frame.</summary>
     Pump,
 

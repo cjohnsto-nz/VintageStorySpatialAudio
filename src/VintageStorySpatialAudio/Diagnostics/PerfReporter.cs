@@ -303,6 +303,7 @@ public sealed class PerfReporter
     {
         PerfSection.Listener => "listener",
         PerfSection.EntityTracking => "entity tracking",
+        PerfSection.UnseenAnimation => "unseen animation",
         PerfSection.Pump => "events, settings",
         PerfSection.SoundCreate => "sound creation",
         PerfSection.SoundApi => "sound API",

@@ -40,6 +40,7 @@ internal sealed class AudioTakeover : IDisposable
     private readonly bool spatialAudio;
     private readonly EntitySoundTracker? entitySounds;
     private readonly bool inferEntitySounds;
+    private readonly bool unseenCreatureSounds;
     private readonly double entityMatchDistance;
     private IList<string> deviceNames = [];
     private AudioDevice? selectedDevice;
@@ -56,6 +57,7 @@ internal sealed class AudioTakeover : IDisposable
         spatialAudio = config.SpatialAudio;
         entitySounds = config.TrackEntitySounds ? new EntitySoundTracker() : null;
         inferEntitySounds = config.InferEntitySounds;
+        unseenCreatureSounds = config.SoundsFromUnseenCreatures;
         entityMatchDistance = float.IsFinite(config.EntitySoundMatchDistance) ? Math.Clamp(config.EntitySoundMatchDistance, 0f, 4f) : 1f;
     }
 
@@ -242,6 +244,90 @@ internal sealed class AudioTakeover : IDisposable
     /// <summary>ClientMain.PlaySoundAtInternal played nothing (out of range, no asset).</summary>
     public void OnPlaySoundSkipped(double x, double y, double z) => entitySounds?.Cancel((float)x, (float)y, (float)z);
 
+    /// <summary>
+    /// AnimationManager.OnClientFrame, before vanilla's (ADR 0020). Vanilla advances a creature's
+    /// animations only while it is being drawn, and a creature's footsteps are triggered by
+    /// animation frames, so one that is behind you, in fog or beyond the view distance runs
+    /// silently. This advances the animations of the ones vanilla is about to skip, but only when
+    /// something of theirs could be heard, and without the pose and matrix work that is only
+    /// needed to draw them.
+    /// </summary>
+    public void OnUnseenAnimationFrame(AnimationManager manager, Entity? entity, float dt)
+    {
+        ArgumentNullException.ThrowIfNull(manager);
+        IAnimator? animator = manager.Animator;
+        if (animator is null || entity is null || entity.IsRendered || entity.IsShadowRendered || !entity.Alive)
+        {
+            return;  // vanilla advances it itself
+        }
+
+        if ((!manager.RunWhilePaused && api.IsGamePaused) || !WithinEarshot(manager.ActiveAnimationsByAnimCode, entity))
+        {
+            return;
+        }
+
+        using PerfMonitor.Scope perf = PerfMonitor.Instance.Measure(PerfSection.UnseenAnimation);
+        bool matrices = animator.CalculateMatrices;
+        animator.CalculateMatrices = false;  // poses go to the shader; nothing is drawing this one
+        try
+        {
+            animator.OnFrame(manager.ActiveAnimationsByAnimCode, dt);
+        }
+        finally
+        {
+            animator.CalculateMatrices = matrices;
+        }
+    }
+
+    /// <summary>
+    /// Whether a sound on one of these animations could reach the listener. Nearly every creature
+    /// has no animation sounds at all, and the game never starts a sound further away than its
+    /// range (widened by SoundRangeMultiplier, as our transpiler widens it), so in both cases
+    /// there is nothing to advance the animations for.
+    /// </summary>
+    private bool WithinEarshot(Dictionary<string, AnimationMetaData> animations, Entity entity)
+    {
+        float range = FurthestAnimationSound(animations);
+        if (range <= 0f)
+        {
+            return false;
+        }
+
+        EntityPos? listener = api.World?.Player?.Entity?.Pos;
+        EntityPos? at = entity.Pos;
+        if (listener is null || at is null)
+        {
+            return false;
+        }
+
+        double dx = at.X - listener.X;
+        double dy = at.InternalY - listener.InternalY;
+        double dz = at.Z - listener.Z;
+        return (dx * dx) + (dy * dy) + (dz * dz) <= (double)range * range * PlatformPatches.RangeScaleSquared;
+    }
+
+    /// <summary>
+    /// The range of the furthest-carrying sound on these animations, 0 when they carry none.
+    /// A sound without a location is one the game warns about and never plays.
+    /// </summary>
+    internal static float FurthestAnimationSound(Dictionary<string, AnimationMetaData> animations)
+    {
+        ArgumentNullException.ThrowIfNull(animations);
+        float range = 0f;
+        foreach (AnimationMetaData animation in animations.Values)
+        {
+            foreach (AnimationSound sound in animation.AnimationSounds ?? [])
+            {
+                if (sound?.Attributes is { Location: not null } attributes)
+                {
+                    range = Math.Max(range, attributes.Range);
+                }
+            }
+        }
+
+        return range;
+    }
+
     /// <summary>ClientPlatformWindows.UpdateAudioListener: once per frame on the main thread.</summary>
     public void OnFrame(float posX, float posY, float posZ, float orientX, float orientY, float orientZ)
     {
@@ -345,7 +431,12 @@ internal sealed class AudioTakeover : IDisposable
                                            || wanted.Contains(d.Name, StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>Every game method the takeover patches.</summary>
+    /// <summary>
+    /// Every game method the takeover patches whose behaviour it replaces, and so cannot share
+    /// with another mod. AnimationManager.OnClientFrame is deliberately left out: animation mods
+    /// patch it too, our prefix only adds work and always falls through, and audio is no reason to
+    /// stand down over it.
+    /// </summary>
     private IEnumerable<MethodBase> PatchedMethods() =>
     [
         members.StartAudio, members.CreateAudioData, members.CreateAudio, members.CreateAudioInGame, members.UpdateListener,
@@ -406,6 +497,11 @@ internal sealed class AudioTakeover : IDisposable
             {
                 harmony.Patch(method, prefix: Prefix(nameof(PlatformPatches.PlaySoundAtEntity)), finalizer: Prefix(nameof(PlatformPatches.PlaySoundAtEntityDone)));
             }
+        }
+
+        if (unseenCreatureSounds)
+        {
+            harmony.Patch(members.AnimationClientFrame, prefix: Prefix(nameof(PlatformPatches.AnimationOnClientFrame)));
         }
 
         SoundCapRemoved = PlatformPatches.SoundCapRemoved;
@@ -655,6 +751,7 @@ internal sealed class AudioTakeover : IDisposable
         MethodInfo ChangeOutputDevice,
         MethodInfo PlaySoundAt,
         MethodInfo[] PlaySoundAtEntity,
+        MethodInfo AnimationClientFrame,
         FieldInfo PlatformInstance,
         FieldInfo IntroMusic,
         FieldInfo SoundAudioData)
@@ -685,6 +782,7 @@ internal sealed class AudioTakeover : IDisposable
                     Get<MethodInfo>("clientmain.play-sound-at-entity-pitch"),
                     Get<MethodInfo>("clientmain.play-sound-at-entity-random-pitch"),
                 ],
+                Get<MethodInfo>("animmanager.client-frame"),
                 Get<FieldInfo>("screenmanager.platform"),
                 Get<FieldInfo>("screenmanager.intro-music"),
                 Get<FieldInfo>("screenmanager.audio-data"));

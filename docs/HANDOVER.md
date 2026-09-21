@@ -108,6 +108,35 @@ Sounds played at a creature or player follow it while they play; vanilla leaves 
 - **Verification:** VsaDoctor 38/38 against 1.22.7. `EntitySoundTrackerTests` cover announcement, expiry, cancel, context nesting, inference (tall creatures, lag, ambiguity) and following/letting go against the engine. All 111 managed tests passed on a worktree of `f62e42a` plus these changes (the working tree's native code was mid-ABI-9 change).
 - **To check in game:** walk past running wolves or chickens, and chase a bear. Calls should come from the animal, not from where it was. Watch the stats line for "matched by position" counts.
 
+## Creatures you cannot see still make footsteps (ADR 0020, 21 Sep 2026)
+
+A wolf behind you ran in silence. Its footsteps hang off the frames of its `Walk`/`Run`/`Canter`
+animations (`animationSounds` in `wolf-adult.json`, the bear the same), and
+`AnimationManager.OnClientFrame` only advances the animator while
+`entity.IsRendered || entity.IsShadowRendered || !entity.Alive` — `IsRendered` being set per frame
+by `SystemRenderEntities.OnBeforeRender` from the frustum, the view distance and the chunk. So the
+sound existed only while the creature was on screen.
+
+- **The patch:** a prefix on `AnimationManager.OnClientFrame` (`PlatformPatches.AnimationOnClientFrame`
+  → `AudioTakeover.OnUnseenAnimationFrame`) advances the animator for the creatures vanilla is
+  about to skip, with `CalculateMatrices` off and restored afterwards (the matrices only pose the
+  model for the shader). It always falls through to the original.
+- **What it does not do:** it skips creatures whose active animations carry no sound with a
+  location (nearly all of them: `FurthestAnimationSound`), and any whose furthest sound cannot
+  reach the listener at `range × SoundRangeMultiplier` — the distance at which
+  `PlaySoundAtInternal` would refuse to start it anyway.
+- **Placement is unchanged:** `ShouldPlaySound` plays at the creature's position by plain
+  coordinates, and the entity-sound inference above matches it and makes it follow.
+- **Deliberately outside the foreign-patch check** (`PatchedMethods`): animation mods patch this
+  method, our prefix only adds work, and audio should not stand down over it.
+- **Config:** `SoundsFromUnseenCreatures` (default on). **Perf:** the `unseen animation` section of
+  `.spatialaudio perf`.
+- **Verification:** VsaDoctor 40/40 against 1.22.7; `GameIntegrationTests` asserts the installed
+  `OnClientFrame` still reads `IsRendered`/`IsShadowRendered` (if a game update fixes it, that test
+  fails and the patch should go). All 144 managed tests pass.
+- **To check in game:** stand with your back to a wolf or a bear and listen to it approach; turn
+  round and the footsteps should not change. Not yet tried in game.
+
 ## Phase 8 (release hardening): in progress on `phase8-hardening`
 
 Phase 7 is merged into `main` (not pushed). Chris asked to start with performance: what the mod costs against vanilla.

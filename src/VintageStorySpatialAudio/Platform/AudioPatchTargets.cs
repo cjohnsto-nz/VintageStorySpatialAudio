@@ -19,6 +19,7 @@ public static class AudioPatchTargets
     private const string AudioMetaData = "Vintagestory.Client.NoObf.AudioMetaData";
     private const string ScreenManager = "Vintagestory.Client.ScreenManager";
     private const string SystemSoundEngine = "Vintagestory.Client.NoObf.SystemSoundEngine";
+    private const string AnimationManager = "Vintagestory.API.Common.AnimationManager";
 
     private const string Void = "System.Void";
     private const string Float = "System.Single";
@@ -96,6 +97,11 @@ public static class AudioPatchTargets
         Field("clientmain.active-sounds", ClientMain, "ActiveSounds", "System.Collections.Generic.Queue<Vintagestory.API.Client.ILoadedSound>", "the game's sound bookkeeping"),
         Method("soundengine.reverb-scan", SystemSoundEngine, "scanReverbnessOffthread", Void, [], "retire the 40-ray reverbness scan"),
         Method("soundengine.tick-100ms", SystemSoundEngine, "OnGameTick100ms", Void, [Float], "underwater / glitch / legacy reverb application"),
+
+        // --- Creatures that are not being drawn: vanilla stops advancing their animations, and a
+        //     creature's footsteps are triggered by animation frames (ADR 0020).
+        Method("animmanager.client-frame", AnimationManager, "OnClientFrame", Void, [Float], "footsteps of a creature you cannot see"),
+        Field("animmanager.entity", AnimationManager, "entity", Entity, "whose animations are being advanced"),
 
         // --- Main menu.
         Field("screenmanager.platform", ScreenManager, "Platform", PlatformBase, "the platform instance (hand-back calls its StartAudio)", isStatic: true),
