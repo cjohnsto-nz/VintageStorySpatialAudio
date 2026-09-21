@@ -26,6 +26,15 @@ is a floor (`NativeLibraryResolver.FirstVersionAcceptingAnyPack`), which `Native
 Not yet tried in a game on Linux or macOS:
 that the game unpacks the pack and the mod finds it is tested only as far as the folder logic.
 
+## Released: v0.1.1 (21 Sep 2026)
+
+The repository's first tagged release: https://github.com/cjohnsto-nz/VintageStorySpatialAudio/releases/tag/v0.1.1
+(`spatialaudio_0.1.1.zip` and the unchanged `spatialaudiounix_0.1.0.zip`), built by CI run
+35552894886 from `4920bfa`. Only `spatialaudio_0.1.1.zip` goes to the mod database; the pack there
+stays at 0.1.0 (ADR 0021). **Still to do by hand:** the pack's mod database description says to
+install the same version of both and that Spatial Audio will not load libraries from another
+version, which ADR 0021 made untrue.
+
 ## Where things stand
 
 ### Phase 0 (foundations): complete and verified on Windows

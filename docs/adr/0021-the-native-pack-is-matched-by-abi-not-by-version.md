@@ -13,10 +13,11 @@ were the same string.
 Two releases in, that rule is doing the wrong work. The pack contains `libvsaudio` and `libphonon`
 and no code of ours — it is a carrier for files. Its mod version therefore says nothing about
 whether it fits: it tracks the mod's release number, which moves for reasons that have nothing to
-do with the libraries. Release 0.1.1 is the case in point. It changes C# only; the Linux and macOS
-libraries in the 0.1.0 pack are byte-for-byte the ones 0.1.1 wants. Under ADR 0019 every player on
-those platforms would have to download an identical 34 MB pack again, and every future C#-only
-release would do the same.
+do with the libraries. Release 0.1.1 is the case in point. It changes C# only, and `native/` has
+not moved since the commit the 0.1.0 pack was built from, so that pack's libraries are built from
+the sources 0.1.1 wants, at the same ABI. (Not the same bytes — the build is not reproducible — but
+nothing in them differs.) Under ADR 0019 every player on those platforms would have to download
+34 MB again for that, and every future C#-only release would do the same.
 
 What actually has to agree is the **ABI** — `VSA_ABI_VERSION` in `native/include/vsaudio.h`
 against `VsaNative.AbiVersion` — and that is already checked, against the library itself rather
