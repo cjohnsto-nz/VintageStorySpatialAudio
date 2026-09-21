@@ -52,7 +52,17 @@ days per bake.
   `test_pathing.cpp` measures -78 dB without a floor and 0 dB with 0.25 out of a sealed room.
 - **ABI 17 -> 18, so the native pack must be re-released** with the next release (ADR 0021, first
   time that rule has bitten). A 0.1.0 pack now fails the ABI check, whose message names the pack.
-- **Not tried in game.** The numbers above are from the offline tests.
+- **Calls carry out of the box (ADR 0023, config version 2).** `OcclusionFloorBySound` ships with
+  `creature/wolf/howl*`, `.../deer/elk-bugle*` and `.../deer/elk-bellow*` at 0.25 -- wolf, elk and
+  caribou, which reuses the elk bellow. Hurt and death sounds are deliberately not floored. A file
+  below version 2 with an empty table is migrated to the defaults; one the player filled in is left
+  alone, and an emptied table sticks once the file is current (`ObjectCreationHandling.Replace`,
+  which a test pins).
+- **Not listened to yet.** The numbers are from the offline tests and from arithmetic: 0.25 puts a
+  howl at about -27 dB at 100 m and -37 dB at 300 m. Close range is the untested case -- the same
+  floor means a howl from behind a nearby boulder is only -12 dB down, which may be too leaky. If
+  it is, the fix is to ramp the floor in with distance so it is zero near the listener and full
+  only beyond the pathing box, which is also where the physical justification lives.
 
 ### What was ruled out on the way
 

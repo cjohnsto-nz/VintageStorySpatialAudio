@@ -12,7 +12,7 @@ public sealed class SpatialAudioConfig
     public const string FileName = "spatialaudio.json";
 
     /// <summary>The defaults this file was written with; see <see cref="Migrate"/>.</summary>
-    public const int CurrentConfigVersion = 1;
+    public const int CurrentConfigVersion = 2;
 
     /// <summary>Which version of the defaults this file was written with. Left alone.</summary>
     public int ConfigVersion { get; set; }
@@ -148,7 +148,21 @@ public sealed class SpatialAudioConfig
     /// baked paths, and those stop at the edge of the pathing box; past it the howl is judged
     /// blocked by the near ground and disappears (ADR 0022). Empty by default: nothing is lifted.
     /// </summary>
-    public Dictionary<string, float> OcclusionFloorBySound { get; set; } = [];
+    [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public Dictionary<string, float> OcclusionFloorBySound { get; set; } = DefaultOcclusionFloors();
+
+    /// <summary>
+    /// The calls the mod lifts out of the box (ADR 0023): a wolf's howl, an elk's bugle, and the
+    /// bellow an elk or a caribou makes -- the sounds a creature makes to be heard a long way off,
+    /// and the ones the terrain in front of you silences soonest. Hurt and death sounds are
+    /// deliberately not here: a wounded animal should not carry through a mountain.
+    /// </summary>
+    public static Dictionary<string, float> DefaultOcclusionFloors() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["creature/wolf/howl*"] = 0.25f,
+        ["creature/animal/mammal/hooved/deer/elk-bugle*"] = 0.25f,
+        ["creature/animal/mammal/hooved/deer/elk-bellow*"] = 0.25f,
+    };
 
     /// <summary>Rays per sound for occlusion (more: smoother edges, more CPU). 0 = 16.</summary>
     public int OcclusionSamples { get; set; }
@@ -295,6 +309,16 @@ public sealed class SpatialAudioConfig
         if (ConfigVersion < 1 && Math.Abs(ReflectionGain - 1f) < 1e-6f)
         {
             ReflectionGain = 0.1f;  // the default until version 1 was 1 (as simulated): far too loud
+            changed = true;
+        }
+
+        if (ConfigVersion < 2 && (OcclusionFloorBySound is null || OcclusionFloorBySound.Count == 0))
+        {
+            // Version 2 gave calls a floor by default (ADR 0023). A file from before it has no
+            // table of its own; one a player has filled in is theirs and is left alone. A player
+            // who deliberately emptied it gets the defaults back this once, and emptying it again
+            // sticks: the file is at the current version by then.
+            OcclusionFloorBySound = DefaultOcclusionFloors();
             changed = true;
         }
 

@@ -36,6 +36,47 @@ public sealed class ConfigMigrationTests
         Assert.Equal(SpatialAudioConfig.CurrentConfigVersion, config.ConfigVersion);
     }
 
+    [Fact]
+    public void A_file_from_before_calls_carried_gets_the_default_floors()
+    {
+        var config = new SpatialAudioConfig { ConfigVersion = 1, OcclusionFloorBySound = [] };
+        Assert.True(config.Migrate());
+        Assert.Equal(SpatialAudioConfig.DefaultOcclusionFloors(), config.OcclusionFloorBySound);
+        Assert.Equal(SpatialAudioConfig.CurrentConfigVersion, config.ConfigVersion);
+    }
+
+    [Fact]
+    public void Floors_the_player_chose_are_kept()
+    {
+        var chosen = new SpatialAudioConfig
+        {
+            ConfigVersion = 1,
+            OcclusionFloorBySound = new Dictionary<string, float> { ["creature/hyena/*"] = 0.4f },
+        };
+        Assert.True(chosen.Migrate());  // the version is stamped
+        Assert.Equal(new Dictionary<string, float> { ["creature/hyena/*"] = 0.4f }, chosen.OcclusionFloorBySound);
+    }
+
+    [Fact]
+    public void A_table_emptied_at_the_current_version_stays_empty()
+    {
+        // The player wants no sound lifted. Once the file is current, that sticks.
+        var config = new SpatialAudioConfig { ConfigVersion = SpatialAudioConfig.CurrentConfigVersion, OcclusionFloorBySound = [] };
+        Assert.False(config.Migrate());
+        Assert.Empty(config.OcclusionFloorBySound);
+    }
+
+    [Fact]
+    public void An_empty_table_in_the_file_means_empty_not_the_defaults()
+    {
+        // Without ObjectCreationHandling.Replace, Newtonsoft merges into the property's default
+        // and an emptied table would silently come back on every load.
+        SpatialAudioConfig? config = Newtonsoft.Json.JsonConvert.DeserializeObject<SpatialAudioConfig>(
+            """{ "ConfigVersion": 2, "OcclusionFloorBySound": {} }""");
+        Assert.NotNull(config);
+        Assert.Empty(config.OcclusionFloorBySound);
+    }
+
     private static EngineDefaults Defaults() => new(
         BlockFrames: 256, MaxVoices: 4096, MaxRealVoices: 256, MaxBinauralVoices: 64,
         OcclusionSamples: 16, OcclusionRateHz: 30,
