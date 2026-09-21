@@ -35,6 +35,13 @@ stays at 0.1.0 (ADR 0021). **Still to do by hand:** the pack's mod database desc
 install the same version of both and that Spatial Audio will not load libraries from another
 version, which ADR 0021 made untrue.
 
+## Released: v0.2.1 (21 Sep 2026)
+
+https://github.com/cjohnsto-nz/VintageStorySpatialAudio/releases/tag/v0.2.1 --
+`spatialaudio_0.2.1.zip` (20.3 MB) and `spatialaudiounix_0.2.1.zip` (34.6 MB), built by CI run
+35577472467 from `0fd597d`. **Both go to the mod database this time**: ABI 18 -> 19 changed the
+libraries, so a 0.2.0 pack fails the engine's ABI check (ADR 0021).
+
 ## Footsteps are high-passed (ADR 0024, ABI 19): version 0.2.1
 
 Creature footsteps (the game's wolf, and everything the Creature Footsteps mod adds) boom: recorded
