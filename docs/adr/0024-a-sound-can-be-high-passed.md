@@ -33,11 +33,11 @@ engine already runs a filter per voice.
   `OcclusionFloorBySound` (ADR 0022): `*` matches anything, the first match wins so the file's
   order is the priority, a sound matching nothing is played as recorded. A corner of 0 exempts
   what it matches from the rules after it.
-- **The default is `"*step*": 75`.** Every footstep recording in the game and in Creature
+- **The default is `"*step*": 80`.** Every footstep recording in the game and in Creature
   Footsteps has "step" in its name (`footstep-wolf-dirt`, `drifterstep`, `golem-footstep`), and
   the player's own (`walk/grass`) do not, which is right: those are head-locked and not the
-  complaint. 75 Hz, chosen by ear in the game: 150 and then 100 were tried first and both took
-  too much of the step with the thump.
+  complaint. 80 Hz, chosen by ear in the game: 150 and 100 took too much of the step with the
+  thump, and 75 was the other side of it.
 
 ## Consequences
 
