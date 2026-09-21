@@ -210,7 +210,9 @@ public sealed partial class AudioEngine : IDisposable
         {
             throw new InvalidOperationException(
                 $"Native engine ABI {version.AbiVersion} does not match managed ABI {VsaNative.AbiVersion}. " +
-                "The mod package is inconsistent; reinstall it.");
+                (NativeLibraryResolver.UsingNativePack
+                    ? $"The libraries come from the '{NativeLibraryResolver.NativePackModId}' mod, which is from a release with a different ABI; update it."
+                    : "The mod package is inconsistent; reinstall it."));
         }
 
         GCHandle logHandle = log is null ? default : GCHandle.Alloc(log);

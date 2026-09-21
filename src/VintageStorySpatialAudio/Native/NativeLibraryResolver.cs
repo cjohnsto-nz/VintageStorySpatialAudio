@@ -64,19 +64,29 @@ internal static class NativeLibraryResolver
     public const string NativePackAssemblyName = "SpatialAudioUnixNatives";
 
     /// <summary>
+    /// The first version of the mod that loads a native pack of any version (ADR 0021). Before it
+    /// the pack had to be the mod's own version, so the pack declares this as its minimum.
+    /// </summary>
+    public const string FirstVersionAcceptingAnyPack = "0.1.1";
+
+    /// <summary>Whether this platform's libraries came from the native pack rather than the mod's own folder.</summary>
+    public static bool UsingNativePack { get; private set; }
+
+    /// <summary>
     /// The folder holding this platform's libraries: the mod's own, or else the native pack's.
-    /// The pack must be the version this mod is: a library from another release is not loaded.
+    /// The pack's version is not looked at (ADR 0021). It carries libraries and no code of ours,
+    /// so what has to agree is the ABI, which <see cref="AudioEngine.Create"/> checks against the
+    /// library itself; the mod's version says nothing about that.
     /// </summary>
     /// <param name="assemblyLocation">Where the mod's assembly is.</param>
     /// <param name="packAssemblyLocation">Where the native pack's assembly is; null: not installed.</param>
-    /// <param name="version">The mod's version.</param>
-    /// <param name="packVersion">The native pack's version.</param>
-    public static string FindNativeDirectory(string assemblyLocation, string? packAssemblyLocation, string? version, string? packVersion)
+    public static string FindNativeDirectory(string assemblyLocation, string? packAssemblyLocation)
     {
         string own = DefaultNativeDirectory(assemblyLocation);
         string library = PlatformFileName(VsaNative.LibraryName);
         if (File.Exists(Path.Combine(own, library)))
         {
+            UsingNativePack = false;
             return own;
         }
 
@@ -85,12 +95,7 @@ internal static class NativeLibraryResolver
             string pack = DefaultNativeDirectory(packAssemblyLocation);
             if (File.Exists(Path.Combine(pack, library)))
             {
-                if (!string.Equals(version, packVersion, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"The '{NativePackModId}' mod is version {packVersion ?? "?"} and Spatial Audio is {version ?? "?"}. Update both to the same version.");
-                }
-
+                UsingNativePack = true;
                 return pack;
             }
         }
@@ -98,7 +103,7 @@ internal static class NativeLibraryResolver
         throw new DllNotFoundException(OperatingSystem.IsWindows()
             ? $"The mod's libraries for this platform ({RuntimeFolderName}) are missing from '{own}'. Download the mod again."
             : $"The libraries for {RuntimeFolderName} come in a second mod, because of the mod database's size limit: install "
-              + $"'Spatial Audio: Linux and macOS natives' ({NativePackModId}), the same version as this one.");
+              + $"'Spatial Audio: Linux and macOS natives' ({NativePackModId}).");
     }
 
     /// <summary>The native pack's assembly location if the pack is loaded in this process; else null.</summary>

@@ -19,8 +19,11 @@ CI links already use the new repository name (GitHub redirects once it is rename
 The mod database takes 40 MB and all three platforms are 54 MB, nearly all of it `phonon`. A
 release is two zips from the CI artifact `spatialaudio-mod`: `spatialaudio_<v>.zip` (the mod, with
 the Windows libraries) and `spatialaudiounix_<v>.zip` (`src/SpatialAudioUnixNatives`: the Linux and
-macOS libraries, a code mod that does nothing). Bump the version in **both** `modinfo.json` files
-and the pack's dependency (`NativePackTests` checks). Not yet tried in a game on Linux or macOS:
+macOS libraries, a code mod that does nothing). **Since ADR 0021 the two versions are independent**:
+the pack is rebuilt and re-released only when the libraries change, and the mod loads whatever pack
+is installed, with the engine's ABI check deciding whether it fits. The pack's dependency on the mod
+is a floor (`NativeLibraryResolver.FirstVersionAcceptingAnyPack`), which `NativePackTests` checks.
+Not yet tried in a game on Linux or macOS:
 that the game unpacks the pack and the mod finds it is tested only as far as the folder logic.
 
 ## Where things stand

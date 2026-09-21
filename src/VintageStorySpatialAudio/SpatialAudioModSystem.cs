@@ -507,11 +507,9 @@ public sealed class SpatialAudioModSystem : ModSystem, IDisposable
     }
 
     /// <summary>This platform's libraries: ours, or the native pack's (Linux and macOS).</summary>
-    private string NativeDirectory() => NativeLibraryResolver.FindNativeDirectory(
+    private static string NativeDirectory() => NativeLibraryResolver.FindNativeDirectory(
         typeof(SpatialAudioModSystem).Assembly.Location,
-        NativeLibraryResolver.LoadedNativePackLocation(),
-        Mod.Info.Version,
-        capi?.ModLoader.GetMod(NativeLibraryResolver.NativePackModId)?.Info.Version);
+        NativeLibraryResolver.LoadedNativePackLocation());
 
     private StatusReport BringUp(SpatialAudioConfig config, ILogger logger, string modConfigDirectory)
     {

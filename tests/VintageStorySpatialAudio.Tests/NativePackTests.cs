@@ -5,7 +5,7 @@ namespace VintageStorySpatialAudio.Tests;
 
 /// <summary>
 /// The Linux and macOS libraries are a second mod (the mod database's 40 MB limit): the main mod
-/// takes its own libraries first, then the pack's, and only a pack of its own version.
+/// takes its own libraries first, then the pack's, whatever version the pack is (ADR 0021).
 /// </summary>
 public sealed class NativePackTests : IDisposable
 {
@@ -39,37 +39,44 @@ public sealed class NativePackTests : IDisposable
     {
         string own = Mod("main", withNatives: true);
         string pack = Mod("pack", withNatives: true);
-        Assert.Equal(NativeLibraryResolver.DefaultNativeDirectory(own), NativeLibraryResolver.FindNativeDirectory(own, pack, "1.0.0", "0.9.0"));
+        Assert.Equal(NativeLibraryResolver.DefaultNativeDirectory(own), NativeLibraryResolver.FindNativeDirectory(own, pack));
+        Assert.False(NativeLibraryResolver.UsingNativePack);
     }
 
     [Fact]
-    public void Without_its_own_the_packs_are_used_if_the_versions_agree()
+    public void Without_its_own_the_packs_are_used_whatever_version_it_is()
     {
+        // The pack is libraries and no code of ours, so its mod version says nothing about whether
+        // it fits: the ABI check in AudioEngine.Create is what decides (ADR 0021).
         string own = Mod("main", withNatives: false);
         string pack = Mod("pack", withNatives: true);
-        Assert.Equal(NativeLibraryResolver.DefaultNativeDirectory(pack), NativeLibraryResolver.FindNativeDirectory(own, pack, "1.0.0", "1.0.0"));
-        var error = Assert.Throws<InvalidOperationException>(() => NativeLibraryResolver.FindNativeDirectory(own, pack, "1.0.1", "1.0.0"));
-        Assert.Contains("same version", error.Message, StringComparison.Ordinal);
+        Assert.Equal(NativeLibraryResolver.DefaultNativeDirectory(pack), NativeLibraryResolver.FindNativeDirectory(own, pack));
+        Assert.True(NativeLibraryResolver.UsingNativePack);
     }
 
     [Fact]
     public void With_neither_the_error_says_what_to_install()
     {
         string own = Mod("main", withNatives: false);
-        var error = Assert.Throws<DllNotFoundException>(() => NativeLibraryResolver.FindNativeDirectory(own, null, "1.0.0", null));
+        var error = Assert.Throws<DllNotFoundException>(() => NativeLibraryResolver.FindNativeDirectory(own, null));
         Assert.Contains(OperatingSystem.IsWindows() ? "Download the mod again" : NativeLibraryResolver.NativePackModId, error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void The_pack_is_the_main_mods_version_and_depends_on_exactly_it()
+    public void The_pack_asks_for_a_mod_new_enough_to_load_it_and_no_newer()
     {
+        // The pack's dependency is a minimum (Vintage Story's ModDependency.Version), so it may lag
+        // the mod: a pack is only rebuilt when the libraries change. Its floor is the first version
+        // that loads a pack of any version, below which the mod would refuse it (ADR 0021).
         string src = Path.Combine(NativeTestEnvironment.RepoRoot(), "src");
         using JsonDocument main = Read(Path.Combine(src, "VintageStorySpatialAudio", "modinfo.json"));
         using JsonDocument pack = Read(Path.Combine(src, "SpatialAudioUnixNatives", "modinfo.json"));
-        string version = main.RootElement.GetProperty("version").GetString()!;
+        Version version = Version.Parse(main.RootElement.GetProperty("version").GetString()!);
         Assert.Equal(NativeLibraryResolver.NativePackModId, pack.RootElement.GetProperty("modid").GetString());
-        Assert.Equal(version, pack.RootElement.GetProperty("version").GetString());
-        Assert.Equal(version, pack.RootElement.GetProperty("dependencies").GetProperty(main.RootElement.GetProperty("modid").GetString()!).GetString());
+
+        string floor = pack.RootElement.GetProperty("dependencies").GetProperty(main.RootElement.GetProperty("modid").GetString()!).GetString()!;
+        Assert.InRange(Version.Parse(floor), Version.Parse(NativeLibraryResolver.FirstVersionAcceptingAnyPack), version);
+        Assert.InRange(Version.Parse(pack.RootElement.GetProperty("version").GetString()!), Version.Parse(floor), version);
     }
 
     private static JsonDocument Read(string path) =>
