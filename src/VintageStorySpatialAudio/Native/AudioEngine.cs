@@ -136,8 +136,11 @@ public sealed record ReflectionQualitySettings
 /// The least of the sound that still reaches the listener directly, whatever is in the way
 /// (0 = none: the world decides). See vsa_voice_desc::occlusion_floor and ADR 0022.
 /// </param>
+/// <param name="HighPassHz">
+/// The corner of a 12 dB/octave high-pass on the voice (0 = none). See vsa_voice_desc::high_pass_hz.
+/// </param>
 public readonly record struct VoicePlacement(
-    SpatialMode Mode, float X = 0, float Y = 0, float Z = 0, float MinDistance = 0, float OcclusionFloor = 0);
+    SpatialMode Mode, float X = 0, float Y = 0, float Z = 0, float MinDistance = 0, float OcclusionFloor = 0, float HighPassHz = 0);
 
 public sealed record EngineVersion(
     Version Engine,
@@ -369,6 +372,7 @@ public sealed partial class AudioEngine : IDisposable
             PositionZ = placement.Z,
             MinDistance = placement.MinDistance,
             OcclusionFloor = placement.OcclusionFloor,
+            HighPassHz = placement.HighPassHz,
         };
         NativeException.ThrowIfFailed(VsaNative.VoiceCreate(lease.Engine, in desc, out ulong voice), "vsa_voice_create");
         return new Voice(this, voice);

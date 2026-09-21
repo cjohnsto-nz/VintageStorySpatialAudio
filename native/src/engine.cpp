@@ -147,6 +147,10 @@ std::unique_ptr<steam::SteamContext> make_steam(const vsa_engine_config& config)
     return std::make_unique<steam::SteamContext>(options);
 }
 
+bool high_pass_ok(float hz) noexcept {
+    return hz == 0.0f || (std::isfinite(hz) && hz >= dsp::HighPass::kMinHz && hz <= dsp::HighPass::kMaxHz);
+}
+
 bool finite3(float x, float y, float z) noexcept { return std::isfinite(x) && std::isfinite(y) && std::isfinite(z); }
 
 /// Normalises `v` in place; false if it has no usable length.
@@ -387,6 +391,9 @@ vsa_voice Engine::create_voice(const vsa_voice_desc& desc) {
     if (!std::isfinite(desc.min_distance) || desc.min_distance < 0.0f) {
         throw Error(VSA_ERROR_INVALID_ARGUMENT, "min_distance must be finite and >= 0");
     }
+    if (!high_pass_ok(desc.high_pass_hz)) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "high_pass_hz must be 0 (none) or within 20..2000");
+    }
     if (!std::isfinite(desc.occlusion_floor) || desc.occlusion_floor < 0.0f || desc.occlusion_floor > 1.0f) {
         throw Error(VSA_ERROR_INVALID_ARGUMENT, "occlusion_floor must be finite and in 0..1");
     }
@@ -435,6 +442,7 @@ vsa_voice Engine::create_voice(const vsa_voice_desc& desc) {
     slot.initial_position[2] = desc.position[2];
     slot.initial_min_distance = desc.min_distance > 0.0f ? desc.min_distance : 1.0f;
     slot.initial_occlusion_floor = desc.occlusion_floor;
+    slot.initial_high_pass_hz = desc.high_pass_hz;
     slot.requested_state.store(VSA_VOICE_STOPPED, std::memory_order_relaxed);
     slot.cmd_seq.store(0, std::memory_order_relaxed);
     slot.render_state.store(VSA_VOICE_STOPPED, std::memory_order_relaxed);
@@ -603,6 +611,16 @@ void Engine::set_voice_lowpass(vsa_voice voice, float gain_hf) {
     Command command{};
     command.op = Op::SetLowpass;
     command.value = gain_hf;
+    post_voice_command(voice, command, StateChange::None);
+}
+
+void Engine::set_voice_high_pass(vsa_voice voice, float hz) {
+    if (!high_pass_ok(hz)) {
+        throw Error(VSA_ERROR_INVALID_ARGUMENT, "high_pass_hz must be 0 (none) or within 20..2000");
+    }
+    Command command{};
+    command.op = Op::SetHighPass;
+    command.value = hz;
     post_voice_command(voice, command, StateChange::None);
 }
 

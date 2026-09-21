@@ -84,7 +84,7 @@ public sealed class OcclusionFloors
     /// A sound as its name is written in the game's own assets: no domain, no <c>sounds/</c>
     /// prefix, no extension. The engine sees full asset locations, the player writes short names.
     /// </summary>
-    private static string Normalise(string location)
+    internal static string Normalise(string location)
     {
         string path = location.Trim();
         int colon = path.IndexOf(':', StringComparison.Ordinal);

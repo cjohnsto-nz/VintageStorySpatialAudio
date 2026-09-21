@@ -71,6 +71,7 @@ public sealed class NativeLayoutTests
         Assert.Equal(32, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.PositionX)));
         Assert.Equal(44, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.MinDistance)));
         Assert.Equal(48, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.OcclusionFloor)));
+        Assert.Equal(52, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.HighPassHz)));
         Assert.Equal(52, Unsafe.SizeOf<VsaListener>());
         Assert.Equal(40, (int)Marshal.OffsetOf<VsaListener>(nameof(VsaListener.RenderOffsetX)));
         Assert.Equal(8, (int)Marshal.OffsetOf<VsaVoiceDesc>(nameof(VsaVoiceDesc.Asset)));
